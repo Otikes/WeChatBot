@@ -65,6 +65,19 @@ def _sanitize_display_name(name: str) -> str:
 
     return name
 
+
+def _normalize_ai_backend(raw: str) -> str:
+    backend = (raw or "").strip().lower().replace("-", "_")
+    aliases = {
+        "anthropic": "claude",
+        "openai": "openai_compatible",
+        "openai_compat": "openai_compatible",
+        "compatible": "openai_compatible",
+        "custom": "openai_compatible",
+    }
+    return aliases.get(backend, backend)
+
+
 def _resolve_project_root() -> Path:
     app_home = os.getenv("WEBOT_APP_HOME", "").strip()
     if app_home:
@@ -136,7 +149,7 @@ class BotConfig:
     """All configuration for the WeChat summarizer bot."""
 
     # === AI Backend ===
-    # "claude" or "deepseek"
+    # "claude", "deepseek", or "openai_compatible"
     ai_backend: str = "claude"
 
     # === Claude (Anthropic) ===
@@ -148,6 +161,11 @@ class BotConfig:
     deepseek_api_key: str = ""
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_base_url: str = "https://api.deepseek.com"
+
+    # === OpenAI-compatible ===
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4.1-mini"
 
     # === WeChat Backend ===
     wechat_backend: str = "wcdb"
@@ -287,6 +305,14 @@ def _validate_config(kwargs: dict) -> None:
             f"CHUNK_SIZE must be between 10 and 1000, got {chunk_size}"
         )
 
+    # max_retries (optional, used by some backends)
+    if "max_retries" in kwargs:
+        max_retries = kwargs.get("max_retries")
+        if not (1 <= max_retries <= 10):
+            errors.append(
+                f"MAX_RETRIES must be between 1 and 10, got {max_retries}"
+            )
+
     # max_messages_for_summary
     max_messages_for_summary = kwargs.get("max_messages_for_summary", 5000)
     if max_messages_for_summary < 10:
@@ -386,13 +412,22 @@ def load_config() -> BotConfig:
     Returns a validated BotConfig instance.
     Raises RuntimeError if required configuration is missing.
     """
-    ai_backend = os.getenv("AI_BACKEND", "claude").strip().lower()
+    ai_backend = _normalize_ai_backend(os.getenv("AI_BACKEND", "claude"))
+    if ai_backend not in ("claude", "deepseek", "openai_compatible"):
+        raise RuntimeError(
+            f"AI_BACKEND must be one of claude, deepseek, openai_compatible; got {ai_backend}"
+        )
 
     # Validate required API keys based on selected backend
     if ai_backend == "deepseek":
         api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
         if not api_key:
             msg = "DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
+            raise RuntimeError(msg)
+    elif ai_backend == "openai_compatible":
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not api_key:
+            msg = "OPENAI_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
             raise RuntimeError(msg)
     else:
         api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
@@ -437,6 +472,9 @@ def load_config() -> BotConfig:
         "deepseek_api_key": os.getenv("DEEPSEEK_API_KEY", "").strip(),
         "deepseek_base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
         # deepseek_model handled conditionally below (dataclass default)
+        "openai_api_key": os.getenv("OPENAI_API_KEY", "").strip(),
+        "openai_base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip(),
+        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip(),
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_groups": _decode_wechat_groups(os.getenv("WECHAT_GROUPS", "*")),
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),
@@ -495,6 +533,10 @@ def load_config() -> BotConfig:
     deepseek_model = os.getenv("DEEPSEEK_MODEL")
     if deepseek_model is not None:
         kwargs["deepseek_model"] = deepseek_model.strip()
+
+    openai_model = os.getenv("OPENAI_MODEL")
+    if openai_model is not None:
+        kwargs["openai_model"] = openai_model.strip()
 
     proactive_rate_window_sec = os.getenv("PROACTIVE_RATE_WINDOW_SEC")
     if proactive_rate_window_sec is not None:

@@ -42,6 +42,17 @@ const TABS = [
   { id: 'logs', label: '运行日志', icon: Scroll },
 ]
 
+function apiUrl(path) {
+  if (window.location.port === '5173') return `http://127.0.0.1:7327${path}`
+  return path
+}
+
+function wsUrl(path) {
+  const host = window.location.port === '5173' ? '127.0.0.1:7327' : window.location.host
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${host}${path}`
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [configSection, setConfigSection] = useState('ai')
@@ -67,7 +78,7 @@ export default function App() {
   useEffect(() => {
     async function check() {
       try {
-        const res = await fetch('http://127.0.0.1:7327/api/onboarding/status')
+        const res = await fetch(apiUrl('/api/onboarding/status'))
         const d = await res.json()
         setOnboardingDone(d.onboarding_done)
       } catch {
@@ -84,7 +95,7 @@ export default function App() {
     let socket = null
 
     function connectWS() {
-      socket = new WebSocket('ws://127.0.0.1:7327/ws')
+      socket = new WebSocket(wsUrl('/ws'))
       socket.onopen = () => {
         setWsConnected(true)
       }

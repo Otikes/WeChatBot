@@ -92,6 +92,9 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `DEEPSEEK_API_KEY` | `str` | `""` | `src/config.py` | `src/summarize/deepseek_backend.py:DeepSeekSummarizer.__init__()` |
 | `DEEPSEEK_MODEL` | `str` | `"deepseek-v4-flash"` | `src/config.py` | `src/summarize/deepseek_backend.py`, `src/bot.py:_log_banner()` |
 | `DEEPSEEK_BASE_URL` | `str` | `"https://api.deepseek.com"` | `src/config.py` | `src/summarize/deepseek_backend.py` |
+| `OPENAI_API_KEY` | `str` | `""` | `src/config.py` | `src/summarize/openai_compatible_backend.py:OpenAICompatibleSummarizer.__init__()` |
+| `OPENAI_BASE_URL` | `str` | `"https://api.openai.com/v1"` | `src/config.py` | `src/summarize/openai_compatible_backend.py` |
+| `OPENAI_MODEL` | `str` | `"gpt-4.1-mini"` | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
 | `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
@@ -284,17 +287,24 @@ todo_delete_keywords: list[str] = [
 | `_merge_chunk_summaries(chunk_summaries, requester_name)` | 合并分块(Claude Pydantic parse) | 摘要列表 | `SummaryResult` |
 | `consolidate_memory(existing_memory, new_messages)` | 记忆合并(Haiku) | 现有记忆 + 新消息 | `str` |
 
-### 2.6 `src/summarize/deepseek_backend.py` (DeepSeekSummarizer)
+### 2.6 `src/summarize/openai_compatible_backend.py` (OpenAICompatibleSummarizer)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `__init__(api_key, model, base_url, chunk_size, max_retries)` | 初始化 DeepSeek 客户端 | API配置 | `None` |
-| `_call_chat_api(system_prompt, messages)` | DeepSeek 对话 API (thinking disabled) | prompt + messages | `str` |
-| `_summarize_direct(messages, requester_name)` | 直接总结(tool calling) | 消息列表 | `SummaryResult` |
+| `__init__(api_key, model, base_url, chunk_size, max_retries, extra_body=None)` | 初始化 OpenAI 兼容客户端 | API配置 | `None` |
+| `_call_chat_api(system_prompt, messages)` | 通用对话 API | prompt + messages | `str` |
+| `_summarize_direct(messages, requester_name)` | 直接总结(tool calling + fallback) | 消息列表 | `SummaryResult` |
 | `_summarize_chunk(chunk, chunk_num, total, requester_name)` | 分块提取 | 分块消息 | `str` |
-| `_merge_chunk_summaries(chunk_summaries, requester_name)` | 合并分块(tool calling) | 摘要列表 | `SummaryResult` |
-| `consolidate_memory(existing_memory, new_messages)` | 记忆合并(Flash model) | 现有记忆 + 新消息 | `str` |
-| `_parse_summary_from_tool_call(response)` | 解析 DeepSeek tool call 响应(模块级) | `response` | `SummaryResult` |
+| `_merge_chunk_summaries(chunk_summaries, requester_name)` | 合并分块(tool calling + fallback) | 摘要列表 | `SummaryResult` |
+| `consolidate_memory(existing_memory, new_messages)` | 记忆合并 | 现有记忆 + 新消息 | `str` |
+| `_create_chat_completion(...)` | 通用 Chat Completions 请求封装(模块内) | messages + options | `ChatCompletion` |
+| `_parse_summary_from_response(response)` | 解析 tool call / JSON / 文本响应(模块级) | `response` | `SummaryResult` |
+
+#### `src/summarize/deepseek_backend.py` (DeepSeekSummarizer preset)
+
+| 函数 | 描述 | 参数 | 返回值 |
+|---|---|---|---|
+| `__init__(api_key, model, base_url, chunk_size, max_retries)` | 初始化 DeepSeek 预设(继承 OpenAICompatibleSummarizer) | API配置 | `None` |
 
 ### 2.7 `src/summarize/prompts.py`
 
@@ -653,6 +663,7 @@ desktop.py  (桌面入口)
             ├── src/summarize/  (AI 后端)
             │     ├── base.py           → AbstractSummarizer
             │     ├── claude_backend.py  → ClaudeSummarizer
+            │     ├── openai_compatible_backend.py → OpenAICompatibleSummarizer
             │     ├── deepseek_backend.py → DeepSeekSummarizer
             │     ├── models.py         → SummaryResult (Pydantic)
             │     └── prompts.py        → Prompt 模板
@@ -681,6 +692,7 @@ Bot.run()
   ├── TriggerDetector()                  [src/trigger/detector.py]
   ├── create_summarizer()                [src/summarize/__init__.py]
   │     ├── ClaudeSummarizer()            [src/summarize/claude_backend.py]
+  │     ├── OpenAICompatibleSummarizer()  [src/summarize/openai_compatible_backend.py]
   │     └── DeepSeekSummarizer()          [src/summarize/deepseek_backend.py]
   ├── NicknameService()                  [src/nickname.py]
   ├── AdminCommandHandler()              [src/admin.py]
@@ -757,12 +769,15 @@ AbstractSummarizer (base.py)
     │     ├── _merge_chunk_summaries()   — client.messages.parse() + Pydantic
     │     └── consolidate_memory()       — client.messages.create() (Haiku)
     │
+    ├── OpenAICompatibleSummarizer (openai_compatible_backend.py)
+    │     ├── _call_chat_api()           — client.chat.completions.create()
+    │     ├── _summarize_direct()        — tool calling → fallback plain text
+    │     ├── _summarize_chunk()         — client.chat.completions.create()
+    │     ├── _merge_chunk_summaries()   — tool calling → fallback plain text
+    │     └── consolidate_memory()       — client.chat.completions.create()
+    │
     └── DeepSeekSummarizer (deepseek_backend.py)
-          ├── _call_chat_api()           — client.chat.completions.create() (thinking disabled)
-          ├── _summarize_direct()        — tool calling → _parse_summary_from_tool_call()
-          ├── _summarize_chunk()         — client.chat.completions.create()
-          ├── _merge_chunk_summaries()   — tool calling
-          └── consolidate_memory()       — client.chat.completions.create() (Flash)
+          └── OpenAICompatibleSummarizer preset + thinking disabled
 ```
 
 ### 3.3 数据流: 消息从微信到AI总结到前端展示的完整链路
@@ -911,7 +926,8 @@ WcdbBackend.start(callback)
 |---|---|---|
 | `base.py` | `src/summarize/base.py` | 抽象基类 (chat, proactive_chat, summarize, format) |
 | `claude_backend.py` | `src/summarize/claude_backend.py` | Claude API (Pydantic parse) |
-| `deepseek_backend.py` | `src/summarize/deepseek_backend.py` | DeepSeek API (tool calling) |
+| `openai_compatible_backend.py` | `src/summarize/openai_compatible_backend.py` | 通用 OpenAI 兼容 API (Chat Completions + tool fallback) |
+| `deepseek_backend.py` | `src/summarize/deepseek_backend.py` | DeepSeek 预设 (继承通用后端) |
 | `prompts.py` | `src/summarize/prompts.py` | Prompt 模板 (XML格式, Map-Reduce, 记忆合并) |
 | `models.py` | `src/summarize/models.py` | Pydantic 数据模型 |
 | `__init__.py` | `src/summarize/__init__.py` | 工厂函数 create_summarizer() |
@@ -955,6 +971,7 @@ MessageRouter.handle(msg)
 | 参数 | 默认值 | 说明 |
 |---|---|---|
 | `token_budget` (Claude) | `150000` | Claude 上下文窗口安全预算 |
+| `token_budget` (OpenAI-compatible) | `100000` | 通用兼容后端保守上下文预算 |
 | `token_budget` (DeepSeek) | `900000` | DeepSeek 上下文窗口安全预算 |
 | `chunk_size` | `400` | 每个分块的消息数 |
 | `merge_batch_size` | `5` | 合并批次大小 |
@@ -971,13 +988,18 @@ MessageRouter.handle(msg)
 - 重试异常: `RateLimitError`, `APIConnectionError`, `InternalServerError`, `OverloadedError`
 - 分块提取使用 `claude-haiku-4-5-20251001` (Haiku, 速度快成本低)
 
-#### DeepSeek 后端特有
+#### OpenAI 兼容后端特有
 
-- 使用 OpenAI-compatible tool calling (`STORE_SUMMARY_TOOL`) 进行结构化输出
-- **禁用 thinking 模式**: `extra_body={"thinking": {"type": "disabled"}}`
-- `tool_choice="auto"` (V4 Flash 不支持强制 tool_choice)
+- 通过 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 接入任意兼容 Chat Completions 的服务
+- 优先使用 OpenAI-compatible tool calling (`STORE_SUMMARY_TOOL`) 进行结构化输出
+- 当服务商拒绝 tool calling 时自动重试普通 Chat Completions，并把 JSON / 文本包装为 `SummaryResult`
 - 重试异常: `RateLimitError`, `APIConnectionError`, `APIStatusError`
-- 自由文本回退: 当 tool call 无响应时包装为 minimal SummaryResult
+
+#### DeepSeek 预设特有
+
+- `DeepSeekSummarizer` 继承 `OpenAICompatibleSummarizer`
+- 默认 `DEEPSEEK_BASE_URL=https://api.deepseek.com`
+- **禁用 thinking 模式**: `extra_body={"thinking": {"type": "disabled"}}`
 
 ---
 
@@ -1062,7 +1084,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/status` | 获取 bot 运行状态 | 无 |
 | `POST` | `/api/start` | 启动 bot | 无 |
 | `POST` | `/api/stop` | 停止 bot | 无 |
-| `GET` | `/api/load-config` | 加载当前配置 (密钥脱敏) | 无 |
+| `GET` | `/api/load-config` | 加载当前配置 (保留可编辑密钥原值用于配置回填) | 无 |
 | `POST` | `/api/config` | 保存配置到 .env | 无 |
 | `GET` | `/api/config/export` | 导出配置为 JSON 文件 | 无 |
 | `POST` | `/api/config/import` | 导入 JSON 配置文件 | 无 |
@@ -1512,12 +1534,17 @@ MacHybridBackend
 
 ```ini
 # === AI 后端 ===
-AI_BACKEND=deepseek                           # "deepseek" 或 "claude"
+AI_BACKEND=deepseek                           # "deepseek" / "claude" / "openai_compatible"
 
 # === DeepSeek ===
 DEEPSEEK_API_KEY=sk-xxx                        # DeepSeek API 密钥
 DEEPSEEK_MODEL=deepseek-v4-flash               # 模型 ID
 DEEPSEEK_BASE_URL=https://api.deepseek.com     # API 地址
+
+# === OpenAI-compatible / New API / 自定义转发 ===
+OPENAI_API_KEY=sk-xxx                          # OpenAI 兼容 API 密钥
+OPENAI_BASE_URL=https://api.openai.com/v1      # API 地址(通常带 /v1)
+OPENAI_MODEL=gpt-4.1-mini                      # 模型 ID
 
 # === Claude (Anthropic) ===
 ANTHROPIC_API_KEY=sk-ant-xxx                   # Anthropic API 密钥
@@ -1628,7 +1655,7 @@ WCDB_KEY=
 |---|---|---|
 | `python-dotenv>=1.0.0` | 加载 .env 环境变量 | 是 |
 | `anthropic>=0.45.0` | Claude API SDK | 按后端需求 |
-| `openai>=1.0.0` | DeepSeek API (OpenAI 兼容) | 按后端需求 |
+| `openai>=1.0.0` | OpenAI 兼容 Chat Completions 后端 / DeepSeek 预设 / Whisper API | 按后端需求 |
 | `ddgs>=9.0` | DuckDuckGo 搜索 (AI 上下文增强) | 是 |
 | `pydantic>=2.0.0` | 结构化输出模型 (SummaryResult) | 是 |
 | `uiautomation>=2.0` | Windows UI 自动化 (窗口操控) | Windows 必需 |

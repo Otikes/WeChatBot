@@ -327,8 +327,13 @@ class Bot:
         logger.info("AI backend: %s", config.ai_backend)
         if config.ai_backend == "deepseek":
             logger.info("Model: %s", config.deepseek_model)
+            logger.info("API base URL: %s", config.deepseek_base_url)
+        elif config.ai_backend == "openai_compatible":
+            logger.info("Model: %s", config.openai_model)
+            logger.info("API base URL: %s", config.openai_base_url)
         else:
             logger.info("Model: %s", config.summarize_model)
+            logger.info("API base URL: %s", config.anthropic_base_url)
         logger.info("Bot name: %r", config.bot_display_name)
         if config.wechat_groups:
             logger.info("Groups: %s", config.wechat_groups)

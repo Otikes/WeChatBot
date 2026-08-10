@@ -374,6 +374,33 @@ class LoadConfigTests(unittest.TestCase):
             self.assertEqual(config.ai_backend, "deepseek")
             self.assertEqual(config.deepseek_api_key, "sk-ds-test-key")
 
+    def test_load_config_with_openai_compatible_backend(self):
+        """When AI_BACKEND=openai_compatible, OPENAI_* config is loaded."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "openai_compatible",
+            "OPENAI_API_KEY": "sk-openai-test-key",
+            "OPENAI_BASE_URL": "https://relay.example.com/v1",
+            "OPENAI_MODEL": "qwen-plus",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(config.ai_backend, "openai_compatible")
+            self.assertEqual(config.openai_api_key, "sk-openai-test-key")
+            self.assertEqual(config.openai_base_url, "https://relay.example.com/v1")
+            self.assertEqual(config.openai_model, "qwen-plus")
+
+    def test_load_config_normalizes_openai_alias(self):
+        """AI_BACKEND=openai is accepted as openai_compatible."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "openai",
+            "OPENAI_API_KEY": "sk-openai-test-key",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(config.ai_backend, "openai_compatible")
+
     def test_load_config_raises_when_api_key_missing_claude(self):
         """load_config() with default (claude) backend and no API key → RuntimeError."""
         from src.config import load_config
@@ -393,6 +420,17 @@ class LoadConfigTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 load_config()
             self.assertIn("DEEPSEEK_API_KEY", str(ctx.exception))
+
+    def test_load_config_raises_when_api_key_missing_openai_compatible(self):
+        """load_config() with openai_compatible backend and no API key → RuntimeError."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "openai_compatible",
+        }, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                load_config()
+            self.assertIn("OPENAI_API_KEY", str(ctx.exception))
 
     def test_load_config_parses_trigger_keywords(self):
         """Custom TRIGGER_KEYWORDS should be parsed from comma-separated string."""

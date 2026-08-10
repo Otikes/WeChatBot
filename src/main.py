@@ -25,11 +25,18 @@ def _print_config_summary(config: BotConfig) -> None:
     print("Configuration Summary")
     print("─" * 50)
     print(f"  AI Backend:              {config.ai_backend}")
-    print(f"  Summarize Model:         {config.summarize_model}")
-    print(f"  Anthropic API Key:       {_mask(config.anthropic_api_key)}")
     if config.ai_backend == "deepseek":
         print(f"  DeepSeek API Key:        {_mask(config.deepseek_api_key)}")
         print(f"  DeepSeek Model:          {config.deepseek_model}")
+        print(f"  DeepSeek Base URL:       {config.deepseek_base_url}")
+    elif config.ai_backend == "openai_compatible":
+        print(f"  OpenAI API Key:          {_mask(config.openai_api_key)}")
+        print(f"  OpenAI Model:            {config.openai_model}")
+        print(f"  OpenAI Base URL:         {config.openai_base_url}")
+    else:
+        print(f"  Summarize Model:         {config.summarize_model}")
+        print(f"  Anthropic API Key:       {_mask(config.anthropic_api_key)}")
+        print(f"  Anthropic Base URL:      {config.anthropic_base_url}")
     print(f"  WeChat Backend:          {config.wechat_backend}")
     print(f"  WeChat Groups:           {config.wechat_groups or '(all)'}")
     print(f"  Bot Display Name:        {config.bot_display_name}")

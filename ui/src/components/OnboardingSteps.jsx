@@ -535,8 +535,10 @@ export function Step2WeChatConfig({ data, updateData, onDone }) {
 export function Step3AIConfig({ data, updateData, onDone }) {
   const [busy, setBusy] = useState(false)
   const isDeepSeek = data.ai_backend === 'deepseek'
-  const apiKey = isDeepSeek ? data.deepseek_api_key : data.anthropic_api_key
-  const valid = (apiKey || '').trim().length >= 10
+  const isOpenAI = data.ai_backend === 'openai_compatible' || data.ai_backend === 'openai'
+  const apiKey = isDeepSeek ? data.deepseek_api_key : isOpenAI ? data.openai_api_key : data.anthropic_api_key
+  const model = isDeepSeek ? data.deepseek_model : isOpenAI ? data.openai_model : data.summarize_model
+  const valid = (apiKey || '').trim().length >= 8 && (model || '').trim().length > 0
 
   async function handleNext() {
     setBusy(true)
@@ -548,6 +550,9 @@ export function Step3AIConfig({ data, updateData, onDone }) {
           deepseek_api_key: data.deepseek_api_key || '',
           deepseek_base_url: data.deepseek_base_url || 'https://api.deepseek.com',
           deepseek_model: data.deepseek_model || 'deepseek-v4-flash',
+          openai_api_key: data.openai_api_key || '',
+          openai_base_url: data.openai_base_url || 'https://api.openai.com/v1',
+          openai_model: data.openai_model || 'gpt-4.1-mini',
           anthropic_api_key: data.anthropic_api_key || '',
           anthropic_base_url: data.anthropic_base_url || 'https://api.anthropic.com',
           summarize_model: data.summarize_model || 'claude-haiku-4-5-20251001',
@@ -571,6 +576,7 @@ export function Step3AIConfig({ data, updateData, onDone }) {
         <Field label="AI 服务商" hint="推荐 DeepSeek，中文群聊效果更好">
           <Select value={data.ai_backend || 'deepseek'} onChange={v => updateData({ ai_backend: v })} options={[
             { value: 'deepseek', desc: 'DeepSeek', hint: '推荐 · 中文效果好' },
+            { value: 'openai_compatible', desc: 'OpenAI 兼容', hint: 'New API / 代理 / 自建转发' },
             { value: 'claude', desc: 'Claude', hint: 'Anthropic' },
           ]} />
         </Field>
@@ -588,6 +594,18 @@ export function Step3AIConfig({ data, updateData, onDone }) {
                 { value: 'deepseek-v4-flash', desc: 'V4 Flash', hint: '极速 · 极低费用' },
                 { value: 'deepseek-v4-pro', desc: 'V4 Pro', hint: '百万上下文 · 旗舰版' },
               ]} />
+            </Field>
+          </>
+        ) : isOpenAI ? (
+          <>
+            <Field label="OpenAI 兼容 API Key" hint="填你的服务商密钥；OpenAI / New API / 代理服务都可以">
+              <Input type="password" value={data.openai_api_key || ''} onChange={v => updateData({ openai_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx" />
+            </Field>
+            <Field label="API Base URL" hint="兼容 OpenAI 的请求地址；多数服务需要带 /v1">
+              <Input value={data.openai_base_url || 'https://api.openai.com/v1'} onChange={v => updateData({ openai_base_url: v })} placeholder="https://api.openai.com/v1" />
+            </Field>
+            <Field label="模型名称" hint="填写服务商实际提供的模型 ID">
+              <Input value={data.openai_model || 'gpt-4.1-mini'} onChange={v => updateData({ openai_model: v })} placeholder="gpt-4.1-mini" />
             </Field>
           </>
         ) : (

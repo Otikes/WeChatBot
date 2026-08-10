@@ -93,6 +93,10 @@ func main() {
 """ % CHATLOG_DUMMY_DATA_KEY
 
 
+def _posix_path(value: str | Path) -> str:
+    return str(value).replace("\\", "/")
+
+
 def parse_data_dir_from_lsof(output: str) -> str:
     """Return the active account dir from lsof output."""
     marker = "/db_storage/session/session.db"
@@ -176,11 +180,11 @@ def build_lldb_extract_command(
         cmd.append(f"PYTHONPATH={lldb_python_path.strip()}")
     cmd.extend([
         python_bin,
-        str(script),
+        _posix_path(script),
         "--pid",
         str(pid),
         "--data-dir",
-        data_dir,
+        _posix_path(data_dir),
     ])
     if mode != "scan":
         cmd.extend(["--mode", mode])
@@ -197,7 +201,7 @@ def build_lldb_env(
     existing = env.get("PYTHONPATH", "").strip()
     lldb_path = lldb_python_path.strip()
     if lldb_path and existing:
-        env["PYTHONPATH"] = f"{lldb_path}{os.pathsep}{existing}"
+        env["PYTHONPATH"] = f"{lldb_path}:{existing}"
     elif lldb_path:
         env["PYTHONPATH"] = lldb_path
     return env
@@ -213,7 +217,7 @@ def resolve_lldb_python_bin() -> str:
 
 
 def build_chatlog_build_command(source_dir: Path, output: Path) -> list[str]:
-    return ["go", "build", "-o", str(output), "./cmd/chatlog_server"]
+    return ["go", "build", "-o", _posix_path(output), "./cmd/chatlog_server"]
 
 
 def run_text(cmd: list[str], timeout: int = 10) -> str:
@@ -307,12 +311,13 @@ def count_open_db_files(pid: int, data_dir: str) -> int:
     if not pid or not data_dir:
         return 0
     out = run_text(["lsof", "-n", "-P", "-p", str(pid)], timeout=20)
-    prefix = str(Path(data_dir).expanduser() / "db_storage")
+    prefix = _posix_path(data_dir).rstrip("/") + "/db_storage"
     seen = set()
     for line in out.splitlines():
-        if prefix not in line:
+        normalized_line = line.replace("\\", "/")
+        if prefix not in normalized_line:
             continue
-        path = line.split()[-1]
+        path = normalized_line.split()[-1]
         if ".db" not in path and ".kvdb" not in path:
             continue
         if path.endswith((".db", ".db-wal", ".db-shm", ".kvdb", ".kvdb-wal", ".kvdb-shm")):

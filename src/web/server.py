@@ -23,7 +23,7 @@ from urllib.parse import unquote
 # conditional blocks, but for Python's scoping those later imports still
 # make the name a local — so it must be imported at module level too,
 # otherwise the first branch that references it raises UnboundLocalError.
-from src.config import _decode_wechat_groups
+from src.config import _decode_wechat_groups, _normalize_ai_backend
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,9 @@ def _find_or_create_env() -> Path:
     env_path.write_text(
         "AI_BACKEND=deepseek\n"
         "DEEPSEEK_API_KEY=\n"
+        "OPENAI_API_KEY=\n"
+        "OPENAI_BASE_URL=https://api.openai.com/v1\n"
+        "OPENAI_MODEL=gpt-4.1-mini\n"
         "WECHAT_BACKEND=wcdb\n"
         "BOT_DISPLAY_NAME=\n"
         "WECHAT_GROUPS=\n",
@@ -146,7 +149,7 @@ def _feishu_config_from_raw(raw: dict[str, str]) -> dict:
             False,
         ),
         "feishu_app_id": raw.get("FEISHU_APP_ID", ""),
-        "feishu_app_secret": _mask_key(raw.get("FEISHU_APP_SECRET", "")),
+        "feishu_app_secret": raw.get("FEISHU_APP_SECRET", ""),
         "feishu_export_mode": raw.get("FEISHU_EXPORT_MODE", "knowledge"),
         "feishu_export_window_hours": _int_env(
             raw.get("FEISHU_EXPORT_WINDOW_HOURS", "8"),
@@ -175,6 +178,40 @@ def _feishu_config_from_raw(raw: dict[str, str]) -> dict:
         "feishu_bitable_table_id": raw.get("FEISHU_BITABLE_TABLE_ID", ""),
         "feishu_doc_folder_token": raw.get("FEISHU_DOC_FOLDER_TOKEN", ""),
     }
+
+
+def _ai_config_from_raw(raw: dict[str, str]) -> dict:
+    """Return UI-facing AI config from env key/value pairs."""
+    backend = _normalize_ai_backend(raw.get("AI_BACKEND", "deepseek"))
+    return {
+        "ai_backend": backend,
+        "deepseek_api_key": raw.get("DEEPSEEK_API_KEY", ""),
+        "deepseek_base_url": raw.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        "deepseek_model": raw.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        "openai_api_key": raw.get("OPENAI_API_KEY", ""),
+        "openai_base_url": raw.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "openai_model": raw.get("OPENAI_MODEL", "gpt-4.1-mini"),
+        "anthropic_api_key": raw.get("ANTHROPIC_API_KEY", ""),
+        "anthropic_base_url": raw.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+        "summarize_model": raw.get("SUMMARIZE_MODEL", "claude-haiku-4-5-20251001"),
+    }
+
+
+def _ai_updates_from_config(config: dict) -> dict[str, str | None]:
+    """Return env updates for AI config from UI payload."""
+    updates: dict[str, str | None] = {
+        "AI_BACKEND": _normalize_ai_backend(config.get("ai_backend", "deepseek")),
+        "DEEPSEEK_API_KEY": config.get("deepseek_api_key"),
+        "DEEPSEEK_BASE_URL": config.get("deepseek_base_url"),
+        "DEEPSEEK_MODEL": config.get("deepseek_model"),
+        "OPENAI_API_KEY": config.get("openai_api_key"),
+        "OPENAI_BASE_URL": config.get("openai_base_url"),
+        "OPENAI_MODEL": config.get("openai_model"),
+        "ANTHROPIC_API_KEY": config.get("anthropic_api_key"),
+        "ANTHROPIC_BASE_URL": config.get("anthropic_base_url"),
+        "SUMMARIZE_MODEL": config.get("summarize_model"),
+    }
+    return updates
 
 
 _DEFAULT_TODO_ADD_KEYWORDS = "记一下,添加待办,新建待办,帮我记,待办"
@@ -337,10 +374,13 @@ def _set_env_key(env_path: Path, key: str, value: str) -> None:
 def _write_onboarding_to_env(env_path):
     """Write accumulated onboarding data to .env file atomically."""
     env_map = {
-        "AI_BACKEND": _onboarding_data.get("ai_backend", "deepseek"),
+        "AI_BACKEND": _normalize_ai_backend(_onboarding_data.get("ai_backend", "deepseek")),
         "DEEPSEEK_API_KEY": _onboarding_data.get("deepseek_api_key", ""),
         "DEEPSEEK_BASE_URL": _onboarding_data.get("deepseek_base_url", "https://api.deepseek.com"),
         "DEEPSEEK_MODEL": _onboarding_data.get("deepseek_model", "deepseek-v4-flash"),
+        "OPENAI_API_KEY": _onboarding_data.get("openai_api_key", ""),
+        "OPENAI_BASE_URL": _onboarding_data.get("openai_base_url", "https://api.openai.com/v1"),
+        "OPENAI_MODEL": _onboarding_data.get("openai_model", "gpt-4.1-mini"),
         "ANTHROPIC_API_KEY": _onboarding_data.get("anthropic_api_key", ""),
         "ANTHROPIC_BASE_URL": _onboarding_data.get("anthropic_base_url", "https://api.anthropic.com"),
         "SUMMARIZE_MODEL": _onboarding_data.get("summarize_model", "claude-haiku-4-5-20251001"),
@@ -814,6 +854,7 @@ _onboarding_data = {
     "key": "", "wxid": "", "db_path": "",
     "bot_display_name": "", "wechat_groups": "*", "wechat_backend": "wcdb",
     "ai_backend": "deepseek", "deepseek_api_key": "", "deepseek_model": "deepseek-v4-flash",
+    "openai_api_key": "", "openai_base_url": "https://api.openai.com/v1", "openai_model": "gpt-4.1-mini",
     "anthropic_api_key": "", "summarize_model": "claude-haiku-4-5-20251001",
     "proactive_enabled": False,
     "sticky_mention_enabled": True,
@@ -1094,13 +1135,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         k, v = line.split("=", 1)
                         raw[k.strip()] = v.strip()
             config_data = {
-                "ai_backend": raw.get("AI_BACKEND", "deepseek"),
-                "deepseek_api_key": _mask_key(raw.get("DEEPSEEK_API_KEY", "")),
-                "deepseek_base_url": raw.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-                "deepseek_model": raw.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-                "anthropic_api_key": _mask_key(raw.get("ANTHROPIC_API_KEY", "")),
-                "anthropic_base_url": raw.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-                "summarize_model": raw.get("SUMMARIZE_MODEL", "claude-haiku-4-5-20251001"),
+                **_ai_config_from_raw(raw),
                 "bot_display_name": raw.get("BOT_DISPLAY_NAME", ""),
                 "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                 "wechat_groups": _decode_wechat_groups(raw.get("WECHAT_GROUPS", "*")),
@@ -1151,13 +1186,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             k, v = line.split("=", 1)
                             raw[k.strip()] = v.strip()
                 export_data = {
-                    "ai_backend": raw.get("AI_BACKEND", "deepseek"),
-                    "deepseek_api_key": _mask_key(raw.get("DEEPSEEK_API_KEY", "")),
-                    "deepseek_base_url": raw.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-                    "deepseek_model": raw.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-                    "anthropic_api_key": _mask_key(raw.get("ANTHROPIC_API_KEY", "")),
-                    "anthropic_base_url": raw.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-                    "summarize_model": raw.get("SUMMARIZE_MODEL", "claude-haiku-4-5-20251001"),
+                    **_ai_config_from_raw(raw),
                     "bot_display_name": raw.get("BOT_DISPLAY_NAME", ""),
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "wechat_groups": raw.get("WECHAT_GROUPS", "*"),
@@ -1208,13 +1237,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     lines = []
                 new_lines = []
                 updates = {
-                    "DEEPSEEK_API_KEY": config.get("deepseek_api_key"),
-                    "DEEPSEEK_BASE_URL": config.get("deepseek_base_url"),
-                    "DEEPSEEK_MODEL": config.get("deepseek_model"),
-                    "ANTHROPIC_API_KEY": config.get("anthropic_api_key"),
-                    "ANTHROPIC_BASE_URL": config.get("anthropic_base_url"),
-                    "SUMMARIZE_MODEL": config.get("summarize_model"),
-                    "AI_BACKEND": config.get("ai_backend"),
+                    **_ai_updates_from_config(config),
                     "BOT_DISPLAY_NAME": config.get("bot_display_name"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
                     "WECHAT_GROUPS": config.get("wechat_groups") or "*",
@@ -1289,13 +1312,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 else:
                     lines = []
                 updates = {
-                    "DEEPSEEK_API_KEY": config.get("deepseek_api_key"),
-                    "DEEPSEEK_BASE_URL": config.get("deepseek_base_url"),
-                    "DEEPSEEK_MODEL": config.get("deepseek_model"),
-                    "ANTHROPIC_API_KEY": config.get("anthropic_api_key"),
-                    "ANTHROPIC_BASE_URL": config.get("anthropic_base_url"),
-                    "SUMMARIZE_MODEL": config.get("summarize_model"),
-                    "AI_BACKEND": config.get("ai_backend"),
+                    **_ai_updates_from_config(config),
                     "BOT_DISPLAY_NAME": config.get("bot_display_name"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
                     "WECHAT_GROUPS": config.get("wechat_groups") or "*",
@@ -1742,11 +1759,17 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
                 # Allow overrides from frontend sandbox inputs
                 if data.get("ai_backend"):
-                    config.ai_backend = data["ai_backend"]
+                    config.ai_backend = _normalize_ai_backend(data["ai_backend"])
                 if data.get("deepseek_api_key"):
                     config.deepseek_api_key = data["deepseek_api_key"]
                 if data.get("deepseek_model"):
                     config.deepseek_model = data["deepseek_model"]
+                if data.get("openai_api_key"):
+                    config.openai_api_key = data["openai_api_key"]
+                if data.get("openai_base_url"):
+                    config.openai_base_url = data["openai_base_url"]
+                if data.get("openai_model"):
+                    config.openai_model = data["openai_model"]
                 if data.get("anthropic_api_key"):
                     config.anthropic_api_key = data["anthropic_api_key"]
                 if data.get("summarize_model"):
@@ -1939,13 +1962,16 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 data = json.loads(body)
-                ai = data.get("ai_backend", "deepseek")
+                ai = _normalize_ai_backend(data.get("ai_backend", "deepseek"))
                 with _onboarding_lock:
                     _onboarding_data["step3_done"] = True
                     _onboarding_data["ai_backend"] = ai
                     _onboarding_data["deepseek_api_key"] = data.get("deepseek_api_key", "")
                     _onboarding_data["deepseek_base_url"] = data.get("deepseek_base_url", "https://api.deepseek.com")
                     _onboarding_data["deepseek_model"] = data.get("deepseek_model", "deepseek-v4-flash")
+                    _onboarding_data["openai_api_key"] = data.get("openai_api_key", "")
+                    _onboarding_data["openai_base_url"] = data.get("openai_base_url", "https://api.openai.com/v1")
+                    _onboarding_data["openai_model"] = data.get("openai_model", "gpt-4.1-mini")
                     _onboarding_data["anthropic_api_key"] = data.get("anthropic_api_key", "")
                     _onboarding_data["anthropic_base_url"] = data.get("anthropic_base_url", "https://api.anthropic.com")
                     _onboarding_data["summarize_model"] = data.get("summarize_model", "claude-haiku-4-5-20251001")

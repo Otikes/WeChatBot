@@ -1,6 +1,7 @@
 """Abstract base class for AI summarization backends.
 
-Implementations: ClaudeSummarizer, DeepSeekSummarizer.
+Implementations: ClaudeSummarizer, DeepSeekSummarizer,
+OpenAICompatibleSummarizer.
 """
 
 import logging
@@ -369,8 +370,8 @@ class AbstractSummarizer(ABC):
         """Execute the chat API call. Backend-specific.
 
         Claude backend: uses client.messages.create() with system param.
-        DeepSeek backend: uses client.chat.completions.create() with
-                          system role in messages list.
+        OpenAI-compatible backends: use client.chat.completions.create()
+                                    with system role in messages list.
         """
         ...
 

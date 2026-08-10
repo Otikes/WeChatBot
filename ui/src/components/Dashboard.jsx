@@ -118,7 +118,7 @@ function LiveIndicator({ label, ok }) {
 }
 
 const backendLabels = { wcdb: '本地数据库直读', mac_hybrid: 'macOS WeFlow 直读', mac_ui: 'macOS 界面自动化', direct: 'UIA 窗口读取' }
-const aiLabels = { deepseek: 'DeepSeek', claude: 'Claude' }
+const aiLabels = { deepseek: 'DeepSeek', openai_compatible: 'OpenAI 兼容', claude: 'Claude' }
 
 export default function Dashboard({ status }) {
   const [busy, setBusy] = useState(false)

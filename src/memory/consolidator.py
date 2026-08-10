@@ -5,7 +5,7 @@ Core logic:
 - After T hours since last consolidation (default 2h),
   consolidate the new messages into the group's memory diary.
 
-Uses the DeepSeek Flash API for low-cost, low-latency consolidation.
+Uses the configured summarizer backend for low-cost, low-latency consolidation.
 """
 
 import concurrent.futures

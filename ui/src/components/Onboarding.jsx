@@ -44,6 +44,8 @@ export default function Onboarding({ onComplete }) {
     // Step 3
     ai_backend: 'deepseek', deepseek_api_key: '', deepseek_model: 'deepseek-v4-flash',
     deepseek_base_url: 'https://api.deepseek.com',
+    openai_api_key: '', openai_base_url: 'https://api.openai.com/v1',
+    openai_model: 'gpt-4.1-mini',
     anthropic_api_key: '', anthropic_base_url: 'https://api.anthropic.com',
     summarize_model: 'claude-haiku-4-5-20251001',
     // Step 4

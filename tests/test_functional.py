@@ -182,6 +182,22 @@ class TestConfigAnthropicBaseUrl:
         assert config.anthropic_base_url == "https://claude-proxy.example.com"
 
 
+class TestConfigOpenAICompatibleBaseUrl:
+    """Verify openai_base_url is loaded and has a default."""
+
+    def test_default_value(self):
+        from src.config import BotConfig
+        assert BotConfig.openai_base_url == "https://api.openai.com/v1"
+
+    def test_from_env(self, monkeypatch):
+        monkeypatch.setenv("OPENAI_BASE_URL", "https://relay.example.com/v1")
+        monkeypatch.setenv("AI_BACKEND", "openai_compatible")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        from src.config import load_config
+        config = load_config()
+        assert config.openai_base_url == "https://relay.example.com/v1"
+
+
 class TestSummarizerBaseUrl:
     """Verify AI factory forwards provider-specific Base URLs."""
 
@@ -216,6 +232,38 @@ class TestSummarizerBaseUrl:
         assert captured["model"] == "claude-test"
         assert captured["base_url"] == "https://claude-proxy.example.com"
         assert captured["chunk_size"] == 123
+
+    def test_openai_compatible_factory_passes_openai_base_url(self, monkeypatch):
+        from src.config import BotConfig
+        import src.summarize as summarize
+
+        captured = {}
+
+        class FakeOpenAISummarizer:
+            def __init__(self, api_key, model, base_url, chunk_size):
+                captured.update({
+                    "api_key": api_key,
+                    "model": model,
+                    "base_url": base_url,
+                    "chunk_size": chunk_size,
+                })
+
+        monkeypatch.setattr(summarize, "OpenAICompatibleSummarizer", FakeOpenAISummarizer)
+
+        config = BotConfig(
+            ai_backend="openai_compatible",
+            openai_api_key="sk-openai-test",
+            openai_base_url="https://relay.example.com/v1",
+            openai_model="qwen-plus",
+            chunk_size=42,
+        )
+
+        summarize.create_summarizer(config)
+
+        assert captured["api_key"] == "sk-openai-test"
+        assert captured["model"] == "qwen-plus"
+        assert captured["base_url"] == "https://relay.example.com/v1"
+        assert captured["chunk_size"] == 42
 
 
 class TestPostAllowlist:

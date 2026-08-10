@@ -1,4 +1,4 @@
-"""Summarization module — factory for AI backends.
+"""Summarization module - factory for AI backends.
 
 Usage:
     from .summarize import create_summarizer
@@ -13,6 +13,7 @@ from .base import AbstractSummarizer
 from .claude_backend import ClaudeSummarizer
 from .deepseek_backend import DeepSeekSummarizer
 from .models import ParticipantContribution, SummaryResult
+from .openai_compatible_backend import OpenAICompatibleSummarizer
 
 logger = logging.getLogger(__name__)
 
@@ -20,10 +21,23 @@ __all__ = [
     "AbstractSummarizer",
     "ClaudeSummarizer",
     "DeepSeekSummarizer",
+    "OpenAICompatibleSummarizer",
     "SummaryResult",
     "ParticipantContribution",
     "create_summarizer",
 ]
+
+
+def _normalize_backend(value: str) -> str:
+    backend = (value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "anthropic": "claude",
+        "openai": "openai_compatible",
+        "openai_compat": "openai_compatible",
+        "compatible": "openai_compatible",
+        "custom": "openai_compatible",
+    }
+    return aliases.get(backend, backend)
 
 
 def create_summarizer(config) -> AbstractSummarizer:
@@ -33,12 +47,12 @@ def create_summarizer(config) -> AbstractSummarizer:
         config: BotConfig instance with ai_backend, api keys, model, etc.
 
     Returns:
-        An AbstractSummarizer implementation (Claude or DeepSeek).
+        An AbstractSummarizer implementation.
 
     Raises:
         ValueError: If the configured backend is unknown.
     """
-    backend = config.ai_backend.lower()
+    backend = _normalize_backend(config.ai_backend)
 
     if backend == "deepseek":
         logger.info("Creating DeepSeekSummarizer (model=%s)", config.deepseek_model)
@@ -49,7 +63,20 @@ def create_summarizer(config) -> AbstractSummarizer:
             chunk_size=config.chunk_size,
         )
 
-    elif backend == "claude":
+    if backend == "openai_compatible":
+        logger.info(
+            "Creating OpenAICompatibleSummarizer (model=%s, base_url=%s)",
+            config.openai_model,
+            config.openai_base_url,
+        )
+        return OpenAICompatibleSummarizer(
+            api_key=config.openai_api_key,
+            model=config.openai_model,
+            base_url=config.openai_base_url,
+            chunk_size=config.chunk_size,
+        )
+
+    if backend == "claude":
         logger.info("Creating ClaudeSummarizer (model=%s)", config.summarize_model)
         return ClaudeSummarizer(
             api_key=config.anthropic_api_key,
@@ -58,8 +85,7 @@ def create_summarizer(config) -> AbstractSummarizer:
             chunk_size=config.chunk_size,
         )
 
-    else:
-        raise ValueError(
-            f"Unknown AI_BACKEND: '{config.ai_backend}'. "
-            f"Supported: 'claude', 'deepseek'."
-        )
+    raise ValueError(
+        f"Unknown AI_BACKEND: '{config.ai_backend}'. "
+        f"Supported: 'claude', 'deepseek', 'openai_compatible'."
+    )

@@ -1278,6 +1278,50 @@ class ApiConfigEndpointTests(unittest.TestCase):
                 f.unlink(missing_ok=True)
             tmp_dir.rmdir()
 
+    def test_save_config_roundtrip_openai_compatible_values(self):
+        """POST /api/config persists OpenAI-compatible settings and load-config reads them."""
+        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_env = tmp_dir / ".env"
+        tmp_env.write_text("AI_BACKEND=openai_compatible\n", encoding="utf-8")
+        try:
+            save_body = json.dumps({
+                "ai_backend": "openai_compatible",
+                "openai_api_key": "sk-openai-key",
+                "openai_base_url": "https://relay.example.com/v1",
+                "openai_model": "qwen-plus",
+            }).encode()
+            with patch("src.web.server._find_or_create_env", return_value=tmp_env):
+                handler, sock = _build_handler(
+                    "/api/config", method="POST",
+                    body=save_body,
+                    headers={"Content-Type": "application/json",
+                             "Content-Length": str(len(save_body))},
+                )
+                parts = sock.get_response_text().split("\r\n\r\n", 1)
+                result = json.loads(parts[1])
+                self.assertTrue(result["ok"])
+
+            saved = tmp_env.read_text(encoding="utf-8")
+            self.assertIn("AI_BACKEND=openai_compatible", saved)
+            self.assertIn("OPENAI_API_KEY=sk-openai-key", saved)
+            self.assertIn("OPENAI_BASE_URL=https://relay.example.com/v1", saved)
+            self.assertIn("OPENAI_MODEL=qwen-plus", saved)
+
+            with patch("src.web.server._find_or_create_env", return_value=tmp_env):
+                handler, sock = _build_handler("/api/load-config")
+                parts = sock.get_response_text().split("\r\n\r\n", 1)
+                body = json.loads(parts[1])
+
+            config = body["config"]
+            self.assertEqual(config["ai_backend"], "openai_compatible")
+            self.assertEqual(config["openai_base_url"], "https://relay.example.com/v1")
+            self.assertEqual(config["openai_model"], "qwen-plus")
+        finally:
+            tmp_env.unlink(missing_ok=True)
+            for f in tmp_dir.glob("*"):
+                f.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+
     def test_save_config_updates_process_environment(self):
         """Saved config is available to bot threads started in this process."""
         tmp_dir = Path(tempfile.mkdtemp())
@@ -1316,6 +1360,50 @@ class ApiConfigEndpointTests(unittest.TestCase):
                     "https://proxy.example.com/v1",
                 )
                 self.assertEqual(os.environ["DEEPSEEK_MODEL"], "new-model")
+        finally:
+            tmp_env.unlink(missing_ok=True)
+            for f in tmp_dir.glob("*"):
+                f.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+
+    def test_save_config_updates_openai_environment(self):
+        """Saving OpenAI-compatible config updates process env too."""
+        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_env = tmp_dir / ".env"
+        tmp_env.write_text(
+            "AI_BACKEND=openai_compatible\n"
+            "OPENAI_API_KEY=old-key\n"
+            "OPENAI_BASE_URL=https://api.openai.com/v1\n"
+            "OPENAI_MODEL=old-model\n",
+            encoding="utf-8",
+        )
+        save_body = json.dumps({
+            "ai_backend": "openai_compatible",
+            "openai_api_key": "new-key",
+            "openai_base_url": "https://relay.example.com/v1",
+            "openai_model": "new-model",
+        }).encode()
+        try:
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("src.web.server._find_or_create_env",
+                      return_value=tmp_env),
+            ):
+                handler, sock = _build_handler(
+                    "/api/config", method="POST",
+                    body=save_body,
+                    headers={"Content-Type": "application/json",
+                             "Content-Length": str(len(save_body))},
+                )
+                parts = sock.get_response_text().split("\r\n\r\n", 1)
+                result = json.loads(parts[1])
+                self.assertTrue(result["ok"])
+                self.assertEqual(os.environ["OPENAI_API_KEY"], "new-key")
+                self.assertEqual(
+                    os.environ["OPENAI_BASE_URL"],
+                    "https://relay.example.com/v1",
+                )
+                self.assertEqual(os.environ["OPENAI_MODEL"], "new-model")
         finally:
             tmp_env.unlink(missing_ok=True)
             for f in tmp_dir.glob("*"):
@@ -1640,6 +1728,23 @@ class OnboardingApiTests(unittest.TestCase):
             "ai_backend": "deepseek",
             "deepseek_api_key": "sk-test",
             "deepseek_model": "deepseek-v4-flash",
+        })
+        handler, sock = _build_handler(
+            "/api/onboarding/step3", method="POST",
+            body=post_body.encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+
+    def test_onboarding_step3_posts_openai_compatible_data(self):
+        """POST /api/onboarding/step3 accepts OpenAI-compatible config."""
+        post_body = json.dumps({
+            "ai_backend": "openai_compatible",
+            "openai_api_key": "sk-openai-test",
+            "openai_base_url": "https://relay.example.com/v1",
+            "openai_model": "qwen-plus",
         })
         handler, sock = _build_handler(
             "/api/onboarding/step3", method="POST",

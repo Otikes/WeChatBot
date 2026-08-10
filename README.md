@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20%7C%20macOS-blue?style=flat-square&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.13%2B-green?style=flat-square&logo=python" alt="Python" />
-  <img src="https://img.shields.io/badge/AI-Claude%20%7C%20DeepSeek-purple?style=flat-square" alt="AI Backend" />
+  <img src="https://img.shields.io/badge/AI-Claude%20%7C%20DeepSeek%20%7C%20OpenAI%20Compatible-purple?style=flat-square" alt="AI Backend" />
   <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="License" />
 </p>
 
@@ -151,6 +151,8 @@ python desktop_mac.py
 
 需要在系统设置中给终端授权「辅助功能」权限。
 
+macOS 有两个实验后端可选：`WECHAT_BACKEND=mac_ui` 使用界面自动化；`WECHAT_BACKEND=mac_hybrid` 使用 WeFlow 直读，不需要额外启动消息读取服务。可用 `tools/macos/weflow_setup.py diagnose` 做环境检查，密钥可通过 `tools/macos/weflow_setup.py extract-keys`、`tools/macos/weflow_setup.py extract-keys-restart-hook` 提取并写入 `all_keys.json`，也可用 `tools/macos/weflow_setup.py import-keys` 导入。
+
 ### 从源码运行（Windows）
 
 ```bash
@@ -167,7 +169,7 @@ python desktop.py
 
 所有设置都在控制台里直接改，不需要手动编辑文件。保存后重启机器人即可生效。
 
-必须填的只有一项：在「系统配置 → AI 后端配置」里填入 API Key（DeepSeek 或 Claude 二选一）。
+必须填的只有一项：在「系统配置 → AI 后端配置」里填入 API Key。你可以选 DeepSeek、Claude，或任意 OpenAI 兼容服务。
 
 ---
 
@@ -180,7 +182,7 @@ python desktop.py
 目前没有已知案例，但请自行评估风险。
 
 **支持哪些 AI？费用多少？**
-DeepSeek（推荐，极低价格）和 Claude。普通群一天用下来不到一毛钱。
+DeepSeek（推荐，极低价格）、Claude，以及任意 OpenAI 兼容服务。普通群一天用下来不到一毛钱。
 
 **微信能最小化吗？**
 读消息不受影响，发消息时微信窗口需要可见。

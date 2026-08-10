@@ -538,7 +538,9 @@ export function Step3AIConfig({ data, updateData, onDone }) {
   const isOpenAI = data.ai_backend === 'openai_compatible' || data.ai_backend === 'openai'
   const apiKey = isDeepSeek ? data.deepseek_api_key : isOpenAI ? data.openai_api_key : data.anthropic_api_key
   const model = isDeepSeek ? data.deepseek_model : isOpenAI ? data.openai_model : data.summarize_model
-  const valid = (apiKey || '').trim().length >= 8 && (model || '').trim().length > 0
+  const valid = isOpenAI
+    ? (model || '').trim().length > 0
+    : (apiKey || '').trim().length >= 8 && (model || '').trim().length > 0
 
   async function handleNext() {
     setBusy(true)
@@ -598,10 +600,10 @@ export function Step3AIConfig({ data, updateData, onDone }) {
           </>
         ) : isOpenAI ? (
           <>
-            <Field label="OpenAI 兼容 API Key" hint="填你的服务商密钥；OpenAI / New API / 代理服务都可以">
-              <Input type="password" value={data.openai_api_key || ''} onChange={v => updateData({ openai_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx" />
+            <Field label="OpenAI 兼容 API Key" hint="云端服务请填写；Ollama、LM Studio 等本地兼容服务可留空">
+              <Input type="password" value={data.openai_api_key || ''} onChange={v => updateData({ openai_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx（本地服务可留空）" />
             </Field>
-            <Field label="API Base URL" hint="兼容 OpenAI 的请求地址；多数服务需要带 /v1">
+            <Field label="API Base URL" hint="可填 base URL，也可直接粘 /v1/chat/completions，保存时会自动纠正">
               <Input value={data.openai_base_url || 'https://api.openai.com/v1'} onChange={v => updateData({ openai_base_url: v })} placeholder="https://api.openai.com/v1" />
             </Field>
             <Field label="模型名称" hint="填写服务商实际提供的模型 ID">

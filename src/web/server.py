@@ -23,7 +23,12 @@ from urllib.parse import unquote
 # conditional blocks, but for Python's scoping those later imports still
 # make the name a local — so it must be imported at module level too,
 # otherwise the first branch that references it raises UnboundLocalError.
-from src.config import _decode_wechat_groups, _normalize_ai_backend
+from src.config import _decode_wechat_groups
+from src.utils.ai_compat import (
+    OPENAI_COMPATIBLE_BASE_URL,
+    normalize_ai_backend as _normalize_ai_backend,
+    normalize_openai_base_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +80,7 @@ def _find_or_create_env() -> Path:
         "AI_BACKEND=deepseek\n"
         "DEEPSEEK_API_KEY=\n"
         "OPENAI_API_KEY=\n"
-        "OPENAI_BASE_URL=https://api.openai.com/v1\n"
+        f"OPENAI_BASE_URL={OPENAI_COMPATIBLE_BASE_URL}\n"
         "OPENAI_MODEL=gpt-4.1-mini\n"
         "WECHAT_BACKEND=wcdb\n"
         "BOT_DISPLAY_NAME=\n"
@@ -189,7 +194,9 @@ def _ai_config_from_raw(raw: dict[str, str]) -> dict:
         "deepseek_base_url": raw.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
         "deepseek_model": raw.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
         "openai_api_key": raw.get("OPENAI_API_KEY", ""),
-        "openai_base_url": raw.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        "openai_base_url": normalize_openai_base_url(
+            raw.get("OPENAI_BASE_URL", OPENAI_COMPATIBLE_BASE_URL)
+        ),
         "openai_model": raw.get("OPENAI_MODEL", "gpt-4.1-mini"),
         "anthropic_api_key": raw.get("ANTHROPIC_API_KEY", ""),
         "anthropic_base_url": raw.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
@@ -205,7 +212,7 @@ def _ai_updates_from_config(config: dict) -> dict[str, str | None]:
         "DEEPSEEK_BASE_URL": config.get("deepseek_base_url"),
         "DEEPSEEK_MODEL": config.get("deepseek_model"),
         "OPENAI_API_KEY": config.get("openai_api_key"),
-        "OPENAI_BASE_URL": config.get("openai_base_url"),
+        "OPENAI_BASE_URL": normalize_openai_base_url(config.get("openai_base_url")),
         "OPENAI_MODEL": config.get("openai_model"),
         "ANTHROPIC_API_KEY": config.get("anthropic_api_key"),
         "ANTHROPIC_BASE_URL": config.get("anthropic_base_url"),
@@ -379,7 +386,9 @@ def _write_onboarding_to_env(env_path):
         "DEEPSEEK_BASE_URL": _onboarding_data.get("deepseek_base_url", "https://api.deepseek.com"),
         "DEEPSEEK_MODEL": _onboarding_data.get("deepseek_model", "deepseek-v4-flash"),
         "OPENAI_API_KEY": _onboarding_data.get("openai_api_key", ""),
-        "OPENAI_BASE_URL": _onboarding_data.get("openai_base_url", "https://api.openai.com/v1"),
+        "OPENAI_BASE_URL": normalize_openai_base_url(
+            _onboarding_data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
+        ),
         "OPENAI_MODEL": _onboarding_data.get("openai_model", "gpt-4.1-mini"),
         "ANTHROPIC_API_KEY": _onboarding_data.get("anthropic_api_key", ""),
         "ANTHROPIC_BASE_URL": _onboarding_data.get("anthropic_base_url", "https://api.anthropic.com"),
@@ -854,7 +863,7 @@ _onboarding_data = {
     "key": "", "wxid": "", "db_path": "",
     "bot_display_name": "", "wechat_groups": "*", "wechat_backend": "wcdb",
     "ai_backend": "deepseek", "deepseek_api_key": "", "deepseek_model": "deepseek-v4-flash",
-    "openai_api_key": "", "openai_base_url": "https://api.openai.com/v1", "openai_model": "gpt-4.1-mini",
+    "openai_api_key": "", "openai_base_url": OPENAI_COMPATIBLE_BASE_URL, "openai_model": "gpt-4.1-mini",
     "anthropic_api_key": "", "summarize_model": "claude-haiku-4-5-20251001",
     "proactive_enabled": False,
     "sticky_mention_enabled": True,
@@ -1762,16 +1771,25 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     config.ai_backend = _normalize_ai_backend(data["ai_backend"])
                 if data.get("deepseek_api_key"):
                     config.deepseek_api_key = data["deepseek_api_key"]
+                if data.get("deepseek_base_url"):
+                    config.deepseek_base_url = normalize_openai_base_url(
+                        data["deepseek_base_url"],
+                        default="https://api.deepseek.com",
+                    )
                 if data.get("deepseek_model"):
                     config.deepseek_model = data["deepseek_model"]
                 if data.get("openai_api_key"):
                     config.openai_api_key = data["openai_api_key"]
                 if data.get("openai_base_url"):
-                    config.openai_base_url = data["openai_base_url"]
+                    config.openai_base_url = normalize_openai_base_url(
+                        data["openai_base_url"]
+                    )
                 if data.get("openai_model"):
                     config.openai_model = data["openai_model"]
                 if data.get("anthropic_api_key"):
                     config.anthropic_api_key = data["anthropic_api_key"]
+                if data.get("anthropic_base_url"):
+                    config.anthropic_base_url = data["anthropic_base_url"].strip()
                 if data.get("summarize_model"):
                     config.summarize_model = data["summarize_model"]
 
@@ -1970,7 +1988,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     _onboarding_data["deepseek_base_url"] = data.get("deepseek_base_url", "https://api.deepseek.com")
                     _onboarding_data["deepseek_model"] = data.get("deepseek_model", "deepseek-v4-flash")
                     _onboarding_data["openai_api_key"] = data.get("openai_api_key", "")
-                    _onboarding_data["openai_base_url"] = data.get("openai_base_url", "https://api.openai.com/v1")
+                    _onboarding_data["openai_base_url"] = normalize_openai_base_url(
+                        data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
+                    )
                     _onboarding_data["openai_model"] = data.get("openai_model", "gpt-4.1-mini")
                     _onboarding_data["anthropic_api_key"] = data.get("anthropic_api_key", "")
                     _onboarding_data["anthropic_base_url"] = data.get("anthropic_base_url", "https://api.anthropic.com")

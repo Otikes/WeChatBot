@@ -169,7 +169,7 @@ python desktop.py
 
 所有设置都在控制台里直接改，不需要手动编辑文件。保存后重启机器人即可生效。
 
-必须填的只有一项：在「系统配置 → AI 后端配置」里填入 API Key。你可以选 DeepSeek、Claude，或任意 OpenAI 兼容服务。
+在「系统配置 → AI 后端配置」选择服务商并填写模型配置。DeepSeek 和 Claude 需要 API Key；OpenAI 兼容模式可接 New API、One API、LiteLLM、OpenRouter、Ollama、LM Studio 等兼容 Chat Completions 的服务。本地无鉴权服务可以不填 Key，Base URL 可粘 `.../v1` 或完整的 `.../v1/chat/completions`，保存时会自动纠正。
 
 ---
 

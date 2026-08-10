@@ -92,8 +92,8 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `DEEPSEEK_API_KEY` | `str` | `""` | `src/config.py` | `src/summarize/deepseek_backend.py:DeepSeekSummarizer.__init__()` |
 | `DEEPSEEK_MODEL` | `str` | `"deepseek-v4-flash"` | `src/config.py` | `src/summarize/deepseek_backend.py`, `src/bot.py:_log_banner()` |
 | `DEEPSEEK_BASE_URL` | `str` | `"https://api.deepseek.com"` | `src/config.py` | `src/summarize/deepseek_backend.py` |
-| `OPENAI_API_KEY` | `str` | `""` | `src/config.py` | `src/summarize/openai_compatible_backend.py:OpenAICompatibleSummarizer.__init__()` |
-| `OPENAI_BASE_URL` | `str` | `"https://api.openai.com/v1"` | `src/config.py` | `src/summarize/openai_compatible_backend.py` |
+| `OPENAI_API_KEY` | `str` | `""` (本地兼容服务可空) | `src/config.py` | `src/utils/ai_compat.py:openai_api_key_for_client()`, `src/summarize/openai_compatible_backend.py` |
+| `OPENAI_BASE_URL` | `str` | `"https://api.openai.com/v1"` | `src/config.py` (经 `normalize_openai_base_url()` 规范化) | `src/summarize/openai_compatible_backend.py` |
 | `OPENAI_MODEL` | `str` | `"gpt-4.1-mini"` | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
@@ -298,6 +298,7 @@ todo_delete_keywords: list[str] = [
 | `_merge_chunk_summaries(chunk_summaries, requester_name)` | 合并分块(tool calling + fallback) | 摘要列表 | `SummaryResult` |
 | `consolidate_memory(existing_memory, new_messages)` | 记忆合并 | 现有记忆 + 新消息 | `str` |
 | `_create_chat_completion(...)` | 通用 Chat Completions 请求封装(模块内) | messages + options | `ChatCompletion` |
+| `_loads_json_object(text)` | 解析普通文本/Markdown fenced JSON 中的 JSON object | `text: str` | `dict \| None` |
 | `_parse_summary_from_response(response)` | 解析 tool call / JSON / 文本响应(模块级) | `response` | `SummaryResult` |
 
 #### `src/summarize/deepseek_backend.py` (DeepSeekSummarizer preset)
@@ -581,13 +582,21 @@ todo_delete_keywords: list[str] = [
 | `export_recent_chat(trigger_msg)` | 导出最近聊天(手动) | `trigger_msg: dict` | `FeishuExportResult` |
 | `maybe_auto_export(msg)` | 自动同步(静默) | `msg: dict` | `FeishuExportResult \| None` |
 
-### 2.32 `src/utils/logging_config.py`
+### 2.32 `src/utils/ai_compat.py`
+
+| 函数 | 描述 | 参数 | 返回值 |
+|---|---|---|---|
+| `normalize_ai_backend(raw)` | 将 openai/new-api/one-api/litellm/openrouter 等别名归一化为 `openai_compatible` | `raw: str` | `str` |
+| `normalize_openai_base_url(raw, default)` | 规范化 OpenAI 兼容 Base URL，自动补协议并剥离 `/chat/completions` / `/responses` 端点后缀 | `raw: str, default: str` | `str` |
+| `openai_api_key_for_client(raw)` | 为 OpenAI SDK 返回可用 key；空值转为本地兼容服务占位 key | `raw: str` | `str` |
+
+### 2.33 `src/utils/logging_config.py`
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `setup_logging(level, log_file)` | 配置日志系统 | `level: str, log_file: str \| None` | `None` |
 
-### 2.33 `src/web/server.py` (核心 API 模块)
+### 2.34 `src/web/server.py` (核心 API 模块)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -615,7 +624,7 @@ todo_delete_keywords: list[str] = [
 | `_run_step1_extraction()` | 后台执行密钥提取 | 无 | `None` |
 | `_write_onboarding_to_env(env_path)` | 写入引导数据到 .env | `env_path` | `None` |
 
-### 2.34 前端组件 (`ui/src/components/`)
+### 2.35 前端组件 (`ui/src/components/`)
 
 | 文件 | 组件名 | 描述 |
 |---|---|---|
@@ -641,6 +650,7 @@ desktop.py  (桌面入口)
     └── src/bot.py  (Bot 主控)
             │
             ├── src/config.py  (配置加载 .env → BotConfig)
+            ├── src/utils/ai_compat.py  (AI 后端别名 + OpenAI 兼容 URL 规范化)
             ├── src/db/  (数据库层)
             │     ├── schema.py  → initialize_db()
             │     └── store.py   → MessageStore
@@ -691,6 +701,7 @@ Bot.run()
   ├── MessageStore()                     [src/db/store.py]
   ├── TriggerDetector()                  [src/trigger/detector.py]
   ├── create_summarizer()                [src/summarize/__init__.py]
+  │     ├── normalize_ai_backend()        [src/utils/ai_compat.py]
   │     ├── ClaudeSummarizer()            [src/summarize/claude_backend.py]
   │     ├── OpenAICompatibleSummarizer()  [src/summarize/openai_compatible_backend.py]
   │     └── DeepSeekSummarizer()          [src/summarize/deepseek_backend.py]
@@ -927,6 +938,7 @@ WcdbBackend.start(callback)
 | `base.py` | `src/summarize/base.py` | 抽象基类 (chat, proactive_chat, summarize, format) |
 | `claude_backend.py` | `src/summarize/claude_backend.py` | Claude API (Pydantic parse) |
 | `openai_compatible_backend.py` | `src/summarize/openai_compatible_backend.py` | 通用 OpenAI 兼容 API (Chat Completions + tool fallback) |
+| `ai_compat.py` | `src/utils/ai_compat.py` | OpenAI 兼容别名、Base URL 规范化、空 Key 兼容 |
 | `deepseek_backend.py` | `src/summarize/deepseek_backend.py` | DeepSeek 预设 (继承通用后端) |
 | `prompts.py` | `src/summarize/prompts.py` | Prompt 模板 (XML格式, Map-Reduce, 记忆合并) |
 | `models.py` | `src/summarize/models.py` | Pydantic 数据模型 |
@@ -991,8 +1003,11 @@ MessageRouter.handle(msg)
 #### OpenAI 兼容后端特有
 
 - 通过 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 接入任意兼容 Chat Completions 的服务
+- `AI_BACKEND` 支持 `openai`, `new-api`, `one-api`, `litellm`, `openrouter` 等别名，统一归一化为 `openai_compatible`
+- `OPENAI_BASE_URL` 会自动补全协议，并将误填的完整 `/chat/completions` 或 `/responses` endpoint 修正为 SDK base URL
+- `OPENAI_API_KEY` 允许为空；`openai_api_key_for_client()` 会用本地兼容服务占位 key 调用 OpenAI SDK
 - 优先使用 OpenAI-compatible tool calling (`STORE_SUMMARY_TOOL`) 进行结构化输出
-- 当服务商拒绝 tool calling 时自动重试普通 Chat Completions，并把 JSON / 文本包装为 `SummaryResult`
+- 当服务商拒绝 tool calling 时自动重试普通 Chat Completions，并把 tool call / JSON / fenced JSON / 文本包装为 `SummaryResult`
 - 重试异常: `RateLimitError`, `APIConnectionError`, `APIStatusError`
 
 #### DeepSeek 预设特有
@@ -1534,7 +1549,7 @@ MacHybridBackend
 
 ```ini
 # === AI 后端 ===
-AI_BACKEND=deepseek                           # "deepseek" / "claude" / "openai_compatible"
+AI_BACKEND=deepseek                           # "deepseek" / "claude" / "openai_compatible"；兼容 new-api/openrouter/litellm 等别名
 
 # === DeepSeek ===
 DEEPSEEK_API_KEY=sk-xxx                        # DeepSeek API 密钥
@@ -1542,8 +1557,8 @@ DEEPSEEK_MODEL=deepseek-v4-flash               # 模型 ID
 DEEPSEEK_BASE_URL=https://api.deepseek.com     # API 地址
 
 # === OpenAI-compatible / New API / 自定义转发 ===
-OPENAI_API_KEY=sk-xxx                          # OpenAI 兼容 API 密钥
-OPENAI_BASE_URL=https://api.openai.com/v1      # API 地址(通常带 /v1)
+OPENAI_API_KEY=sk-xxx                          # OpenAI 兼容 API 密钥；本地无鉴权服务可空
+OPENAI_BASE_URL=https://api.openai.com/v1      # API 地址；可填 .../v1 或完整 .../v1/chat/completions
 OPENAI_MODEL=gpt-4.1-mini                      # 模型 ID
 
 # === Claude (Anthropic) ===

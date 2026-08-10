@@ -9,6 +9,8 @@ Usage:
 
 import logging
 
+from src.utils.ai_compat import normalize_ai_backend
+
 from .base import AbstractSummarizer
 from .claude_backend import ClaudeSummarizer
 from .deepseek_backend import DeepSeekSummarizer
@@ -28,18 +30,6 @@ __all__ = [
 ]
 
 
-def _normalize_backend(value: str) -> str:
-    backend = (value or "").strip().lower().replace("-", "_")
-    aliases = {
-        "anthropic": "claude",
-        "openai": "openai_compatible",
-        "openai_compat": "openai_compatible",
-        "compatible": "openai_compatible",
-        "custom": "openai_compatible",
-    }
-    return aliases.get(backend, backend)
-
-
 def create_summarizer(config) -> AbstractSummarizer:
     """Create the appropriate summarizer based on config.ai_backend.
 
@@ -52,7 +42,7 @@ def create_summarizer(config) -> AbstractSummarizer:
     Raises:
         ValueError: If the configured backend is unknown.
     """
-    backend = _normalize_backend(config.ai_backend)
+    backend = normalize_ai_backend(config.ai_backend)
 
     if backend == "deepseek":
         logger.info("Creating DeepSeekSummarizer (model=%s)", config.deepseek_model)

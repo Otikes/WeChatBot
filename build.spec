@@ -77,7 +77,7 @@ a = Analysis(
         'src.router', 'src.welcome',
         'src.todo', 'src.todo.store', 'src.todo.handler',
         'src.nickname', 'src.admin', 'src.fun',
-        'src.utils', 'src.utils.logging_config',
+        'src.utils', 'src.utils.ai_compat', 'src.utils.logging_config',
         'dotenv', 'anthropic', 'openai', 'pydantic',
         'uiautomation',
         'webview', 'webview.platforms', 'webview.platforms.edgechromium',

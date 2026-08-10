@@ -60,10 +60,10 @@ function AiSection({ form, update }) {
         </>
       ) : isOpenAI ? (
         <>
-          <Field label="OpenAI 兼容 API Key" hint="填你的服务商密钥；OpenAI / New API / 代理服务都可以" error={!form.openai_api_key ? '请填写 API Key' : null}>
-            <Input type="password" value={form.openai_api_key} onChange={v => update('openai_api_key', v)} placeholder="sk-xxxxxxxxxxxxxxxx" />
+          <Field label="OpenAI 兼容 API Key" hint="云端服务请填写；Ollama、LM Studio 等本地兼容服务可留空">
+            <Input type="password" value={form.openai_api_key} onChange={v => update('openai_api_key', v)} placeholder="sk-xxxxxxxxxxxxxxxx（本地服务可留空）" />
           </Field>
-          <Field label="API Base URL" hint="兼容 OpenAI 的请求地址；多数服务需要带 /v1">
+          <Field label="API Base URL" hint="可填 base URL，也可直接粘 /v1/chat/completions，保存时会自动纠正">
             <Input value={form.openai_base_url} onChange={v => update('openai_base_url', v)} placeholder="https://api.openai.com/v1" />
           </Field>
           <Field label="模型名称" hint="填写服务商实际提供的模型 ID，例如 gpt-4.1-mini / deepseek-chat / qwen-plus">
@@ -1674,20 +1674,22 @@ function SandboxSection({ form }) {
       const res = await fetch('http://127.0.0.1:7327/api/sandbox/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message,
-            sender_name: senderName,
-            group_name: groupName,
-            group_memory: groupMemory,
-            ai_backend: form.ai_backend,
-            deepseek_api_key: form.deepseek_api_key,
-            deepseek_model: form.deepseek_model,
-            openai_api_key: form.openai_api_key,
-            openai_base_url: form.openai_base_url,
-            openai_model: form.openai_model,
-            anthropic_api_key: form.anthropic_api_key,
-            summarize_model: form.summarize_model,
-          })
+        body: JSON.stringify({
+          message,
+          sender_name: senderName,
+          group_name: groupName,
+          group_memory: groupMemory,
+          ai_backend: form.ai_backend,
+          deepseek_api_key: form.deepseek_api_key,
+          deepseek_base_url: form.deepseek_base_url,
+          deepseek_model: form.deepseek_model,
+          openai_api_key: form.openai_api_key,
+          openai_base_url: form.openai_base_url,
+          openai_model: form.openai_model,
+          anthropic_api_key: form.anthropic_api_key,
+          anthropic_base_url: form.anthropic_base_url,
+          summarize_model: form.summarize_model,
+        })
       })
       const data = await res.json()
       setLatency(Date.now() - start)

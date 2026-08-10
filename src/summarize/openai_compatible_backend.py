@@ -17,6 +17,12 @@ from openai import (
     RateLimitError,
 )
 
+from src.utils.ai_compat import (
+    OPENAI_COMPATIBLE_BASE_URL,
+    normalize_openai_base_url,
+    openai_api_key_for_client,
+)
+
 from .base import AbstractSummarizer
 from .models import SummaryResult
 from .prompts import (
@@ -30,9 +36,6 @@ from .prompts import (
 )
 
 logger = logging.getLogger(__name__)
-
-OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
-
 
 # Tool schema for structured output -- matches SummaryResult Pydantic model.
 STORE_SUMMARY_TOOL: dict[str, Any] = {
@@ -75,6 +78,14 @@ STORE_SUMMARY_TOOL: dict[str, Any] = {
 
 def _summary_from_dict(data: dict[str, Any]) -> SummaryResult:
     """Build SummaryResult from a provider-returned dict."""
+    raw_topics = data.get("topics", [])
+    if isinstance(raw_topics, str):
+        topics = [raw_topics]
+    elif isinstance(raw_topics, list):
+        topics = [str(topic) for topic in raw_topics if topic]
+    else:
+        topics = []
+
     participants = []
     for p in data.get("participants", []):
         if isinstance(p, dict):
@@ -83,10 +94,39 @@ def _summary_from_dict(data: dict[str, Any]) -> SummaryResult:
             participants.append({"name": p, "contributions": ""})
 
     return SummaryResult(
-        summary_text=data.get("summary_text", ""),
-        topics=data.get("topics", []),
+        summary_text=str(data.get("summary_text", "")),
+        topics=topics,
         participants=participants,
     )
+
+
+def _loads_json_object(text: str) -> dict[str, Any] | None:
+    """Parse a JSON object from plain text or a fenced code block."""
+    content = (text or "").strip()
+    if not content:
+        return None
+
+    if content.startswith("```"):
+        lines = content.splitlines()
+        if lines:
+            lines = lines[1:]
+        if lines and lines[-1].strip().startswith("```"):
+            lines = lines[:-1]
+        content = "\n".join(lines).strip()
+
+    try:
+        data = json.loads(content)
+        return data if isinstance(data, dict) else None
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            data = json.loads(content[start:end + 1])
+            return data if isinstance(data, dict) else None
+        except json.JSONDecodeError:
+            return None
 
 
 def _parse_summary_from_response(response) -> SummaryResult:
@@ -112,12 +152,9 @@ def _parse_summary_from_response(response) -> SummaryResult:
 
     content = getattr(msg, "content", "") or ""
     if isinstance(content, str) and content.strip():
-        try:
-            data = json.loads(content)
-            if isinstance(data, dict) and "summary_text" in data:
-                return _summary_from_dict(data)
-        except (json.JSONDecodeError, Exception):
-            pass
+        data = _loads_json_object(content)
+        if data and "summary_text" in data:
+            return _summary_from_dict(data)
 
         logger.info("OpenAI-compatible backend returned plain text, wrapping as summary")
         return SummaryResult(
@@ -153,9 +190,13 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                  chunk_size: int = 400,
                  max_retries: int = 3,
                  extra_body: dict[str, Any] | None = None):
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        normalized_base_url = normalize_openai_base_url(base_url)
+        self.client = OpenAI(
+            api_key=openai_api_key_for_client(api_key),
+            base_url=normalized_base_url,
+        )
         self.model = model
-        self.base_url = base_url
+        self.base_url = normalized_base_url
         self.chunk_size = chunk_size
         self.max_retries = max_retries
         self._extra_body = extra_body or {}

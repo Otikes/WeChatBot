@@ -401,6 +401,45 @@ class LoadConfigTests(unittest.TestCase):
             config = load_config()
             self.assertEqual(config.ai_backend, "openai_compatible")
 
+    def test_load_config_normalizes_openai_gateway_aliases(self):
+        """Common gateway aliases are accepted as openai_compatible."""
+        from src.config import load_config
+
+        for alias in ("new-api", "newapi", "one-api", "litellm", "openrouter"):
+            with self.subTest(alias=alias):
+                with patch.dict(os.environ, {
+                    "AI_BACKEND": alias,
+                    "OPENAI_MODEL": "qwen-plus",
+                }, clear=True):
+                    config = load_config()
+                    self.assertEqual(config.ai_backend, "openai_compatible")
+
+    def test_load_config_allows_empty_openai_key_for_local_services(self):
+        """OpenAI-compatible local services can be configured without auth."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "openai_compatible",
+            "OPENAI_API_KEY": "",
+            "OPENAI_BASE_URL": "localhost:11434/v1/chat/completions",
+            "OPENAI_MODEL": "qwen2.5:7b",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(config.openai_api_key, "")
+            self.assertEqual(config.openai_base_url, "http://localhost:11434/v1")
+
+    def test_load_config_normalizes_openai_endpoint_url(self):
+        """Full Chat Completions URLs are trimmed to SDK base URLs."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "openai_compatible",
+            "OPENAI_BASE_URL": "relay.example.com/v1/chat/completions",
+            "OPENAI_MODEL": "qwen-plus",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(config.openai_base_url, "https://relay.example.com/v1")
+
     def test_load_config_raises_when_api_key_missing_claude(self):
         """load_config() with default (claude) backend and no API key → RuntimeError."""
         from src.config import load_config
@@ -420,17 +459,6 @@ class LoadConfigTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 load_config()
             self.assertIn("DEEPSEEK_API_KEY", str(ctx.exception))
-
-    def test_load_config_raises_when_api_key_missing_openai_compatible(self):
-        """load_config() with openai_compatible backend and no API key → RuntimeError."""
-        from src.config import load_config
-
-        with patch.dict(os.environ, {
-            "AI_BACKEND": "openai_compatible",
-        }, clear=True):
-            with self.assertRaises(RuntimeError) as ctx:
-                load_config()
-            self.assertIn("OPENAI_API_KEY", str(ctx.exception))
 
     def test_load_config_parses_trigger_keywords(self):
         """Custom TRIGGER_KEYWORDS should be parsed from comma-separated string."""

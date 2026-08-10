@@ -1286,8 +1286,8 @@ class ApiConfigEndpointTests(unittest.TestCase):
         try:
             save_body = json.dumps({
                 "ai_backend": "openai_compatible",
-                "openai_api_key": "sk-openai-key",
-                "openai_base_url": "https://relay.example.com/v1",
+                "openai_api_key": "",
+                "openai_base_url": "relay.example.com/v1/chat/completions",
                 "openai_model": "qwen-plus",
             }).encode()
             with patch("src.web.server._find_or_create_env", return_value=tmp_env):
@@ -1303,7 +1303,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
 
             saved = tmp_env.read_text(encoding="utf-8")
             self.assertIn("AI_BACKEND=openai_compatible", saved)
-            self.assertIn("OPENAI_API_KEY=sk-openai-key", saved)
+            self.assertIn("OPENAI_API_KEY=", saved)
             self.assertIn("OPENAI_BASE_URL=https://relay.example.com/v1", saved)
             self.assertIn("OPENAI_MODEL=qwen-plus", saved)
 

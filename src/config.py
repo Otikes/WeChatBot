@@ -9,6 +9,12 @@ from urllib.parse import unquote
 
 from dotenv import load_dotenv
 
+from src.utils.ai_compat import (
+    OPENAI_COMPATIBLE_BASE_URL,
+    normalize_ai_backend as _normalize_ai_backend,
+    normalize_openai_base_url,
+)
+
 
 def _decode_wechat_groups(raw: str) -> str:
     """Decode URL-encoded group names from .env WECHAT_GROUPS value.
@@ -64,18 +70,6 @@ def _sanitize_display_name(name: str) -> str:
         return "群聊小助手"
 
     return name
-
-
-def _normalize_ai_backend(raw: str) -> str:
-    backend = (raw or "").strip().lower().replace("-", "_")
-    aliases = {
-        "anthropic": "claude",
-        "openai": "openai_compatible",
-        "openai_compat": "openai_compatible",
-        "compatible": "openai_compatible",
-        "custom": "openai_compatible",
-    }
-    return aliases.get(backend, backend)
 
 
 def _resolve_project_root() -> Path:
@@ -164,7 +158,7 @@ class BotConfig:
 
     # === OpenAI-compatible ===
     openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
+    openai_base_url: str = OPENAI_COMPATIBLE_BASE_URL
     openai_model: str = "gpt-4.1-mini"
 
     # === WeChat Backend ===
@@ -424,12 +418,7 @@ def load_config() -> BotConfig:
         if not api_key:
             msg = "DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
             raise RuntimeError(msg)
-    elif ai_backend == "openai_compatible":
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-        if not api_key:
-            msg = "OPENAI_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
-            raise RuntimeError(msg)
-    else:
+    elif ai_backend == "claude":
         api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
             msg = "ANTHROPIC_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
@@ -473,7 +462,9 @@ def load_config() -> BotConfig:
         "deepseek_base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
         # deepseek_model handled conditionally below (dataclass default)
         "openai_api_key": os.getenv("OPENAI_API_KEY", "").strip(),
-        "openai_base_url": os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").strip(),
+        "openai_base_url": normalize_openai_base_url(
+            os.getenv("OPENAI_BASE_URL", OPENAI_COMPATIBLE_BASE_URL)
+        ),
         "openai_model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip(),
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_groups": _decode_wechat_groups(os.getenv("WECHAT_GROUPS", "*")),

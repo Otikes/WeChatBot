@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -264,6 +265,43 @@ class TestSummarizerBaseUrl:
         assert captured["model"] == "qwen-plus"
         assert captured["base_url"] == "https://relay.example.com/v1"
         assert captured["chunk_size"] == 42
+
+
+class TestOpenAICompatibleBackend:
+    """Verify compatibility helpers used by the generic backend."""
+
+    def test_constructor_normalizes_base_url_and_allows_empty_key(self):
+        from src.summarize.openai_compatible_backend import OpenAICompatibleSummarizer
+
+        summarizer = OpenAICompatibleSummarizer(
+            api_key="",
+            base_url="localhost:11434/v1/chat/completions",
+            model="qwen2.5:7b",
+        )
+
+        assert summarizer.base_url == "http://localhost:11434/v1"
+
+    def test_parse_fenced_json_summary_response(self):
+        from src.summarize.openai_compatible_backend import _parse_summary_from_response
+
+        response = SimpleNamespace(choices=[
+            SimpleNamespace(message=SimpleNamespace(
+                tool_calls=None,
+                content=(
+                    "```json\n"
+                    "{\"summary_text\":\"聊了部署\","
+                    "\"topics\":\"上线\","
+                    "\"participants\":[\"小王\"]}"
+                    "\n```"
+                ),
+            ))
+        ])
+
+        result = _parse_summary_from_response(response)
+
+        assert result.summary_text == "聊了部署"
+        assert result.topics == ["上线"]
+        assert result.participants[0].name == "小王"
 
 
 class TestPostAllowlist:

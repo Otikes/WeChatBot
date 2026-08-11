@@ -4,7 +4,92 @@ Idempotent — safe to call on every startup.
 """
 
 import sqlite3
+import threading
 from pathlib import Path
+
+
+class _CursorProxy:
+    """Materialized cursor — safe to use after the DB lock is released."""
+
+    def __init__(self, cursor):
+        self._rows = cursor.fetchall()
+        self._index = 0
+        self.rowcount = cursor.rowcount
+        self.lastrowid = cursor.lastrowid
+
+    def fetchone(self):
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchmany(self, size=1):
+        rows = self._rows[self._index:self._index + size]
+        self._index += len(rows)
+        return rows
+
+    def fetchall(self):
+        rows = self._rows[self._index:]
+        self._index = len(self._rows)
+        return rows
+
+    def __iter__(self):
+        return iter(self._rows)
+
+
+class ThreadSafeConnection:
+    """Proxy serializing all sqlite3 calls behind a single RLock.
+
+    webot shares one connection across poll workers, the web server and
+    the health monitor; sqlite3 connections are not thread-reentrant,
+    which caused sporadic InterfaceError / UNIQUE-constraint failures
+    under concurrent inserts (silently dropping messages).  Results are
+    materialized so cursors remain usable after the lock is released.
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._lock = threading.RLock()
+
+    def execute(self, sql, params=()):
+        with self._lock:
+            return _CursorProxy(self._conn.execute(sql, params))
+
+    def executemany(self, sql, seq_of_params):
+        with self._lock:
+            return _CursorProxy(self._conn.executemany(sql, seq_of_params))
+
+    def executescript(self, script):
+        with self._lock:
+            self._conn.executescript(script)
+            return self
+
+    def commit(self):
+        with self._lock:
+            self._conn.commit()
+
+    def rollback(self):
+        with self._lock:
+            self._conn.rollback()
+
+    def close(self):
+        with self._lock:
+            self._conn.close()
+
+    def __enter__(self):
+        self._lock.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self._lock.release()
+        return False
 
 
 SCHEMA_SQL = """
@@ -111,7 +196,8 @@ def initialize_db(db_path: str) -> sqlite3.Connection:
         db_path: Path to the SQLite database file.
 
     Returns:
-        A sqlite3.Connection with WAL mode enabled and row_factory set.
+        A ThreadSafeConnection proxy wrapping a sqlite3.Connection with
+        WAL mode enabled and row_factory set.
     """
     # Ensure the parent directory exists
     db_file = Path(db_path)
@@ -121,4 +207,4 @@ def initialize_db(db_path: str) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA_SQL)
     conn.commit()
-    return conn
+    return ThreadSafeConnection(conn)

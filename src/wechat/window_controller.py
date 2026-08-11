@@ -241,10 +241,13 @@ class WeChatWindowController:
             )
             return None
 
+        # Size-only usability: a hidden (tray-minimized) or iconic main
+        # window must still be selectable — activate() restores/shows it.
+        # Requiring visibility here previously made sends fail whenever
+        # the user had WeChat minimized while looking at the dashboard.
         usable_candidates = [
             c for c in wechat_candidates
-            if c.visible
-            and (c.rect[2] - c.rect[0]) >= MIN_WINDOW_WIDTH
+            if (c.rect[2] - c.rect[0]) >= MIN_WINDOW_WIDTH
             and (c.rect[3] - c.rect[1]) >= MIN_WINDOW_HEIGHT
         ]
         if not usable_candidates:

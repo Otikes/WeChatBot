@@ -300,8 +300,11 @@ class MessageRouter:
             # ── Keyword trigger without @mention ─────────────────
             # A bare "总结一下" (no @) must still summarize — the detector's
             # keyword condition is independent of @mentions.
+            # Staleness guard: on startup the dedup cache is cold and old
+            # messages are replayed — don't summarize history.
             reply = None
-            if self._detector.is_trigger(
+            msg_age_sec = int(time.time()) - msg.get("timestamp", 0)
+            if msg_age_sec <= AT_MENTION_MAX_AGE_SEC and self._detector.is_trigger(
                 content=msg["content"],
                 is_at_mentioned=False,
                 sender_name=msg["sender_name"],

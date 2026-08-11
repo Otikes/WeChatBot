@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -69,6 +70,10 @@ class WcdbBackend(AbstractWeChatBackend):
         # Voice recognition pipeline (lazy-init when voice_asr_enabled)
         self._voice: Optional[object] = None
         self._voice_config = config
+        # Recent own sends: (content, timestamp).  Content-based self-skip so
+        # the bot never reacts to its own replies, even when the configured
+        # display name doesn't match the WCDB-resolved sender name.
+        self._recent_sends: deque = deque(maxlen=32)
 
     # ── Public API ─────────────────────────────────────────────────
 
@@ -615,7 +620,25 @@ class WcdbBackend(AbstractWeChatBackend):
             if not self._running:
                 break
 
+            # Root-cause fix for the per-poll reprocessing loop: cheap
+            # raw-field dedup BEFORE standardize.  Previously _standardize
+            # (DLL nickname resolution, join detection, logging) ran for
+            # all 50 fetched messages on every poll cycle, so old messages
+            # were re-processed — and re-logged — once per second forever.
+            raw_key = (
+                str(msg.get("server_id", ""))
+                or str(msg.get("local_id", ""))
+                or f"{msg.get('sender_username', msg.get('senderUsername', msg.get('sender', '')))}|"
+                   f"{msg.get('message_content', msg.get('content', ''))}|"
+                   f"{msg.get('create_time', msg.get('createTime', msg.get('timestamp', '')))}"
+            )
+            if raw_key in self._known_ids:
+                continue
+
             standardized = self._standardize(msg, group_name, talker)
+            # Mark as seen even when filtered out (None), so it is never
+            # standardized again on later polls.
+            self._known_ids.add(raw_key)
             if standardized is None:
                 continue
 
@@ -623,6 +646,15 @@ class WcdbBackend(AbstractWeChatBackend):
             if msg_id in self._known_ids:
                 continue
             self._known_ids.add(msg_id)
+
+            # Content-based self-skip: never react to our own replies, even
+            # when the name-based check below misses them (configured
+            # BOT_DISPLAY_NAME != WCDB-resolved sender name).
+            now = time.time()
+            while self._recent_sends and now - self._recent_sends[0][1] > 300:
+                self._recent_sends.popleft()
+            if any(c == standardized["content"] for c, _ in self._recent_sends):
+                continue
 
             if self._bot_name and self._bot_name in standardized["sender_name"]:
                 continue
@@ -814,12 +846,20 @@ class WcdbBackend(AbstractWeChatBackend):
                 is_at = True
                 bot_mention_text = f"@{bot}"
             else:
-                for name in mentioned_names:
+                candidates = list(mentioned_names)
+                # Newer WeChat stores mentions as literal "@displayname"
+                # text (no @wxid_ token) — scan those too.
+                candidates += re.findall(
+                    r"@([^\s@,，。！？!?：:；;]+)", resolved_content,
+                )
+                for name in candidates:
                     alias = name.strip()
                     if alias and (alias == bot or alias in bot or bot in alias):
                         is_at = True
                         bot_mention_text = f"@{name}"
-                        logger.info(
+                        # DEBUG: _standardize runs every poll for old
+                        # messages; INFO here would flood the log.
+                        logger.debug(
                             "Fuzzy @mention match: mention='%s' config='%s'",
                             alias, bot,
                         )
@@ -868,4 +908,7 @@ class WcdbBackend(AbstractWeChatBackend):
         No confirmation polling — the window controller already retries
         on failure, and polling WCDB adds 3s of latency for marginal gain.
         """
-        return self._window.send_to_chat(group_name, content)
+        success = self._window.send_to_chat(group_name, content)
+        if success:
+            self._recent_sends.append((content, time.time()))
+        return success

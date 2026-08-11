@@ -348,10 +348,10 @@ todo_delete_keywords: list[str] = [
 | `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
 | `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期 | `callback: MessageCallback` | `None` |
-| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；去重后记录新消息/join 事件日志再提交线程池 | `group_name, talker, callback` | `None` |
+| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；去重、自发内容排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback` | `None` |
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池) | `group_name, talker, standardized, callback` | `None` |
-| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；@mention 精确+模糊匹配，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
-| `_send_and_confirm(group_name, talker, content)` | 通过键盘发送并确认 | `group_name, talker, content` | `bool` |
+| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
+| `_send_and_confirm(group_name, talker, content)` | 通过键盘发送；成功后写入 `_recent_sends` 供自发自排除 | `group_name, talker, content` | `bool` |
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
 | `_try_voice(msg)` | 尝试语音识别 | `msg: dict` | `str \| None` |
 
@@ -390,7 +390,7 @@ todo_delete_keywords: list[str] = [
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `__init__()` | 初始化窗口控制器 | 无 | `None` |
-| `find_hwnd(force=False)` | 查找微信窗口 HWND | `force: bool` | `int \| None` |
+| `find_hwnd(force=False)` | 查找微信窗口 HWND；可用性仅按尺寸过滤(隐藏/最小化的主窗口也可选，由 `activate()` 恢复) | `force: bool` | `int \| None` |
 | `_validate_hwnd(hwnd)` | 验证 HWND 有效性 | `hwnd: int` | `bool` |
 | `invalidate_cache()` | 清除 HWND 缓存 | 无 | `None` |
 | `activate(hwnd)` | 激活微信窗口(4层策略) | `hwnd: int` | `bool` |
@@ -477,7 +477,19 @@ todo_delete_keywords: list[str] = [
 | `__init__(store, summarizer)` | 初始化记忆合并器 | `store: MessageStore, summarizer: AbstractSummarizer` | `None` |
 | `check_and_consolidate(chat_id)` | 检查并执行合并 | `chat_id: str` | `bool` |
 
-### 2.19 `src/db/store.py` (MessageStore)
+### 2.19 `src/db/schema.py` (initialize_db / ThreadSafeConnection)
+
+| 函数/类 | 描述 | 参数 | 返回值 |
+|---|---|---|---|
+| `initialize_db(db_path)` | 建表并返回线程安全连接代理 | `db_path: str` | `ThreadSafeConnection` |
+| `ThreadSafeConnection.execute(sql, params)` | 加锁执行并物化结果游标 | `sql, params` | `_CursorProxy` |
+| `ThreadSafeConnection.__enter__/__exit__` | 事务上下文(commit/rollback)，与 execute 可重入 | — | — |
+
+> 主连接在轮询线程池、Web 服务、健康监控之间共享；sqlite3 连接跨线程
+> 并发使用会偶发 InterfaceError/UNIQUE 错误导致丢消息，故用单一 RLock
+> 串行化所有调用。TodoStore 自行开短连接，不受影响。
+
+### 2.20 `src/db/store.py` (MessageStore)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -494,7 +506,7 @@ todo_delete_keywords: list[str] = [
 | `get_new_message_count(chat_id, since_message_id)` | 统计新消息数 | `chat_id: str, since_message_id: str \| None` | `int` |
 | `get_messages_since_id(chat_id, since_message_id, limit)` | 获取某ID之后的消息 | `chat_id, since_message_id, limit` | `list[dict]` |
 
-### 2.20 `src/todo/store.py` (TodoStore)
+### 2.21 `src/todo/store.py` (TodoStore)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -513,7 +525,7 @@ todo_delete_keywords: list[str] = [
 | `get_counts(chat_id)` | 获取各状态计数 | `chat_id: str` | `dict[str, int]` |
 | `get_active_groups()` | 获取有活跃待办的群 | 无 | `list[str]` |
 
-### 2.21 `src/todo/handler.py` (TodoHandler)
+### 2.22 `src/todo/handler.py` (TodoHandler)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -523,7 +535,7 @@ todo_delete_keywords: list[str] = [
 | `_match_prefix(text, keywords)` | 前缀匹配(静态, 长关键词优先) | `text: str, keywords: list[str]` | `tuple[Optional[str], str]` |
 | `format_todo_reply(result, sender_name)` | 格式化待办回复(模块级) | `result: TodoResult, sender_name: str` | `str` |
 
-### 2.22 `src/nickname.py` (NicknameService)
+### 2.23 `src/nickname.py` (NicknameService)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -535,7 +547,7 @@ todo_delete_keywords: list[str] = [
 | `remove(wxid)` | 删除昵称映射 | `wxid: str` | `None` |
 | `merge_manual(overrides)` | 批量合并手动覆盖 | `overrides: dict[str, str]` | `None` |
 
-### 2.23 `src/welcome.py` (WelcomeManager)
+### 2.24 `src/welcome.py` (WelcomeManager)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -545,7 +557,7 @@ todo_delete_keywords: list[str] = [
 | `WelcomeManager.resolve_message(chat_id, new_member_id)` | 解析欢迎消息 | `chat_id: str, new_member_id: str` | `str \| None` |
 | `get_welcome_manager()` | 获取模块单例(模块级) | 无 | `WelcomeManager` |
 
-### 2.24 `src/admin.py` (AdminCommandHandler)
+### 2.25 `src/admin.py` (AdminCommandHandler)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -554,7 +566,7 @@ todo_delete_keywords: list[str] = [
 | `_cmd_rename(content, requester_name)` | 处理"改名"命令 | `content: str, requester_name: str` | `str \| None` |
 | `_cmd_delete_nickname(content, requester_name)` | 处理"删除昵称"命令 | `content: str, requester_name: str` | `str \| None` |
 
-### 2.25 `src/fun.py`
+### 2.26 `src/fun.py`
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -563,7 +575,7 @@ todo_delete_keywords: list[str] = [
 | `reset_lots_cache()` | 清除抽签缓存 | 无 | `None` |
 | `draw_lots(requester_name)` | 抽签 | `requester_name: str` | `str` |
 
-### 2.26 `src/voice/pipeline.py` (VoicePipeline)
+### 2.27 `src/voice/pipeline.py` (VoicePipeline)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -571,7 +583,7 @@ todo_delete_keywords: list[str] = [
 | `VoicePipeline.process(msg)` | 转写语音消息 | `msg: dict` | `str \| None` |
 | `VoicePipeline.flush()` | 持久化缓存 | 无 | `None` |
 
-### 2.27 `src/voice/asr.py`
+### 2.28 `src/voice/asr.py`
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -579,20 +591,20 @@ todo_delete_keywords: list[str] = [
 | `OpenAiWhisperASR.transcribe(audio_path, language)` | OpenAI Whisper API 转写 | `audio_path: Path, language: str` | `TranscribeResult` |
 | `create_asr(config)` | ASR 工厂函数 | `config` | `AbstractASR` |
 
-### 2.28 `src/voice/decoder.py` (SilkDecoder)
+### 2.29 `src/voice/decoder.py` (SilkDecoder)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `SilkDecoder.decode(audio_path)` | 解码 SILK/AMR → WAV | `audio_path: Path` | `Path` |
 
-### 2.29 `src/voice/file_locator.py` (VoiceFileLocator)
+### 2.30 `src/voice/file_locator.py` (VoiceFileLocator)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `VoiceFileLocator.__init__(wechat_data_dir)` | 初始化文件定位器 | `wechat_data_dir: str` | `None` |
 | `VoiceFileLocator.find_voice_file(msg)` | 查找语音文件 | `msg: dict` | `Path \| None` |
 
-### 2.30 `src/integrations/feishu/client.py` (FeishuClient)
+### 2.31 `src/integrations/feishu/client.py` (FeishuClient)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -606,7 +618,7 @@ todo_delete_keywords: list[str] = [
 | `create_docx_blocks(document_id, block_id, children)` | 文档追加内容 | `document_id, block_id, children` | `dict` |
 | `create_docx_with_markdown(title, markdown, folder_token)` | 创建文档(含markdown内容) | `title, markdown, folder_token` | `dict` |
 
-### 2.31 `src/integrations/feishu/exporter.py` (FeishuExportService)
+### 2.32 `src/integrations/feishu/exporter.py` (FeishuExportService)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -615,7 +627,7 @@ todo_delete_keywords: list[str] = [
 | `export_recent_chat(trigger_msg)` | 导出最近聊天(手动) | `trigger_msg: dict` | `FeishuExportResult` |
 | `maybe_auto_export(msg)` | 自动同步(静默) | `msg: dict` | `FeishuExportResult \| None` |
 
-### 2.32 `src/utils/ai_compat.py`
+### 2.33 `src/utils/ai_compat.py`
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -623,13 +635,13 @@ todo_delete_keywords: list[str] = [
 | `normalize_openai_base_url(raw, default)` | 规范化 Chat Completions 兼容 Base URL，自动补协议并剥离 `/chat/completions` / `/responses` / `/models` 端点后缀 | `raw: str, default: str` | `str` |
 | `openai_api_key_for_client(raw)` | 为 OpenAI SDK 返回可用 key；空值转为本地兼容服务占位 key | `raw: str` | `str` |
 
-### 2.33 `src/utils/logging_config.py`
+### 2.34 `src/utils/logging_config.py`
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `setup_logging(level, log_file)` | 配置日志系统 | `level: str, log_file: str \| None` | `None` |
 
-### 2.34 `src/web/server.py` (核心 API 模块)
+### 2.35 `src/web/server.py` (核心 API 模块)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
@@ -683,7 +695,7 @@ todo_delete_keywords: list[str] = [
 | `_run_step1_extraction()` | 后台执行密钥提取 | 无 | `None` |
 | `_write_onboarding_to_env(env_path)` | 写入引导数据到 .env | `env_path` | `None` |
 
-### 2.35 前端组件 (`ui/src/components/`)
+### 2.36 前端组件 (`ui/src/components/`)
 
 | 文件 | 组件名 | 描述 |
 |---|---|---|
@@ -899,7 +911,7 @@ AbstractSummarizer (base.py)
          └─→ [非 @ 路径]
                 │
                 ├─ 关键词触发 → TriggerDetector.is_trigger(is_at_mentioned=False)
-                │     └─ 命中 (如裸发"总结一下") → _handle_summary()
+                │     └─ 命中 (如裸发"总结一下"，≤300s 新消息) → _handle_summary()
                 │
                 └─ [未命中] ProactiveGate.should_speak() — 4层门控
                       ├─ RateTracker.record() + rate()
@@ -968,8 +980,10 @@ WcdbBackend.start(callback)
         │     └── for each group:
         │           _poll_group(group_name, talker, callback)
         │             ├── get_messages(talker, limit=50)
+        │             ├── 原始字段轻量去重 (raw_key) → 旧消息不进入 standardize
         │             ├── _standardize() → 统一消息格式
         │             ├── 去重 (_known_ids) → 跳过旧消息
+        │             ├── 自发自排除 (_recent_sends 内容匹配) → 跳过机器人自己的回复
         │             ├── 新消息: 记录 "New message" / "Join event detected" 日志
         │             └── _handle_message() → 线程池提交
         │

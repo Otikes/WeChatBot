@@ -655,6 +655,10 @@ todo_delete_keywords: list[str] = [
 | `_read_onboarding_state()` | 读取 SQLite `onboarding_state` 单行草稿/进度 | 无 | `dict \| None` |
 | `_save_onboarding_state(updates)` | 将引导草稿/步骤进度增量保存到 SQLite | `updates: dict` | `None` |
 | `_reset_onboarding_state()` | 删除 SQLite 引导草稿/进度行 | 无 | `None` |
+| `_runtime_data_dir()` | 返回运行缓存/日志所在的可写 `data/` 目录 | 无 | `Path` |
+| `_reset_runtime_database(db_path)` | 清空 `messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos` 等运行表，保留 `onboarding_state` | `db_path: Path` | `dict` |
+| `_reset_runtime_files(data_dir)` | 删除生成的运行日志和缓存文件，如 `bot.log`、`bot_status.json`、群元数据、昵称缓存 | `data_dir: Path` | `list[str]` |
+| `_reset_runtime_data()` | 停止状态下重置本地运行数据并刷新 WebSocket 状态；运行中返回 `requires_stop` | 无 | `dict` |
 | `_onboarding_draft_from_row(row)` | 从 SQLite 行生成引导页可回填草稿 | `row: dict` | `dict` |
 | `_onboarding_draft_from_raw(raw)` | 从旧 `.env` 键值生成引导页可回填草稿(兼容迁移) | `raw: dict[str, str]` | `dict` |
 | `_load_onboarding_progress()` | 读取引导草稿、步骤完成标记和整体完成状态，优先 SQLite，回退旧 `.env` | 无 | `tuple[dict, dict[str, bool], bool]` |
@@ -664,6 +668,7 @@ todo_delete_keywords: list[str] = [
 | `_platform_wechat_report(...)` | 微信进程状态诊断 | 可选参数 | `dict` |
 | `_macos_wechat_diagnostics(...)` | macOS 微信权限诊断 | 可选参数 | `dict` |
 | `_read_recent_logs()` | 读取最近 500 行日志 | 无 | `dict` |
+| `_clear_log_file()` | 清空 `data/bot.log`，并截断活动中的日志 `FileHandler` | 无 | `dict` |
 | `_run_step1_extraction()` | 后台执行密钥提取 | 无 | `None` |
 | `_write_onboarding_to_env(env_path)` | 写入引导数据到 .env | `env_path` | `None` |
 
@@ -673,11 +678,11 @@ todo_delete_keywords: list[str] = [
 |---|---|---|
 | `Onboarding.jsx` | `Onboarding` | 4步引导流程主容器(侧边栏+步骤内容)，启动时从 `/api/onboarding/status` 回填草稿和步骤状态 |
 | `OnboardingSteps.jsx` | `Step3AIConfig` | AI 协议配置步骤；按请求地址和 Key 动态获取模型列表 |
-| `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏) |
+| `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏+运行数据重置入口) |
 | `Dashboard.jsx` | `MetricCard` | 指标卡片组件(图标/标签/数值/副标题/迷你SVG图表) |
 | `Dashboard.jsx` | `LiveIndicator` | 实时状态指示灯(脉冲动画) |
 | `Dashboard.jsx` | `KeyExtractionBanner` | 内联密钥提取横幅(单文件内组件) |
-| `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮) |
+| `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮/清空日志文件) |
 | `ConfigPanel.jsx` | `AiSection` | 系统配置里的 AI 协议配置；支持模型获取和选择 |
 | `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的微信数据目录配置；支持浏览、检测和手输路径 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
@@ -771,6 +776,7 @@ Bot.run()
 _API 请求 → _UIHandler._handle_request()
   ├── /api/start          → _start_bot_in_thread() → Bot.run()
   ├── /api/stop           → _stop_bot()
+  ├── /api/runtime/reset  → _reset_runtime_data() → 清运行表/缓存文件并刷新状态
   ├── /api/load-config    → _find_or_create_env() → 读取 .env
   ├── /api/config         → 写入 .env
   ├── /api/ai/models      → _fetch_ai_models() → _request_json()
@@ -786,6 +792,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/lots           → load_lots_config() / save_lots_config()
   ├── /api/onboarding/*   → 引导流程状态管理 + SQLite 草稿/进度持久化，最终运行配置写入 .env
   ├── /api/logs           → _read_recent_logs()
+  ├── /api/logs/clear     → _clear_log_file()
   ├── /api/status         → _status.snapshot()
   ├── /api/browse         → _list_dir_entries()
   ├── /api/wechat-data-dir/detect → data_dir.list_accounts_in_data_dir()
@@ -1157,6 +1164,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/status` | 获取 bot 运行状态 | 无 |
 | `POST` | `/api/start` | 启动 bot | 无 |
 | `POST` | `/api/stop` | 停止 bot | 无 |
+| `POST` | `/api/runtime/reset` | 停止状态下清空本地运行数据；保留 `.env`、密钥、功能配置和 `onboarding_state` | 无 |
 | `GET` | `/api/load-config` | 加载当前配置 (保留可编辑密钥原值用于配置回填) | 无 |
 | `POST` | `/api/config` | 保存配置到 .env | 无 |
 | `GET` | `/api/config/export` | 导出配置为 JSON 文件 | 无 |
@@ -1171,6 +1179,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/todos/counts?chat_id=xxx` | 获取各状态待办计数 | 无 |
 | `POST` | `/api/todos/action` | 执行待办操作 (complete/delete/restore/clear) | 无 |
 | `GET` | `/api/logs` | 获取最近 500 行日志 | 无 |
+| `POST` | `/api/logs/clear` | 清空 `data/bot.log` 并重置运行日志页展示 | 无 |
 | `POST` | `/api/sandbox/test` | AI 沙盒测试 (不发送) | 无 |
 | `GET` | `/api/lots` | 获取抽签配置 | 无 |
 | `POST` | `/api/lots` | 保存抽签配置 | 无 |
@@ -1809,3 +1818,5 @@ WCDB_KEY=
 | `data/voice_cache.json` | `src/voice/pipeline.py` | 语音识别缓存 |
 | `data/send_failures.log` | `src/wechat/window_controller.py` | 发送失败记录 |
 | `data/crash.log` | `desktop.py` / `desktop_mac.py` | 崩溃日志 |
+
+`POST /api/runtime/reset` 会清空 `data/messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)并删除运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)；不删除 `.env`、`onboarding_state`、欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。

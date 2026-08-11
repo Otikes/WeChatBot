@@ -328,6 +328,33 @@ class TestPostAllowlist:
         assert resp.status == 405
 
 
+class TestLogsApi:
+    """Verify log read/clear routes against a real HTTP server."""
+
+    def test_clear_logs_endpoint_truncates_file(self, server):
+        project_root = Path(__file__).resolve().parent.parent
+        log_path = project_root / "data" / "bot.log"
+        original = log_path.read_text(encoding="utf-8") if log_path.exists() else None
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                "2024-06-01 12:00:00 [INFO] test: Persisted API log\n",
+                encoding="utf-8",
+            )
+
+            status, data = _api_post("/api/logs/clear")
+
+            assert status == 200
+            assert data["ok"] is True
+            assert data["cleared"] is True
+            assert log_path.read_text(encoding="utf-8") == ""
+        finally:
+            if original is None:
+                log_path.unlink(missing_ok=True)
+            else:
+                log_path.write_text(original, encoding="utf-8")
+
+
 # ── Playwright browser-level functional tests ───────────────────────────────
 
 try:
@@ -359,6 +386,12 @@ class TestPageLoads:
     def test_index_html_loads(self, page):
         page.goto(BASE_URL, timeout=10000)
         assert page.title() is not None
+
+    def test_runtime_reset_button_visible(self, page):
+        page.goto(BASE_URL, timeout=10000)
+        page.wait_for_timeout(1000)
+        reset_btn = page.locator("button:has-text('重置数据')")
+        assert reset_btn.count() > 0
 
 
 class TestThemeToggle:
@@ -409,3 +442,30 @@ class TestConfigExportImport:
             page.wait_for_timeout(500)
             page_text = page.inner_text("body")
             assert "导出备份" in page_text or "配置备份" in page_text
+
+
+class TestLogViewer:
+    def test_clear_button_clears_persisted_logs(self, page):
+        project_root = Path(__file__).resolve().parent.parent
+        log_path = project_root / "data" / "bot.log"
+        original = log_path.read_text(encoding="utf-8") if log_path.exists() else None
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(
+                "2024-06-01 12:00:00 [INFO] test: Persisted browser log\n",
+                encoding="utf-8",
+            )
+
+            page.goto(BASE_URL, timeout=10000)
+            page.wait_for_timeout(1000)
+            page.locator("button:has-text('运行日志')").first.click()
+            page.wait_for_selector("text=Persisted browser log", timeout=5000)
+            page.locator('button[title="清空日志文件"]').click()
+            page.wait_for_selector("text=Terminal Cleared", timeout=5000)
+
+            assert log_path.read_text(encoding="utf-8") == ""
+        finally:
+            if original is None:
+                log_path.unlink(missing_ok=True)
+            else:
+                log_path.write_text(original, encoding="utf-8")

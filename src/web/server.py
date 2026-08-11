@@ -9,6 +9,7 @@ Runs in a daemon thread — no impact on the main bot loop.
 import json
 import logging
 import os
+import sqlite3
 import struct
 import threading
 import time
@@ -636,6 +637,122 @@ def _reset_onboarding_state() -> None:
         conn.close()
 
 
+_RUNTIME_RESET_TABLES = (
+    "messages",
+    "user_last_message",
+    "trigger_log",
+    "group_memory",
+    "todos",
+)
+_RUNTIME_RESET_FILES = (
+    "bot.log",
+    "bot_status.json",
+    "send_failures.log",
+    "group_members.json",
+    "group_names.json",
+    "nicknames.json",
+)
+
+
+def _runtime_data_dir() -> Path:
+    """Return the writable data directory used by runtime cache/log files."""
+    from src.config import PROJECT_ROOT
+
+    return PROJECT_ROOT / "data"
+
+
+def _reset_runtime_database(db_path: Path) -> dict:
+    """Clear runtime SQLite tables while preserving configuration state."""
+    from src.db.schema import initialize_db
+
+    conn = initialize_db(str(db_path))
+    deleted: dict[str, int] = {}
+    try:
+        with conn:
+            existing = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            }
+            for table in _RUNTIME_RESET_TABLES:
+                if table not in existing:
+                    continue
+                cursor = conn.execute(f"DELETE FROM {table}")
+                deleted[table] = cursor.rowcount if cursor.rowcount != -1 else 0
+            if "sqlite_sequence" in existing:
+                placeholders = ",".join("?" for _ in _RUNTIME_RESET_TABLES)
+                conn.execute(
+                    f"DELETE FROM sqlite_sequence WHERE name IN ({placeholders})",
+                    _RUNTIME_RESET_TABLES,
+                )
+            conn.execute("PRAGMA optimize")
+    finally:
+        conn.close()
+    return {"path": str(db_path), "deleted": deleted}
+
+
+def _reset_runtime_files(data_dir: Path) -> list[str]:
+    """Remove generated runtime files under the app data directory."""
+    removed: list[str] = []
+    for filename in _RUNTIME_RESET_FILES:
+        path = data_dir / filename
+        try:
+            path.unlink()
+            removed.append(str(path))
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            if filename == "bot.log":
+                path.write_text("", encoding="utf-8")
+                removed.append(str(path))
+                continue
+            raise
+    return removed
+
+
+def _reset_runtime_data() -> dict:
+    """Clear local runtime history/cache without changing user configuration."""
+    if _bot_control.is_running():
+        return {
+            "ok": False,
+            "error": "请先停止机器人，再重置运行数据。",
+            "requires_stop": True,
+        }
+
+    db_path = _onboarding_db_path()
+    data_dir = _runtime_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        db_result = _reset_runtime_database(db_path)
+        removed_files = _reset_runtime_files(data_dir)
+        update_status(
+            running=False,
+            uptime_sec=0,
+            messages_processed=0,
+            db_ok=True,
+            last_api_call_sec_ago=-1,
+            last_api_call_time=0,
+            error="",
+        )
+        logger.info(
+            "Runtime data reset: db=%s, tables=%s, files=%s",
+            db_result["path"],
+            sorted(db_result["deleted"]),
+            removed_files,
+        )
+        return {
+            "ok": True,
+            "message": "运行数据已清理，下次启动会按新状态运行。",
+            "database": db_result,
+            "removed_files": removed_files,
+        }
+    except (OSError, sqlite3.Error) as exc:
+        logger.exception("Failed to reset runtime data")
+        return {"ok": False, "error": str(exc)}
+
+
 def _onboarding_draft_from_row(row: dict) -> dict:
     """Build UI-facing onboarding draft data from SQLite row values."""
     return {
@@ -894,6 +1011,48 @@ def _read_recent_logs():
         return {"ok": True, "logs": entries}
     except Exception as e:
         return {"ok": False, "logs": [], "error": str(e)}
+
+
+def _clear_log_file():
+    """Clear the persisted bot log file and any active file handler stream."""
+    log_path = Path("data/bot.log")
+    try:
+        target = log_path.resolve()
+        cleared_handlers = 0
+
+        for handler in logging.getLogger().handlers:
+            if not isinstance(handler, logging.FileHandler):
+                continue
+            try:
+                if Path(handler.baseFilename).resolve() != target:
+                    continue
+            except Exception:
+                continue
+
+            handler.acquire()
+            try:
+                if handler.stream is None:
+                    handler.stream = handler._open()
+                handler.flush()
+                handler.stream.seek(0)
+                handler.stream.truncate(0)
+                handler.flush()
+                cleared_handlers += 1
+            finally:
+                handler.release()
+
+        if cleared_handlers == 0:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("", encoding="utf-8")
+
+        return {
+            "ok": True,
+            "logs": [],
+            "cleared": True,
+            "cleared_handlers": cleared_handlers,
+        }
+    except Exception as e:
+        return {"ok": False, "logs": [], "cleared": False, "error": str(e)}
 
 
 def _can_import(module_name: str) -> bool:
@@ -1405,8 +1564,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         # Only delegate specific API paths; return 405 for unknown POST paths
         if self.path in ("/api/config", "/api/config/import", "/api/start", "/api/stop",
+                         "/api/runtime/reset",
                          "/api/nicknames",
                          "/api/welcome/templates",
+                         "/api/logs/clear",
                          "/api/onboarding/reset",
                          "/api/onboarding/step1", "/api/onboarding/step1-manual",
                          "/api/onboarding/step2",
@@ -1472,6 +1633,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/stop":
             _stop_bot()
             self.send_json({"ok": True})
+            return
+
+        # ── API: Reset local runtime data ────────────────────────────
+        if self.path == "/api/runtime/reset":
+            self.send_json(_reset_runtime_data())
             return
 
         # ── API: Load config ───────────────────────────────────────────
@@ -2199,6 +2365,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
         # ── API: Get logs ────────────────────────────────────────────
         if self.path == "/api/logs":
             self.send_json(_read_recent_logs())
+            return
+
+        # API: Clear logs
+        if self.path == "/api/logs/clear":
+            self.send_json(_clear_log_file())
             return
 
         # ── API: macOS WeChat automation diagnostics ─────────────────

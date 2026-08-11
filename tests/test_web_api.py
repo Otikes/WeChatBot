@@ -7,6 +7,7 @@ No real DB or network -- all tests are fast and deterministic.
 
 import io
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -923,6 +924,126 @@ class PublicApiTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Runtime reset tests
+# ---------------------------------------------------------------------------
+
+
+class RuntimeResetTests(unittest.TestCase):
+    """Tests for clearing runtime data while preserving configuration state."""
+
+    def setUp(self):
+        from src.web import server
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tmp_dir = Path(self.tmp.name)
+        self.db_path = self.tmp_dir / "messages.db"
+        self.data_dir = self.tmp_dir / "data"
+        self.data_dir.mkdir()
+        self.db_patch = patch(
+            "src.web.server._onboarding_db_path",
+            return_value=self.db_path,
+        )
+        self.data_patch = patch(
+            "src.web.server._runtime_data_dir",
+            return_value=self.data_dir,
+        )
+        self.db_patch.start()
+        self.data_patch.start()
+        self.addCleanup(self.db_patch.stop)
+        self.addCleanup(self.data_patch.stop)
+        server._bot_control.mark_stopped()
+
+    def _seed_runtime_db(self):
+        from src.db.schema import initialize_db
+        from src.todo.store import CREATE_TABLE
+
+        conn = initialize_db(str(self.db_path))
+        try:
+            conn.executescript(CREATE_TABLE)
+            with conn:
+                conn.execute(
+                    "INSERT INTO onboarding_state (id, onboarding_done, wcdb_key) "
+                    "VALUES (1, 1, 'keep-key')"
+                )
+                conn.execute(
+                    "INSERT INTO messages "
+                    "(message_id, chat_id, sender_id, sender_name, content, timestamp) "
+                    "VALUES ('m1', 'c1', 'u1', 'Alice', 'hello', 1)"
+                )
+                conn.execute(
+                    "INSERT INTO user_last_message "
+                    "(chat_id, sender_id, sender_name, last_timestamp) "
+                    "VALUES ('c1', 'u1', 'Alice', 1)"
+                )
+                conn.execute(
+                    "INSERT INTO trigger_log "
+                    "(chat_id, requester_id, trigger_message_id) "
+                    "VALUES ('c1', 'u1', 'm1')"
+                )
+                conn.execute(
+                    "INSERT INTO group_memory "
+                    "(chat_id, memory_text, message_count, last_message_id) "
+                    "VALUES ('c1', 'memory', 1, 'm1')"
+                )
+                conn.execute(
+                    "INSERT INTO todos "
+                    "(chat_id, content, display_order, status, creator_id, "
+                    "creator_name, created_at) "
+                    "VALUES ('c1', 'todo', 1, 'active', 'u1', 'Alice', 1)"
+                )
+        finally:
+            conn.close()
+
+    def _count_rows(self, table: str) -> int:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        finally:
+            conn.close()
+
+    def test_reset_runtime_data_clears_history_and_preserves_onboarding(self):
+        """Runtime reset clears generated data but keeps onboarding_state."""
+        from src.web import server
+
+        self._seed_runtime_db()
+        for filename in server._RUNTIME_RESET_FILES:
+            (self.data_dir / filename).write_text("old", encoding="utf-8")
+
+        result = server._reset_runtime_data()
+
+        self.assertTrue(result["ok"])
+        for table in (
+            "messages",
+            "user_last_message",
+            "trigger_log",
+            "group_memory",
+            "todos",
+        ):
+            self.assertEqual(self._count_rows(table), 0, table)
+        self.assertEqual(self._count_rows("onboarding_state"), 1)
+        self.assertFalse((self.data_dir / "group_names.json").exists())
+        self.assertFalse((self.data_dir / "bot_status.json").exists())
+        snap = server._status.snapshot()
+        self.assertFalse(snap["running"])
+        self.assertEqual(snap["messages_processed"], 0)
+        self.assertEqual(snap["uptime_sec"], 0)
+
+    def test_reset_runtime_data_rejects_while_running(self):
+        """Runtime reset must not run while the bot is active."""
+        from src.web import server
+
+        server._bot_control.set_running()
+        try:
+            result = server._reset_runtime_data()
+        finally:
+            server._bot_control.mark_stopped()
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["requires_stop"])
+
+
+# ---------------------------------------------------------------------------
 # /api/status endpoint tests
 # ---------------------------------------------------------------------------
 
@@ -1011,6 +1132,19 @@ class ApiStartStopEndpointTests(unittest.TestCase):
         parts = sock.get_response_text().split("\r\n\r\n", 1)
         body = json.loads(parts[1])
         self.assertTrue(body["ok"])
+
+    def test_runtime_reset_endpoint_returns_result(self):
+        """POST /api/runtime/reset is routed to the runtime reset helper."""
+        with patch(
+            "src.web.server._reset_runtime_data",
+            return_value={"ok": True, "message": "done"},
+        ) as reset:
+            handler, sock = _build_handler("/api/runtime/reset", method="POST")
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        body = json.loads(parts[1])
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["message"], "done")
+        reset.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------
@@ -1611,7 +1745,7 @@ class ApiErrorHandlingTests(unittest.TestCase):
 
 
 class ApiLogsEndpointTests(unittest.TestCase):
-    """Tests for GET /api/logs."""
+    """Tests for GET /api/logs and POST /api/logs/clear."""
 
     def test_logs_file_not_found_returns_empty(self):
         """GET /api/logs returns an empty list when log file missing."""
@@ -1658,6 +1792,17 @@ class ApiLogsEndpointTests(unittest.TestCase):
             self.assertFalse(body["ok"])
             self.assertEqual(body["error"], "Permission denied")
 
+    def test_clear_logs_endpoint(self):
+        """POST /api/logs/clear clears the persisted log file."""
+        with patch("src.web.server._clear_log_file",
+                   return_value={"ok": True, "logs": [], "cleared": True}) as clear:
+            handler, sock = _build_handler("/api/logs/clear", method="POST")
+            parts = sock.get_response_text().split("\r\n\r\n", 1)
+            body = json.loads(parts[1])
+            self.assertTrue(body["ok"])
+            self.assertTrue(body["cleared"])
+            clear.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # _read_recent_logs helper tests
@@ -1698,6 +1843,68 @@ class ReadRecentLogsTests(unittest.TestCase):
         # Traceback line preserves raw
         raw_texts = [e["raw"] for e in entries]
         self.assertIn("Traceback line without timestamp", raw_texts)
+
+
+class ClearLogFileTests(unittest.TestCase):
+    """Tests for _clear_log_file."""
+
+    def test_truncates_existing_log_file(self):
+        """Clearing logs truncates data/bot.log and reads back empty."""
+        from src.web.server import _clear_log_file, _read_recent_logs
+
+        original_cwd = Path.cwd()
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                log_path = Path("data/bot.log")
+                log_path.parent.mkdir(parents=True)
+                log_path.write_text(
+                    "2024-06-01 12:00:00 [INFO] bot: Old log\n",
+                    encoding="utf-8",
+                )
+
+                result = _clear_log_file()
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(log_path.read_text(encoding="utf-8"), "")
+                self.assertEqual(_read_recent_logs()["logs"], [])
+            finally:
+                os.chdir(original_cwd)
+
+    def test_truncates_active_file_handler_without_detaching_it(self):
+        """Clearing logs keeps the active FileHandler usable for new lines."""
+        from src.web.server import _clear_log_file
+
+        original_cwd = Path.cwd()
+        root_logger = logging.getLogger()
+        handler = None
+        with tempfile.TemporaryDirectory() as tmp:
+            os.chdir(tmp)
+            try:
+                log_path = Path("data/bot.log")
+                log_path.parent.mkdir(parents=True)
+                handler = logging.FileHandler(str(log_path), encoding="utf-8")
+                root_logger.addHandler(handler)
+
+                root_logger.warning("before clear")
+                handler.flush()
+
+                result = _clear_log_file()
+
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["cleared_handlers"], 1)
+                self.assertEqual(log_path.read_text(encoding="utf-8"), "")
+
+                root_logger.warning("after clear")
+                handler.flush()
+                saved = log_path.read_text(encoding="utf-8")
+                self.assertIn("after clear", saved)
+                self.assertNotIn("before clear", saved)
+            finally:
+                if handler is not None:
+                    root_logger.removeHandler(handler)
+                    handler.close()
+                os.chdir(original_cwd)
 
 
 # ---------------------------------------------------------------------------

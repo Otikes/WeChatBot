@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
-import { Database, Brain, Clock, ChatCircle, Pulse, Play, Stop, Key, Spinner, CheckCircle, XCircle } from '@phosphor-icons/react'
+import { Database, Brain, Clock, ChatCircle, Pulse, Play, Stop, Key, Spinner, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
 
 const spring = { type: 'spring', stiffness: 100, damping: 20 }
 
@@ -122,6 +122,8 @@ const aiLabels = { deepseek: 'Chat Completions', openai_compatible: 'Chat Comple
 
 export default function Dashboard({ status }) {
   const [busy, setBusy] = useState(false)
+  const [resetBusy, setResetBusy] = useState(false)
+  const [resetResult, setResetResult] = useState(null)
   const [, setTick] = useState(0)
 
   // Diagnostics state
@@ -194,6 +196,29 @@ export default function Dashboard({ status }) {
     }, 850)
   }
 
+  async function handleResetRuntime() {
+    if (status.running || resetBusy) return
+    const confirmed = window.confirm(
+      '确定要重置运行数据吗？\n\n会清空消息历史、群聊记忆、待办、昵称缓存和运行日志；不会删除 .env、API Key、微信密钥和功能开关。'
+    )
+    if (!confirmed) return
+
+    setResetBusy(true)
+    setResetResult(null)
+    try {
+      const res = await fetch('http://127.0.0.1:7327/api/runtime/reset', { method: 'POST' })
+      const data = await res.json()
+      if (!data.ok) {
+        setResetResult({ ok: false, message: data.error || '重置失败' })
+      } else {
+        setResetResult({ ok: true, message: data.message || '运行数据已清理' })
+      }
+    } catch {
+      setResetResult({ ok: false, message: '无法访问后端服务' })
+    }
+    setResetBusy(false)
+  }
+
   const uptimeMin = Math.floor(status.uptime_sec / 60)
   const uptimeStr = uptimeMin < 60
     ? `${uptimeMin} 分钟`
@@ -228,6 +253,27 @@ export default function Dashboard({ status }) {
         <span className="text-xs text-text-muted font-mono font-medium">
           {busy ? '处理中...' : (status.running ? '点击停止微信消息轮询' : '点击启动微信消息轮询')}
         </span>
+        <div className="ml-auto flex items-center gap-3">
+          {resetResult && (
+            <span className={`text-xs font-mono font-medium ${resetResult.ok ? 'text-brand-green-hover dark:text-brand-green' : 'text-[#d45656]'}`}>
+              {resetResult.message}
+            </span>
+          )}
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: status.running || resetBusy ? 1 : 1.02 }}
+            onClick={handleResetRuntime}
+            disabled={status.running || resetBusy}
+            title={status.running ? '请先停止机器人再重置数据' : '清空本地运行数据'}
+            className="w-36 py-2.5 rounded-full text-[13px] font-semibold tracking-wide border border-border-main bg-bg-raised text-text-muted hover:text-[#d45656] hover:border-[#d45656]/25 hover:bg-[#d45656]/10 disabled:hover:text-text-muted disabled:hover:border-border-main disabled:hover:bg-bg-raised disabled:opacity-50 transition-all duration-300 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {resetBusy ? (
+              <><Spinner size={15} weight="bold" className="animate-spin" /> 重置中</>
+            ) : (
+              <><ArrowCounterClockwise size={16} weight="bold" /> 重置数据</>
+            )}
+          </motion.button>
+        </div>
       </div>
 
       {/* Error banner */}

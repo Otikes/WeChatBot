@@ -11,6 +11,11 @@ const LEVEL_STYLES = {
 const LEVEL_LABELS = { ALL: '全部', INFO: 'INFO', WARNING: '警告', ERROR: '错误', DEBUG: 'DEBUG' }
 const FILTER_OPTIONS = ['ALL', 'INFO', 'WARNING', 'ERROR', 'DEBUG']
 
+function apiUrl(path) {
+  if (window.location.port === '5173') return `http://127.0.0.1:7327${path}`
+  return path
+}
+
 function renderHighlightedMsg(msg) {
   if (!msg) return ''
   const regex = /(\[[^\]]+\]|收到消息|发送消息|\b\d+(?:\.\d+)?(?:ms|s|毫秒|秒)\b|\b(?:OK|SUCCESS|ERROR)\b|成功|失败)/g
@@ -68,8 +73,11 @@ export default function LogViewer() {
   const [searchQuery, setSearchQuery] = useState('')
   const [logs, setLogs] = useState([])
   const [clearedManually, setClearedManually] = useState(false)
+  const [isClearing, setIsClearing] = useState(false)
+  const [clearError, setClearError] = useState('')
   const scrollRef = useRef(null)
   const seenRef = useRef(new Set())
+  const requestGenerationRef = useRef(0)
   const [autoScroll, setAutoScroll] = useState(true)
   const SCROLL_THRESHOLD = 50  // px from bottom considered "at bottom"
 
@@ -83,9 +91,11 @@ export default function LogViewer() {
   })
 
   const fetchLogs = useCallback(async () => {
+    const generation = requestGenerationRef.current
     try {
-      const res = await fetch('http://127.0.0.1:7327/api/logs')
+      const res = await fetch(apiUrl('/api/logs'))
       const data = await res.json()
+      if (generation !== requestGenerationRef.current) return
       if (data.ok && data.logs?.length) {
         setLogs(prev => {
           const merged = [...prev]
@@ -106,6 +116,28 @@ export default function LogViewer() {
       }
     } catch {}
   }, [])
+
+  async function clearLogs() {
+    if (isClearing) return
+    requestGenerationRef.current += 1
+    setIsClearing(true)
+    setClearError('')
+    try {
+      const res = await fetch(apiUrl('/api/logs/clear'), { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || '清空日志失败')
+      }
+      requestGenerationRef.current += 1
+      setLogs([])
+      seenRef.current.clear()
+      setClearedManually(true)
+    } catch (err) {
+      setClearError(err?.message || '清空日志失败')
+    } finally {
+      setIsClearing(false)
+    }
+  }
 
   useEffect(() => {
     fetchLogs()
@@ -181,11 +213,23 @@ export default function LogViewer() {
           <button onClick={scrollToBottom} title="滚动到底部" className="p-2 rounded-full text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer border border-transparent hover:border-border-main">
             <ArrowDown size={16} />
           </button>
-          <button onClick={() => { setLogs([]); seenRef.current.clear(); setClearedManually(true) }} title="仅清空屏幕展示日志（不删除后台日志文件）" className="p-2 rounded-full text-text-muted hover:text-[#d45656] hover:bg-[#d45656]/10 border border-transparent hover:border-[#d45656]/20 transition-colors cursor-pointer">
+          <button
+            onClick={clearLogs}
+            disabled={isClearing}
+            title={isClearing ? '正在清空日志文件' : '清空日志文件'}
+            className={`p-2 rounded-full border border-transparent transition-colors ${
+              isClearing
+                ? 'text-text-muted/45 cursor-wait'
+                : 'text-text-muted hover:text-[#d45656] hover:bg-[#d45656]/10 hover:border-[#d45656]/20 cursor-pointer'
+            }`}
+          >
             <Trash size={16} />
           </button>
         </div>
       </div>
+      {clearError && (
+        <div className="text-xs text-[#d45656] font-mono px-1">{clearError}</div>
+      )}
 
       <motion.div
         initial={{ opacity: 0 }} animate={{ opacity: 1 }}

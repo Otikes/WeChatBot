@@ -34,6 +34,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
   const [manualKey, setManualKey] = useState(data.key || '')
   const [manualWxid, setManualWxid] = useState(data.wxid || '')
   const [manualDbPath, setManualDbPath] = useState(data.db_path || '')
+  const [manualError, setManualError] = useState('')
 
   // Pre-flight diagnostics state
   const [diagnostics, setDiagnostics] = useState(null)
@@ -120,13 +121,29 @@ export function Step1Prepare({ data, updateData, onDone }) {
     }
   }
 
-  function handleManualSubmit() {
-    updateData({
-      key: manualKey.trim(),
-      wxid: manualWxid.trim(),
-      db_path: manualDbPath.trim()
-    })
-    onDone()
+  async function handleManualSubmit() {
+    setBusy(true)
+    setManualError('')
+    try {
+      const payload = {
+        key: manualKey.trim(),
+        wxid: manualWxid.trim(),
+        db_path: manualDbPath.trim()
+      }
+      const res = await fetchWithRetry(`${API}/api/onboarding/step1-manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      const result = await res.json()
+      if (!result.ok) throw new Error(result.error || '保存失败')
+      updateData(payload)
+      onDone()
+    } catch (e) {
+      setManualError(e.message || '保存失败，请稍后重试')
+    } finally {
+      setBusy(false)
+    }
   }
 
   function renderChecklist() {
@@ -294,17 +311,22 @@ export function Step1Prepare({ data, updateData, onDone }) {
                 placeholder="例如：C:\Users\Username\Documents\WeChat Files\wxid_...\db_storage\session\session.db"
               />
             </Field>
+            {manualError && (
+              <div className="flex items-center gap-2 text-xs text-[#d45656] bg-[#d45656]/10 border border-[#d45656]/20 rounded-2xl px-4 py-3">
+                <Warning size={16} weight="fill" /> {manualError}
+              </div>
+            )}
             <motion.button
               whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
               onClick={handleManualSubmit}
-              disabled={!isManualValid}
+              disabled={!isManualValid || busy}
               className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer ${
-                isManualValid
+                isManualValid && !busy
                   ? 'bg-[#0d0d0d] dark:bg-white text-white dark:text-[#0d0d0d] hover:opacity-95'
                   : 'bg-bg-raised text-text-muted/65 border border-border-main cursor-not-allowed'
               }`}
             >
-              <ArrowRight size={18} /> 保存并下一步
+              {busy ? <Spinner size={18} weight="bold" className="animate-spin" /> : <><ArrowRight size={18} /> 保存并下一步</>}
             </motion.button>
           </div>
         ) : (
@@ -468,6 +490,7 @@ export function Step2WeChatConfig({ data, updateData, onDone }) {
           wechat_backend: 'wcdb',
           wxid: data.wxid || '',
           db_path: data.db_path || '',
+          key: data.key || '',
         }),
       })
       onDone()

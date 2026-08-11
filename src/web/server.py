@@ -446,52 +446,137 @@ def _set_env_key(env_path: Path, key: str, value: str) -> None:
     os.replace(tmp, env_path)
 
 
-def _write_onboarding_to_env(env_path):
-    """Write accumulated onboarding data to .env file atomically."""
-    env_map = {
-        "AI_BACKEND": _normalize_ai_backend(_onboarding_data.get("ai_backend", "openai_compatible")),
-        "DEEPSEEK_API_KEY": _onboarding_data.get("deepseek_api_key", ""),
-        "DEEPSEEK_BASE_URL": _onboarding_data.get("deepseek_base_url", "https://api.deepseek.com"),
-        "DEEPSEEK_MODEL": _onboarding_data.get("deepseek_model", ""),
-        "OPENAI_API_KEY": _onboarding_data.get("openai_api_key", ""),
-        "OPENAI_BASE_URL": normalize_openai_base_url(
-            _onboarding_data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
-        ),
-        "OPENAI_MODEL": _onboarding_data.get("openai_model", ""),
-        "ANTHROPIC_API_KEY": _onboarding_data.get("anthropic_api_key", ""),
-        "ANTHROPIC_BASE_URL": _onboarding_data.get("anthropic_base_url", "https://api.anthropic.com"),
-        "SUMMARIZE_MODEL": _onboarding_data.get("summarize_model", ""),
-        "WECHAT_BACKEND": _onboarding_data.get("wechat_backend", "wcdb"),
-        "WECHAT_GROUPS": _onboarding_data.get("wechat_groups", "*"),
-        "BOT_DISPLAY_NAME": _onboarding_data.get("bot_display_name", "群聊小助手"),
-        "PROACTIVE_ENABLED": str(_onboarding_data.get("proactive_enabled", False)).lower(),
-        "STICKY_MENTION_ENABLED": str(_onboarding_data.get("sticky_mention_enabled", True)).lower(),
-        "WCDB_KEY": _onboarding_data.get("key", ""),
-        "ONBOARDING_DONE": "true",
-    }
-    # Preserve existing keys not managed by onboarding
+def _read_env_raw(env_path: Path | None) -> dict[str, str]:
+    """Read simple key=value pairs from a .env file."""
+    raw: dict[str, str] = {}
+    if not env_path or not env_path.exists():
+        return raw
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key, value = stripped.split("=", 1)
+            raw[key.strip()] = value.strip()
+    return raw
+
+
+def _write_env_updates(env_path: Path, updates: dict[str, str | None]) -> list[str]:
+    """Atomically apply key=value updates to .env and current process env."""
     if env_path.exists():
-        lines = []
-        seen = set()
-        for line in env_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped and not stripped.startswith("#") and "=" in stripped:
-                key = stripped.split("=", 1)[0].strip()
-                if key in env_map and env_map[key] is not None:
-                    lines.append(f"{key}={env_map[key]}")
-                    seen.add(key)
-                    continue
-            lines.append(line)
-        for key, val in env_map.items():
-            if key not in seen and val is not None:
-                lines.append(f"{key}={val}")
-        content = "\n".join(lines) + "\n"
+        lines = env_path.read_text(encoding="utf-8").splitlines()
     else:
-        content = "\n".join(f"{k}={v}" for k, v in env_map.items() if v is not None) + "\n"
+        lines = []
+
+    new_lines = []
+    saved: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates and updates[key] is not None:
+                new_lines.append(f"{key}={updates[key]}")
+                saved.add(key)
+                continue
+        new_lines.append(line)
+
+    for key, val in updates.items():
+        if key not in saved and val is not None:
+            new_lines.append(f"{key}={val}")
+            saved.add(key)
 
     tmp_path = env_path.with_suffix(".tmp")
-    tmp_path.write_text(content, encoding="utf-8")
+    tmp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
     os.replace(tmp_path, env_path)
+
+    for key, val in updates.items():
+        if val is not None:
+            os.environ[key] = str(val)
+    return sorted(saved)
+
+
+def _onboarding_draft_from_raw(raw: dict[str, str]) -> dict:
+    """Build UI-facing onboarding draft data from saved .env values."""
+    draft = {
+        "key": raw.get("WCDB_KEY", ""),
+        "wxid": raw.get("ONBOARDING_WXID", ""),
+        "db_path": raw.get("ONBOARDING_DB_PATH", ""),
+        "bot_display_name": raw.get("BOT_DISPLAY_NAME", ""),
+        "wechat_groups": _decode_wechat_groups(raw.get("WECHAT_GROUPS", "*")),
+        "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
+        "fun_enabled": _bool_env(raw.get("FUN_ENABLED", "true"), True),
+        "proactive_enabled": _bool_env(raw.get("PROACTIVE_ENABLED", "false"), False),
+        "sticky_mention_enabled": _bool_env(
+            raw.get("STICKY_MENTION_ENABLED", "true"),
+            True,
+        ),
+    }
+    draft.update(_ai_config_from_raw(raw))
+    return draft
+
+
+def _load_onboarding_progress() -> tuple[dict, dict[str, bool]]:
+    """Load persisted onboarding draft data and step markers."""
+    from src.config import find_env_file
+
+    raw = _read_env_raw(find_env_file())
+    draft = _onboarding_draft_from_raw(raw)
+    done = _bool_env(raw.get("ONBOARDING_DONE", "false"), False)
+    steps = {
+        "step1": done
+        or _bool_env(raw.get("ONBOARDING_STEP1_DONE", ""), False)
+        or bool(draft.get("key")),
+        "step2": done or _bool_env(raw.get("ONBOARDING_STEP2_DONE", ""), False),
+        "step3": done or _bool_env(raw.get("ONBOARDING_STEP3_DONE", ""), False),
+        "step4": done or _bool_env(raw.get("ONBOARDING_STEP4_DONE", ""), False),
+    }
+    return draft, steps
+
+
+def _hydrate_onboarding_from_env() -> tuple[dict, dict[str, bool]]:
+    """Merge persisted onboarding draft data into in-memory state."""
+    draft, steps = _load_onboarding_progress()
+    with _onboarding_lock:
+        for key, value in draft.items():
+            if key in _onboarding_data:
+                _onboarding_data[key] = value
+        for key, value in steps.items():
+            _onboarding_data[f"{key}_done"] = bool(value)
+    return draft, steps
+
+
+def _write_onboarding_to_env(env_path):
+    """Write accumulated onboarding data to .env file atomically."""
+    with _onboarding_lock:
+        data = dict(_onboarding_data)
+
+    env_map = {
+        "AI_BACKEND": _normalize_ai_backend(data.get("ai_backend", "openai_compatible")),
+        "DEEPSEEK_API_KEY": data.get("deepseek_api_key", ""),
+        "DEEPSEEK_BASE_URL": data.get("deepseek_base_url", "https://api.deepseek.com"),
+        "DEEPSEEK_MODEL": data.get("deepseek_model", ""),
+        "OPENAI_API_KEY": data.get("openai_api_key", ""),
+        "OPENAI_BASE_URL": normalize_openai_base_url(
+            data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
+        ),
+        "OPENAI_MODEL": data.get("openai_model", ""),
+        "ANTHROPIC_API_KEY": data.get("anthropic_api_key", ""),
+        "ANTHROPIC_BASE_URL": data.get("anthropic_base_url", "https://api.anthropic.com"),
+        "SUMMARIZE_MODEL": data.get("summarize_model", ""),
+        "WECHAT_BACKEND": data.get("wechat_backend", "wcdb"),
+        "WECHAT_GROUPS": data.get("wechat_groups", "*") or "*",
+        "BOT_DISPLAY_NAME": data.get("bot_display_name", "群聊小助手"),
+        "FUN_ENABLED": str(data.get("fun_enabled", True)).lower(),
+        "PROACTIVE_ENABLED": str(data.get("proactive_enabled", False)).lower(),
+        "STICKY_MENTION_ENABLED": str(data.get("sticky_mention_enabled", True)).lower(),
+        "WCDB_KEY": data.get("key", ""),
+        "ONBOARDING_WXID": data.get("wxid", ""),
+        "ONBOARDING_DB_PATH": data.get("db_path", ""),
+        "ONBOARDING_STEP1_DONE": "true",
+        "ONBOARDING_STEP2_DONE": "true",
+        "ONBOARDING_STEP3_DONE": "true",
+        "ONBOARDING_STEP4_DONE": "true",
+        "ONBOARDING_DONE": "true",
+    }
+    _write_env_updates(env_path, env_map)
     logger.info("Onboarding complete — wrote .env")
 
 
@@ -537,10 +622,12 @@ def _run_step1_extraction():
             # Persist the key to .env immediately so the bot can use it
             # on restart without needing to complete the full onboarding flow.
             env_path = _find_or_create_env()
-            _set_env_key(env_path, "WCDB_KEY", key)
-            # Also set in the current process for load_dotenv in this session
-            import os as _os
-            _os.environ["WCDB_KEY"] = key
+            _write_env_updates(env_path, {
+                "WCDB_KEY": key,
+                "ONBOARDING_WXID": wxid or "",
+                "ONBOARDING_DB_PATH": db_path or "",
+                "ONBOARDING_STEP1_DONE": "true",
+            })
             # Clear the KEY_MISSING error so it doesn't reappear on page refresh
             update_status(error="")
 
@@ -926,16 +1013,20 @@ def is_shutting_down():
 
 # ── Onboarding state ──────────────────────────────────────────────────
 
-_onboarding_data = {
+_DEFAULT_ONBOARDING_DATA = {
     "step1_done": False, "step2_done": False, "step3_done": False, "step4_done": False,
     "key": "", "wxid": "", "db_path": "",
     "bot_display_name": "", "wechat_groups": "*", "wechat_backend": "wcdb",
     "ai_backend": "openai_compatible", "deepseek_api_key": "", "deepseek_model": "",
+    "deepseek_base_url": "https://api.deepseek.com",
     "openai_api_key": "", "openai_base_url": OPENAI_COMPATIBLE_BASE_URL, "openai_model": "",
-    "anthropic_api_key": "", "summarize_model": "",
+    "anthropic_api_key": "", "anthropic_base_url": "https://api.anthropic.com",
+    "summarize_model": "",
+    "fun_enabled": True,
     "proactive_enabled": False,
     "sticky_mention_enabled": True,
 }
+_onboarding_data = dict(_DEFAULT_ONBOARDING_DATA)
 _onboarding_lock = threading.Lock()
 
 # Async step1 state
@@ -1136,7 +1227,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/nicknames",
                          "/api/welcome/templates",
                          "/api/onboarding/reset",
-                         "/api/onboarding/step1", "/api/onboarding/step2",
+                         "/api/onboarding/step1", "/api/onboarding/step1-manual",
+                         "/api/onboarding/step2",
                          "/api/onboarding/step3", "/api/onboarding/step4",
                          "/api/ai/models",
                          "/api/sandbox/test",
@@ -1940,14 +2032,25 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/onboarding/status":
             from src.config import is_onboarding_done
             done = is_onboarding_done()
+            draft, saved_steps = _hydrate_onboarding_from_env()
             with _onboarding_lock:
                 steps = {
-                    "step1": _onboarding_data["step1_done"],
-                    "step2": _onboarding_data["step2_done"],
-                    "step3": _onboarding_data["step3_done"],
-                    "step4": _onboarding_data["step4_done"],
+                    "step1": _onboarding_data["step1_done"] or saved_steps["step1"],
+                    "step2": _onboarding_data["step2_done"] or saved_steps["step2"],
+                    "step3": _onboarding_data["step3_done"] or saved_steps["step3"],
+                    "step4": _onboarding_data["step4_done"] or saved_steps["step4"],
                 }
-            self.send_json({"ok": True, "onboarding_done": done, "steps": steps})
+                draft.update({
+                    key: value
+                    for key, value in _onboarding_data.items()
+                    if key in draft and value not in ("", None)
+                })
+            self.send_json({
+                "ok": True,
+                "onboarding_done": done,
+                "steps": steps,
+                "data": draft,
+            })
             return
 
         # ── API: Onboarding diagnostics check ─────────────────────────
@@ -2047,24 +2150,75 @@ class _UIHandler(SimpleHTTPRequestHandler):
             self.send_json(s)
             return
 
+        # ── API: Onboarding step 1 - manual key save ─────────────────
+        if self.path == "/api/onboarding/step1-manual":
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len) if content_len else b"{}"
+            try:
+                data = json.loads(body)
+                key = (data.get("key") or "").strip()
+                wxid = (data.get("wxid") or "").strip()
+                db_path = (data.get("db_path") or "").strip()
+                if not key:
+                    raise ValueError("WCDB_KEY 不能为空")
+                with _onboarding_lock:
+                    _onboarding_data["step1_done"] = True
+                    _onboarding_data["key"] = key
+                    _onboarding_data["wxid"] = wxid
+                    _onboarding_data["db_path"] = db_path
+                env_path = _find_or_create_env()
+                _write_env_updates(env_path, {
+                    "WCDB_KEY": key,
+                    "ONBOARDING_WXID": wxid,
+                    "ONBOARDING_DB_PATH": db_path,
+                    "ONBOARDING_STEP1_DONE": "true",
+                })
+                update_status(error="")
+                self.send_json({"ok": True})
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
         # ── API: Onboarding step 2 - WeChat identity ──────────────────
         if self.path == "/api/onboarding/step2":
             content_len = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 data = json.loads(body)
+                from src.config import _sanitize_display_name
+                bot_display_name = _sanitize_display_name(
+                    data.get("bot_display_name", "群聊小助手")
+                )
+                wechat_groups = data.get("wechat_groups", "*") or "*"
+                wechat_backend = data.get("wechat_backend", "wcdb") or "wcdb"
+                key = (data.get("key") or "").strip()
+                wxid = (data.get("wxid") or "").strip()
+                db_path = (data.get("db_path") or "").strip()
                 with _onboarding_lock:
                     _onboarding_data["step2_done"] = True
-                    from src.config import _sanitize_display_name
-                    _onboarding_data["bot_display_name"] = _sanitize_display_name(
-                        data.get("bot_display_name", "群聊小助手")
-                    )
-                    _onboarding_data["wechat_groups"] = data.get("wechat_groups", "*")
-                    _onboarding_data["wechat_backend"] = data.get("wechat_backend", "wcdb")
-                    if data.get("wxid"):
-                        _onboarding_data["wxid"] = data["wxid"]
-                    if data.get("db_path"):
-                        _onboarding_data["db_path"] = data["db_path"]
+                    _onboarding_data["bot_display_name"] = bot_display_name
+                    _onboarding_data["wechat_groups"] = wechat_groups
+                    _onboarding_data["wechat_backend"] = wechat_backend
+                    if key:
+                        _onboarding_data["step1_done"] = True
+                        _onboarding_data["key"] = key
+                    if wxid:
+                        _onboarding_data["wxid"] = wxid
+                    if db_path:
+                        _onboarding_data["db_path"] = db_path
+                updates = {
+                    "BOT_DISPLAY_NAME": bot_display_name,
+                    "WECHAT_GROUPS": wechat_groups,
+                    "WECHAT_BACKEND": wechat_backend,
+                    "ONBOARDING_WXID": wxid,
+                    "ONBOARDING_DB_PATH": db_path,
+                    "ONBOARDING_STEP2_DONE": "true",
+                }
+                if key:
+                    updates["WCDB_KEY"] = key
+                    updates["ONBOARDING_STEP1_DONE"] = "true"
+                env_path = _find_or_create_env()
+                _write_env_updates(env_path, updates)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
@@ -2077,6 +2231,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
             try:
                 data = json.loads(body)
                 ai = _normalize_ai_backend(data.get("ai_backend", "openai_compatible"))
+                ai_updates = _ai_updates_from_config({
+                    **data,
+                    "ai_backend": ai,
+                })
                 with _onboarding_lock:
                     _onboarding_data["step3_done"] = True
                     _onboarding_data["ai_backend"] = ai
@@ -2091,6 +2249,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     _onboarding_data["anthropic_api_key"] = data.get("anthropic_api_key", "")
                     _onboarding_data["anthropic_base_url"] = data.get("anthropic_base_url", "https://api.anthropic.com")
                     _onboarding_data["summarize_model"] = data.get("summarize_model", "")
+                ai_updates["ONBOARDING_STEP3_DONE"] = "true"
+                env_path = _find_or_create_env()
+                _write_env_updates(env_path, ai_updates)
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})
@@ -2101,9 +2262,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
             content_len = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
+                _hydrate_onboarding_from_env()
                 data = json.loads(body)
                 with _onboarding_lock:
                     _onboarding_data["step4_done"] = True
+                    _onboarding_data["step1_done"] = True
+                    _onboarding_data["step2_done"] = True
+                    _onboarding_data["step3_done"] = True
                     _onboarding_data["fun_enabled"] = data.get("fun_enabled", True)
                     _onboarding_data["proactive_enabled"] = data.get("proactive_enabled", False)
                     _onboarding_data["sticky_mention_enabled"] = data.get("sticky_mention_enabled", True)
@@ -2121,15 +2286,20 @@ class _UIHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/onboarding/reset":
             # 1. Reset file-based state
             env_path = _find_or_create_env()
-            _set_env_key(env_path, "ONBOARDING_DONE", "false")
-            _set_env_key(env_path, "WCDB_KEY", "")
+            _write_env_updates(env_path, {
+                "ONBOARDING_DONE": "false",
+                "ONBOARDING_STEP1_DONE": "false",
+                "ONBOARDING_STEP2_DONE": "false",
+                "ONBOARDING_STEP3_DONE": "false",
+                "ONBOARDING_STEP4_DONE": "false",
+                "ONBOARDING_WXID": "",
+                "ONBOARDING_DB_PATH": "",
+                "WCDB_KEY": "",
+            })
             # 2. Reset in-memory state so a fresh extraction can start
             with _onboarding_lock:
-                for k in _onboarding_data:
-                    if isinstance(_onboarding_data[k], bool):
-                        _onboarding_data[k] = False
-                    elif isinstance(_onboarding_data[k], str):
-                        _onboarding_data[k] = ""
+                _onboarding_data.clear()
+                _onboarding_data.update(_DEFAULT_ONBOARDING_DATA)
             with _step1_lock:
                 _step1_state["running"] = False
                 _step1_state["phase"] = "idle"

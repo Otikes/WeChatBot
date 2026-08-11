@@ -149,6 +149,12 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WEBOT_APP_HOME` | `str` | `""` (自动检测) | `src/config.py:_resolve_project_root()` | `src/config.py`, `src/web/server.py`, `desktop.py` |
 | `WEBOT_ENV_FILE` | `str` | `""` | `src/config.py:find_env_file()` | `src/config.py` (显式指定 .env 路径) |
 | `ONBOARDING_DONE` | `bool` | `False` | `.env` 写入 | `src/config.py:is_onboarding_done()`, `src/web/server.py`, `desktop.py` |
+| `ONBOARDING_STEP1_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
+| `ONBOARDING_STEP2_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
+| `ONBOARDING_STEP3_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
+| `ONBOARDING_STEP4_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
+| `ONBOARDING_WXID` | `str` | `""` | `src/web/server.py` 引导流程写入 | `ui/src/components/Onboarding.jsx` 草稿回填 |
+| `ONBOARDING_DB_PATH` | `str` | `""` | `src/web/server.py` 引导流程写入 | `ui/src/components/Onboarding.jsx` 草稿回填 |
 | `WCDB_KEY` | `str` | `""` | `.env` / 引导流程写入 | `src/wechat/wcdb_client.py` |
 | `MAC_WECHAT_SEND_SHORTCUT` | `str` | `"enter"` | `desktop_mac.py` | `src/wechat/mac_ui_backend.py` |
 | `MAC_CHAT_TITLE_CACHE_FILE` | `str` | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
@@ -638,6 +644,11 @@ todo_delete_keywords: list[str] = [
 | `_fetch_ai_models(protocol, api_key, base_url)` | 按协议动态请求模型列表；Chat Completions 调 `/models`，Messages 调 `/v1/models` | `protocol: str, api_key: str, base_url: str` | `dict` |
 | `_detect_wxid_and_db_path()` | 通过共享数据目录探测器检测微信 wxid 和 `session.db` 路径 | 无 | `tuple[str \| None, str \| None]` |
 | `_set_env_key(env_path, key, value)` | 原子设置 .env 键值 | `env_path: Path, key: str, value: str` | `None` |
+| `_read_env_raw(env_path)` | 从 `.env` 读取简单键值对，忽略注释和空行 | `env_path: Path \| None` | `dict[str, str]` |
+| `_write_env_updates(env_path, updates)` | 批量原子写入 `.env` 并同步 `os.environ` | `env_path: Path, updates: dict[str, str \| None]` | `list[str]` |
+| `_onboarding_draft_from_raw(raw)` | 从 `.env` 键值生成引导页可回填草稿 | `raw: dict[str, str]` | `dict` |
+| `_load_onboarding_progress()` | 读取引导草稿和步骤完成标记 | 无 | `tuple[dict, dict[str, bool]]` |
+| `_hydrate_onboarding_from_env()` | 将持久化引导草稿合并回内存状态 | 无 | `tuple[dict, dict[str, bool]]` |
 | `_detect_default_data_dir()` | 检测默认微信数据目录，包含微信 4.x 进程 `--wechat-files-path` | 无 | `str` |
 | `_platform_dependency_report(...)` | 平台依赖诊断 | 可选参数 | `dict` |
 | `_platform_wechat_report(...)` | 微信进程状态诊断 | 可选参数 | `dict` |
@@ -650,7 +661,7 @@ todo_delete_keywords: list[str] = [
 
 | 文件 | 组件名 | 描述 |
 |---|---|---|
-| `Onboarding.jsx` | `Onboarding` | 4步引导流程主容器(侧边栏+步骤内容) |
+| `Onboarding.jsx` | `Onboarding` | 4步引导流程主容器(侧边栏+步骤内容)，启动时从 `/api/onboarding/status` 回填草稿和步骤状态 |
 | `OnboardingSteps.jsx` | `Step3AIConfig` | AI 协议配置步骤；按请求地址和 Key 动态获取模型列表 |
 | `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏) |
 | `Dashboard.jsx` | `MetricCard` | 指标卡片组件(图标/标签/数值/副标题/迷你SVG图表) |
@@ -763,7 +774,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/voice/model-status → 检查 HuggingFace 缓存
   ├── /api/voice/download-model → snapshot_download()
   ├── /api/lots           → load_lots_config() / save_lots_config()
-  ├── /api/onboarding/*   → 引导流程状态管理
+  ├── /api/onboarding/*   → 引导流程状态管理 + .env 草稿持久化/回填
   ├── /api/logs           → _read_recent_logs()
   ├── /api/status         → _status.snapshot()
   ├── /api/browse         → _list_dir_entries()
@@ -1152,12 +1163,13 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/lots` | 保存抽签配置 | 无 |
 | `GET` | `/api/browse?path=` | 浏览文件系统目录 | 无 |
 | `POST` | `/api/wechat-data-dir/detect` | 检测自定义微信数据目录 | 无 |
-| `GET` | `/api/onboarding/status` | 引导流程状态 | 无 |
+| `GET` | `/api/onboarding/status` | 引导流程状态 + `.env` 草稿回填数据 | 无 |
 | `GET` | `/api/onboarding/diagnose` | 系统环境诊断 | 无 |
 | `POST` | `/api/onboarding/step1` | 启动密钥提取(异步) | 无 |
 | `GET` | `/api/onboarding/step1-status` | 轮询密钥提取状态 | 无 |
-| `POST` | `/api/onboarding/step2` | 保存微信配置 | 无 |
-| `POST` | `/api/onboarding/step3` | 保存 AI 配置 | 无 |
+| `POST` | `/api/onboarding/step1-manual` | 保存手动输入的 WCDB 密钥、wxid 和数据库路径 | 无 |
+| `POST` | `/api/onboarding/step2` | 保存微信配置并写入引导步骤草稿 | 无 |
+| `POST` | `/api/onboarding/step3` | 保存 AI 配置并写入引导步骤草稿 | 无 |
 | `POST` | `/api/onboarding/step4` | 保存功能设置+完成引导 | 无 |
 | `POST` | `/api/onboarding/reset` | 重置引导流程 | 无 |
 | `GET` | `/api/voice/model-status?model=small` | 语音模型下载状态 | 无 |
@@ -1676,6 +1688,12 @@ FEISHU_EXPORT_TRIGGER_KEYWORDS=同步到飞书,导出到飞书,写到飞书,沉�
 
 # === 引导流程 ===
 ONBOARDING_DONE=false
+ONBOARDING_STEP1_DONE=false
+ONBOARDING_STEP2_DONE=false
+ONBOARDING_STEP3_DONE=false
+ONBOARDING_STEP4_DONE=false
+ONBOARDING_WXID=
+ONBOARDING_DB_PATH=
 WCDB_KEY=
 ```
 

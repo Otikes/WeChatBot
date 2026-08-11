@@ -14,10 +14,33 @@ const STEPS = [
   { id: 4, label: '功能设置', desc: '选择功能开关' },
 ]
 
+const DEFAULT_ONBOARDING_DATA = {
+  // Step 1
+  key: '', wxid: '', db_path: '',
+  // Step 2
+  bot_display_name: '', wechat_groups: '*',
+  // Step 3
+  ai_backend: 'openai_compatible', deepseek_api_key: '', deepseek_model: '',
+  deepseek_base_url: 'https://api.deepseek.com',
+  openai_api_key: '', openai_base_url: 'https://api.openai.com/v1',
+  openai_model: '',
+  anthropic_api_key: '', anthropic_base_url: 'https://api.anthropic.com',
+  summarize_model: '',
+  // Step 4
+  fun_enabled: true,
+  proactive_enabled: false,
+  sticky_mention_enabled: true,
+}
+
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
   animate: { opacity: 1, x: 0 },
   exit: { opacity: 0, x: -12 },
+}
+
+function apiUrl(path) {
+  if (window.location.port === '5173') return `http://127.0.0.1:7327${path}`
+  return path
 }
 
 export default function Onboarding({ onComplete }) {
@@ -36,23 +59,40 @@ export default function Onboarding({ onComplete }) {
     localStorage.setItem('theme', theme)
   }, [theme])
 
-  const [data, setData] = useState({
-    // Step 1
-    key: '', wxid: '', db_path: '',
-    // Step 2
-    bot_display_name: '', wechat_groups: '*',
-    // Step 3
-    ai_backend: 'openai_compatible', deepseek_api_key: '', deepseek_model: '',
-    deepseek_base_url: 'https://api.deepseek.com',
-    openai_api_key: '', openai_base_url: 'https://api.openai.com/v1',
-    openai_model: '',
-    anthropic_api_key: '', anthropic_base_url: 'https://api.anthropic.com',
-    summarize_model: '',
-    // Step 4
-    fun_enabled: true,
-    proactive_enabled: false,
-    sticky_mention_enabled: true,
-  })
+  const [data, setData] = useState({ ...DEFAULT_ONBOARDING_DATA })
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function restoreDraft() {
+      try {
+        const res = await fetch(apiUrl('/api/onboarding/status'))
+        const d = await res.json()
+        if (!d.ok || cancelled) return
+
+        if (d.data) {
+          setData(prev => ({ ...prev, ...d.data }))
+        }
+
+        if (d.steps) {
+          const restoredDone = {
+            1: Boolean(d.steps.step1),
+            2: Boolean(d.steps.step2),
+            3: Boolean(d.steps.step3),
+            4: Boolean(d.steps.step4),
+          }
+          setStepDone(restoredDone)
+          const next = STEPS.find(step => !restoredDone[step.id])
+          setActiveStep(next ? next.id : 4)
+        }
+      } catch {
+        // Empty state is still usable; every step saves as the user proceeds.
+      }
+    }
+
+    restoreDraft()
+    return () => { cancelled = true }
+  }, [])
 
   function updateData(updates) {
     setData(prev => ({ ...prev, ...updates }))

@@ -66,6 +66,39 @@ CREATE TABLE IF NOT EXISTS group_memory (
     updated_at        REAL    NOT NULL DEFAULT (unixepoch())
 );
 
+-- Single-row structured application state for onboarding drafts.
+-- Final runtime configuration is still mirrored to .env for compatibility
+-- with the existing config loader.
+CREATE TABLE IF NOT EXISTS onboarding_state (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    step1_done              INTEGER NOT NULL DEFAULT 0,
+    step2_done              INTEGER NOT NULL DEFAULT 0,
+    step3_done              INTEGER NOT NULL DEFAULT 0,
+    step4_done              INTEGER NOT NULL DEFAULT 0,
+    onboarding_done         INTEGER NOT NULL DEFAULT 0,
+    wcdb_key                TEXT    NOT NULL DEFAULT '',
+    wxid                    TEXT    NOT NULL DEFAULT '',
+    db_path                 TEXT    NOT NULL DEFAULT '',
+    bot_display_name        TEXT    NOT NULL DEFAULT '',
+    wechat_groups           TEXT    NOT NULL DEFAULT '*',
+    wechat_backend          TEXT    NOT NULL DEFAULT 'wcdb',
+    ai_backend              TEXT    NOT NULL DEFAULT 'openai_compatible',
+    deepseek_api_key        TEXT    NOT NULL DEFAULT '',
+    deepseek_base_url       TEXT    NOT NULL DEFAULT 'https://api.deepseek.com',
+    deepseek_model          TEXT    NOT NULL DEFAULT '',
+    openai_api_key          TEXT    NOT NULL DEFAULT '',
+    openai_base_url         TEXT    NOT NULL DEFAULT 'https://api.openai.com/v1',
+    openai_model            TEXT    NOT NULL DEFAULT '',
+    anthropic_api_key       TEXT    NOT NULL DEFAULT '',
+    anthropic_base_url      TEXT    NOT NULL DEFAULT 'https://api.anthropic.com',
+    summarize_model         TEXT    NOT NULL DEFAULT '',
+    fun_enabled             INTEGER NOT NULL DEFAULT 1,
+    proactive_enabled       INTEGER NOT NULL DEFAULT 0,
+    sticky_mention_enabled  INTEGER NOT NULL DEFAULT 1,
+    created_at              INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at              INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_trigger_chat_time
     ON trigger_log(chat_id, processed_at DESC);
 """

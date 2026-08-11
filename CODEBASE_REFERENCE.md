@@ -148,14 +148,8 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `FEISHU_*` (其他) | — | — | `src/config.py` | `src/integrations/feishu/` (spreadsheet/bitable/doc 模式) |
 | `WEBOT_APP_HOME` | `str` | `""` (自动检测) | `src/config.py:_resolve_project_root()` | `src/config.py`, `src/web/server.py`, `desktop.py` |
 | `WEBOT_ENV_FILE` | `str` | `""` | `src/config.py:find_env_file()` | `src/config.py` (显式指定 .env 路径) |
-| `ONBOARDING_DONE` | `bool` | `False` | `.env` 写入 | `src/config.py:is_onboarding_done()`, `src/web/server.py`, `desktop.py` |
-| `ONBOARDING_STEP1_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
-| `ONBOARDING_STEP2_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
-| `ONBOARDING_STEP3_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
-| `ONBOARDING_STEP4_DONE` | `bool` | `False` | `src/web/server.py` 引导流程写入 | `src/web/server.py:/api/onboarding/status` |
-| `ONBOARDING_WXID` | `str` | `""` | `src/web/server.py` 引导流程写入 | `ui/src/components/Onboarding.jsx` 草稿回填 |
-| `ONBOARDING_DB_PATH` | `str` | `""` | `src/web/server.py` 引导流程写入 | `ui/src/components/Onboarding.jsx` 草稿回填 |
-| `WCDB_KEY` | `str` | `""` | `.env` / 引导流程写入 | `src/wechat/wcdb_client.py` |
+| `ONBOARDING_DONE` | `bool` | `False` | `.env` 写入 | `src/config.py:is_onboarding_done()`, `src/web/server.py`, `desktop.py`；步骤草稿存入 SQLite `onboarding_state` |
+| `WCDB_KEY` | `str` | `""` | `.env` / 引导流程写入 | `src/wechat/wcdb_client.py`；引导草稿副本存入 SQLite `onboarding_state.wcdb_key` |
 | `MAC_WECHAT_SEND_SHORTCUT` | `str` | `"enter"` | `desktop_mac.py` | `src/wechat/mac_ui_backend.py` |
 | `MAC_CHAT_TITLE_CACHE_FILE` | `str` | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
 | `MAC_CHAT_TITLE_MAP` | `str` (JSON) | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
@@ -646,9 +640,15 @@ todo_delete_keywords: list[str] = [
 | `_set_env_key(env_path, key, value)` | 原子设置 .env 键值 | `env_path: Path, key: str, value: str` | `None` |
 | `_read_env_raw(env_path)` | 从 `.env` 读取简单键值对，忽略注释和空行 | `env_path: Path \| None` | `dict[str, str]` |
 | `_write_env_updates(env_path, updates)` | 批量原子写入 `.env` 并同步 `os.environ` | `env_path: Path, updates: dict[str, str \| None]` | `list[str]` |
-| `_onboarding_draft_from_raw(raw)` | 从 `.env` 键值生成引导页可回填草稿 | `raw: dict[str, str]` | `dict` |
-| `_load_onboarding_progress()` | 读取引导草稿和步骤完成标记 | 无 | `tuple[dict, dict[str, bool]]` |
-| `_hydrate_onboarding_from_env()` | 将持久化引导草稿合并回内存状态 | 无 | `tuple[dict, dict[str, bool]]` |
+| `_remove_env_keys(env_path, keys)` | 从 `.env` 和 `os.environ` 移除指定键，用于清理旧引导草稿键 | `env_path: Path, keys: set[str]` | `None` |
+| `_onboarding_db_path()` | 返回结构化应用状态使用的 SQLite 路径 | 无 | `Path` |
+| `_read_onboarding_state()` | 读取 SQLite `onboarding_state` 单行草稿/进度 | 无 | `dict \| None` |
+| `_save_onboarding_state(updates)` | 将引导草稿/步骤进度增量保存到 SQLite | `updates: dict` | `None` |
+| `_reset_onboarding_state()` | 删除 SQLite 引导草稿/进度行 | 无 | `None` |
+| `_onboarding_draft_from_row(row)` | 从 SQLite 行生成引导页可回填草稿 | `row: dict` | `dict` |
+| `_onboarding_draft_from_raw(raw)` | 从旧 `.env` 键值生成引导页可回填草稿(兼容迁移) | `raw: dict[str, str]` | `dict` |
+| `_load_onboarding_progress()` | 读取引导草稿、步骤完成标记和整体完成状态，优先 SQLite，回退旧 `.env` | 无 | `tuple[dict, dict[str, bool], bool]` |
+| `_hydrate_onboarding_from_store()` | 将持久化引导草稿合并回内存状态 | 无 | `tuple[dict, dict[str, bool], bool]` |
 | `_detect_default_data_dir()` | 检测默认微信数据目录，包含微信 4.x 进程 `--wechat-files-path` | 无 | `str` |
 | `_platform_dependency_report(...)` | 平台依赖诊断 | 可选参数 | `dict` |
 | `_platform_wechat_report(...)` | 微信进程状态诊断 | 可选参数 | `dict` |
@@ -774,7 +774,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/voice/model-status → 检查 HuggingFace 缓存
   ├── /api/voice/download-model → snapshot_download()
   ├── /api/lots           → load_lots_config() / save_lots_config()
-  ├── /api/onboarding/*   → 引导流程状态管理 + .env 草稿持久化/回填
+  ├── /api/onboarding/*   → 引导流程状态管理 + SQLite 草稿/进度持久化，最终运行配置写入 .env
   ├── /api/logs           → _read_recent_logs()
   ├── /api/status         → _status.snapshot()
   ├── /api/browse         → _list_dir_entries()
@@ -1163,19 +1163,55 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/lots` | 保存抽签配置 | 无 |
 | `GET` | `/api/browse?path=` | 浏览文件系统目录 | 无 |
 | `POST` | `/api/wechat-data-dir/detect` | 检测自定义微信数据目录 | 无 |
-| `GET` | `/api/onboarding/status` | 引导流程状态 + `.env` 草稿回填数据 | 无 |
+| `GET` | `/api/onboarding/status` | 引导流程状态 + SQLite 草稿回填数据(兼容旧 `.env` 草稿读取) | 无 |
 | `GET` | `/api/onboarding/diagnose` | 系统环境诊断 | 无 |
 | `POST` | `/api/onboarding/step1` | 启动密钥提取(异步) | 无 |
 | `GET` | `/api/onboarding/step1-status` | 轮询密钥提取状态 | 无 |
-| `POST` | `/api/onboarding/step1-manual` | 保存手动输入的 WCDB 密钥、wxid 和数据库路径 | 无 |
-| `POST` | `/api/onboarding/step2` | 保存微信配置并写入引导步骤草稿 | 无 |
-| `POST` | `/api/onboarding/step3` | 保存 AI 配置并写入引导步骤草稿 | 无 |
-| `POST` | `/api/onboarding/step4` | 保存功能设置+完成引导 | 无 |
-| `POST` | `/api/onboarding/reset` | 重置引导流程 | 无 |
+| `POST` | `/api/onboarding/step1-manual` | 保存手动输入的 WCDB 密钥、wxid 和数据库路径到 SQLite，镜像 `WCDB_KEY` 到 `.env` | 无 |
+| `POST` | `/api/onboarding/step2` | 保存微信配置到 SQLite，并将运行时微信配置镜像到 `.env` | 无 |
+| `POST` | `/api/onboarding/step3` | 保存 AI 配置到 SQLite，并将运行时 AI 配置镜像到 `.env` | 无 |
+| `POST` | `/api/onboarding/step4` | 保存功能设置、标记完成引导，并写入最终 `.env` 运行配置 | 无 |
+| `POST` | `/api/onboarding/reset` | 删除 SQLite 引导状态并清理兼容 `.env` 键 | 无 |
 | `GET` | `/api/voice/model-status?model=small` | 语音模型下载状态 | 无 |
 | `POST` | `/api/voice/download-model` | 触发语音模型下载 | 无 |
 | `GET` | `/api/macos/diagnose` | macOS 微信权限诊断 | 无 |
 | `GET` | `/ws` | WebSocket 升级 (状态推送) | 无 |
+
+#### 引导状态数据库表
+
+引导流程的步骤完成度、WCDB 草稿信息、微信配置草稿、AI 配置草稿和功能开关草稿存入应用 SQLite 数据库的单行表；`.env` 只保留启动兼容需要的最终运行配置，例如 `ONBOARDING_DONE` 和 `WCDB_KEY`。
+
+```sql
+CREATE TABLE onboarding_state (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    step1_done              INTEGER NOT NULL DEFAULT 0,
+    step2_done              INTEGER NOT NULL DEFAULT 0,
+    step3_done              INTEGER NOT NULL DEFAULT 0,
+    step4_done              INTEGER NOT NULL DEFAULT 0,
+    onboarding_done         INTEGER NOT NULL DEFAULT 0,
+    wcdb_key                TEXT    NOT NULL DEFAULT '',
+    wxid                    TEXT    NOT NULL DEFAULT '',
+    db_path                 TEXT    NOT NULL DEFAULT '',
+    bot_display_name        TEXT    NOT NULL DEFAULT '',
+    wechat_groups           TEXT    NOT NULL DEFAULT '*',
+    wechat_backend          TEXT    NOT NULL DEFAULT 'wcdb',
+    ai_backend              TEXT    NOT NULL DEFAULT 'openai_compatible',
+    deepseek_api_key        TEXT    NOT NULL DEFAULT '',
+    deepseek_base_url       TEXT    NOT NULL DEFAULT 'https://api.deepseek.com',
+    deepseek_model          TEXT    NOT NULL DEFAULT '',
+    openai_api_key          TEXT    NOT NULL DEFAULT '',
+    openai_base_url         TEXT    NOT NULL DEFAULT 'https://api.openai.com/v1',
+    openai_model            TEXT    NOT NULL DEFAULT '',
+    anthropic_api_key       TEXT    NOT NULL DEFAULT '',
+    anthropic_base_url      TEXT    NOT NULL DEFAULT 'https://api.anthropic.com',
+    summarize_model         TEXT    NOT NULL DEFAULT '',
+    fun_enabled             INTEGER NOT NULL DEFAULT 1,
+    proactive_enabled       INTEGER NOT NULL DEFAULT 0,
+    sticky_mention_enabled  INTEGER NOT NULL DEFAULT 1,
+    created_at              INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    updated_at              INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+```
 
 #### WebSocket 消息类型
 
@@ -1687,13 +1723,8 @@ FEISHU_KNOWLEDGE_BASE_NAME=webot 群聊沉淀
 FEISHU_EXPORT_TRIGGER_KEYWORDS=同步到飞书,导出到飞书,写到飞书,沉淀到飞书
 
 # === 引导流程 ===
+# 草稿/步骤进度存储在 SQLite onboarding_state 表。
 ONBOARDING_DONE=false
-ONBOARDING_STEP1_DONE=false
-ONBOARDING_STEP2_DONE=false
-ONBOARDING_STEP3_DONE=false
-ONBOARDING_STEP4_DONE=false
-ONBOARDING_WXID=
-ONBOARDING_DB_PATH=
 WCDB_KEY=
 ```
 

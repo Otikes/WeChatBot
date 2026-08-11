@@ -1779,9 +1779,46 @@ class OnboardingApiTests(unittest.TestCase):
 
     def setUp(self):
         from src.web import server
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.tmp_dir = Path(self.tmp.name)
+        self.env_path = self.tmp_dir / ".env"
+        self.env_path.write_text("", encoding="utf-8")
+        self.db_path = self.tmp_dir / "messages.db"
+        self.db_patch = patch(
+            "src.web.server._onboarding_db_path",
+            return_value=self.db_path,
+        )
+        self.env_patch = patch(
+            "src.web.server._find_or_create_env",
+            return_value=self.env_path,
+        )
+        self.find_env_patch = patch(
+            "src.config.find_env_file",
+            return_value=self.env_path,
+        )
+        self.db_patch.start()
+        self.env_patch.start()
+        self.find_env_patch.start()
+        self.addCleanup(self.db_patch.stop)
+        self.addCleanup(self.env_patch.stop)
+        self.addCleanup(self.find_env_patch.stop)
         with server._onboarding_lock:
             server._onboarding_data.clear()
             server._onboarding_data.update(server._DEFAULT_ONBOARDING_DATA)
+
+    def _read_onboarding_row(self) -> dict | None:
+        if not self.db_path.exists():
+            return None
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT * FROM onboarding_state WHERE id = 1"
+            ).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
 
     def test_onboarding_status_returns_steps(self):
         """GET /api/onboarding/status returns step completion info."""
@@ -1809,94 +1846,92 @@ class OnboardingApiTests(unittest.TestCase):
             self.assertTrue(body["onboarding_done"])
 
     def test_onboarding_status_returns_saved_draft(self):
-        """GET /api/onboarding/status returns saved draft fields from .env."""
-        tmp_dir = Path(tempfile.mkdtemp())
-        tmp_env = tmp_dir / ".env"
-        tmp_env.write_text(
-            "ONBOARDING_DONE=false\n"
-            "ONBOARDING_STEP1_DONE=true\n"
-            "ONBOARDING_STEP2_DONE=true\n"
-            "ONBOARDING_STEP3_DONE=true\n"
-            "WCDB_KEY=abc123\n"
-            "ONBOARDING_WXID=wxid_test\n"
-            "ONBOARDING_DB_PATH=C:\\\\WeChat\\\\session.db\n"
-            "BOT_DISPLAY_NAME=SavedBot\n"
-            "WECHAT_GROUPS=*\n"
-            "AI_BACKEND=openai_compatible\n"
-            "OPENAI_API_KEY=sk-saved\n"
-            "OPENAI_BASE_URL=relay.example.com/v1/chat/completions\n"
-            "OPENAI_MODEL=saved-model\n",
-            encoding="utf-8",
-        )
-        try:
-            with (
-                patch("src.config.find_env_file", return_value=tmp_env),
-                patch("src.config.is_onboarding_done", return_value=False),
-            ):
-                handler, sock = _build_handler("/api/onboarding/status")
-                parts = sock.get_response_text().split("\r\n\r\n", 1)
-                body = json.loads(parts[1])
-            self.assertTrue(body["steps"]["step1"])
-            self.assertTrue(body["steps"]["step2"])
-            self.assertTrue(body["steps"]["step3"])
-            self.assertFalse(body["steps"]["step4"])
-            self.assertEqual(body["data"]["key"], "abc123")
-            self.assertEqual(body["data"]["wxid"], "wxid_test")
-            self.assertEqual(body["data"]["bot_display_name"], "SavedBot")
-            self.assertEqual(body["data"]["openai_base_url"], "https://relay.example.com/v1")
-            self.assertEqual(body["data"]["openai_model"], "saved-model")
-        finally:
-            tmp_env.unlink(missing_ok=True)
-            for f in tmp_dir.glob("*"):
-                f.unlink(missing_ok=True)
-            tmp_dir.rmdir()
+        """GET /api/onboarding/status returns saved draft fields from SQLite."""
+        from src.web import server
+
+        server._save_onboarding_state({
+            "step1_done": True,
+            "step2_done": True,
+            "step3_done": True,
+            "key": "abc123",
+            "wxid": "wxid_test",
+            "db_path": "C:\\WeChat\\session.db",
+            "bot_display_name": "SavedBot",
+            "wechat_groups": "*",
+            "ai_backend": "openai_compatible",
+            "openai_api_key": "sk-saved",
+            "openai_base_url": "relay.example.com/v1/chat/completions",
+            "openai_model": "saved-model",
+        })
+        with patch("src.config.is_onboarding_done", return_value=False):
+            handler, sock = _build_handler("/api/onboarding/status")
+            parts = sock.get_response_text().split("\r\n\r\n", 1)
+            body = json.loads(parts[1])
+        self.assertTrue(body["steps"]["step1"])
+        self.assertTrue(body["steps"]["step2"])
+        self.assertTrue(body["steps"]["step3"])
+        self.assertFalse(body["steps"]["step4"])
+        self.assertEqual(body["data"]["key"], "abc123")
+        self.assertEqual(body["data"]["wxid"], "wxid_test")
+        self.assertEqual(body["data"]["bot_display_name"], "SavedBot")
+        self.assertEqual(body["data"]["openai_base_url"], "https://relay.example.com/v1")
+        self.assertEqual(body["data"]["openai_model"], "saved-model")
 
     def test_onboarding_reset_returns_ok(self):
         """POST /api/onboarding/reset returns ok=True."""
-        with patch("src.web.server._find_or_create_env") as mock_find:
-            fake_env = MagicMock()
-            fake_env.exists.return_value = True
-            fake_env.with_suffix.return_value = fake_env
-            mock_find.return_value = fake_env
-            with patch("os.replace"):
-                handler, sock = _build_handler(
-                    "/api/onboarding/reset", method="POST",
-                )
-                parts = sock.get_response_text().split("\r\n\r\n", 1)
-                body = json.loads(parts[1])
-                self.assertTrue(body["ok"])
+        from src.web import server
+
+        server._save_onboarding_state({
+            "step1_done": True,
+            "key": "abc123",
+            "wxid": "wxid_reset",
+        })
+        self.env_path.write_text(
+            "ONBOARDING_DONE=true\n"
+            "ONBOARDING_STEP1_DONE=true\n"
+            "ONBOARDING_WXID=wxid_reset\n"
+            "WCDB_KEY=abc123\n",
+            encoding="utf-8",
+        )
+        handler, sock = _build_handler(
+            "/api/onboarding/reset", method="POST",
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        body = json.loads(parts[1])
+        self.assertTrue(body["ok"])
+        self.assertIsNone(self._read_onboarding_row())
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn("ONBOARDING_DONE=false", saved)
+        self.assertIn("WCDB_KEY=", saved)
+        self.assertNotIn("ONBOARDING_STEP1_DONE", saved)
+        self.assertNotIn("ONBOARDING_WXID", saved)
 
     def test_onboarding_step1_manual_persists_data(self):
         """POST /api/onboarding/step1-manual persists manual key data."""
-        tmp_dir = Path(tempfile.mkdtemp())
-        tmp_env = tmp_dir / ".env"
-        tmp_env.write_text("", encoding="utf-8")
         key = "a" * 64
         post_body = json.dumps({
             "key": key,
             "wxid": "wxid_manual",
             "db_path": "C:\\WeChat\\session.db",
         }).encode()
-        try:
-            with patch("src.web.server._find_or_create_env", return_value=tmp_env):
-                handler, sock = _build_handler(
-                    "/api/onboarding/step1-manual", method="POST",
-                    body=post_body,
-                    headers={"Content-Type": "application/json",
-                             "Content-Length": str(len(post_body))},
-                )
-                parts = sock.get_response_text().split("\r\n\r\n", 1)
-                result = json.loads(parts[1])
-                self.assertTrue(result["ok"])
-            saved = tmp_env.read_text(encoding="utf-8")
-            self.assertIn(f"WCDB_KEY={key}", saved)
-            self.assertIn("ONBOARDING_WXID=wxid_manual", saved)
-            self.assertIn("ONBOARDING_STEP1_DONE=true", saved)
-        finally:
-            tmp_env.unlink(missing_ok=True)
-            for f in tmp_dir.glob("*"):
-                f.unlink(missing_ok=True)
-            tmp_dir.rmdir()
+        handler, sock = _build_handler(
+            "/api/onboarding/step1-manual", method="POST",
+            body=post_body,
+            headers={"Content-Type": "application/json",
+                     "Content-Length": str(len(post_body))},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        row = self._read_onboarding_row()
+        self.assertEqual(row["step1_done"], 1)
+        self.assertEqual(row["wcdb_key"], key)
+        self.assertEqual(row["wxid"], "wxid_manual")
+        self.assertEqual(row["db_path"], "C:\\WeChat\\session.db")
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn(f"WCDB_KEY={key}", saved)
+        self.assertNotIn("ONBOARDING_WXID", saved)
+        self.assertNotIn("ONBOARDING_STEP1_DONE", saved)
 
     def test_onboarding_step2_posts_data(self):
         """POST /api/onboarding/step2 accepts WeChat identity data."""
@@ -1916,9 +1951,6 @@ class OnboardingApiTests(unittest.TestCase):
 
     def test_onboarding_step2_persists_progress(self):
         """POST /api/onboarding/step2 persists WeChat config immediately."""
-        tmp_dir = Path(tempfile.mkdtemp())
-        tmp_env = tmp_dir / ".env"
-        tmp_env.write_text("", encoding="utf-8")
         post_body = json.dumps({
             "bot_display_name": "SavedBot",
             "wechat_groups": "*",
@@ -1927,27 +1959,29 @@ class OnboardingApiTests(unittest.TestCase):
             "wxid": "wxid_step2",
             "db_path": "C:\\WeChat\\session.db",
         }).encode()
-        try:
-            with patch("src.web.server._find_or_create_env", return_value=tmp_env):
-                handler, sock = _build_handler(
-                    "/api/onboarding/step2", method="POST",
-                    body=post_body,
-                    headers={"Content-Type": "application/json",
-                             "Content-Length": str(len(post_body))},
-                )
-                parts = sock.get_response_text().split("\r\n\r\n", 1)
-                result = json.loads(parts[1])
-                self.assertTrue(result["ok"])
-            saved = tmp_env.read_text(encoding="utf-8")
-            self.assertIn("BOT_DISPLAY_NAME=SavedBot", saved)
-            self.assertIn("WECHAT_GROUPS=*", saved)
-            self.assertIn("ONBOARDING_STEP2_DONE=true", saved)
-            self.assertIn("ONBOARDING_STEP1_DONE=true", saved)
-        finally:
-            tmp_env.unlink(missing_ok=True)
-            for f in tmp_dir.glob("*"):
-                f.unlink(missing_ok=True)
-            tmp_dir.rmdir()
+        handler, sock = _build_handler(
+            "/api/onboarding/step2", method="POST",
+            body=post_body,
+            headers={"Content-Type": "application/json",
+                     "Content-Length": str(len(post_body))},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        row = self._read_onboarding_row()
+        self.assertEqual(row["step2_done"], 1)
+        self.assertEqual(row["step1_done"], 1)
+        self.assertEqual(row["bot_display_name"], "SavedBot")
+        self.assertEqual(row["wechat_groups"], "*")
+        self.assertEqual(row["wcdb_key"], "b" * 64)
+        self.assertEqual(row["wxid"], "wxid_step2")
+        self.assertEqual(row["db_path"], "C:\\WeChat\\session.db")
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn("BOT_DISPLAY_NAME=SavedBot", saved)
+        self.assertIn("WECHAT_GROUPS=*", saved)
+        self.assertIn(f"WCDB_KEY={'b' * 64}", saved)
+        self.assertNotIn("ONBOARDING_STEP2_DONE", saved)
+        self.assertNotIn("ONBOARDING_STEP1_DONE", saved)
 
     def test_onboarding_step3_posts_data(self):
         """POST /api/onboarding/step3 accepts AI backend config."""
@@ -1967,36 +2001,31 @@ class OnboardingApiTests(unittest.TestCase):
 
     def test_onboarding_step3_persists_progress(self):
         """POST /api/onboarding/step3 persists AI config immediately."""
-        tmp_dir = Path(tempfile.mkdtemp())
-        tmp_env = tmp_dir / ".env"
-        tmp_env.write_text("", encoding="utf-8")
         post_body = json.dumps({
             "ai_backend": "openai_compatible",
             "openai_api_key": "",
             "openai_base_url": "relay.example.com/v1/chat/completions",
             "openai_model": "saved-model",
         }).encode()
-        try:
-            with patch("src.web.server._find_or_create_env", return_value=tmp_env):
-                handler, sock = _build_handler(
-                    "/api/onboarding/step3", method="POST",
-                    body=post_body,
-                    headers={"Content-Type": "application/json",
-                             "Content-Length": str(len(post_body))},
-                )
-                parts = sock.get_response_text().split("\r\n\r\n", 1)
-                result = json.loads(parts[1])
-                self.assertTrue(result["ok"])
-            saved = tmp_env.read_text(encoding="utf-8")
-            self.assertIn("AI_BACKEND=openai_compatible", saved)
-            self.assertIn("OPENAI_BASE_URL=https://relay.example.com/v1", saved)
-            self.assertIn("OPENAI_MODEL=saved-model", saved)
-            self.assertIn("ONBOARDING_STEP3_DONE=true", saved)
-        finally:
-            tmp_env.unlink(missing_ok=True)
-            for f in tmp_dir.glob("*"):
-                f.unlink(missing_ok=True)
-            tmp_dir.rmdir()
+        handler, sock = _build_handler(
+            "/api/onboarding/step3", method="POST",
+            body=post_body,
+            headers={"Content-Type": "application/json",
+                     "Content-Length": str(len(post_body))},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        row = self._read_onboarding_row()
+        self.assertEqual(row["step3_done"], 1)
+        self.assertEqual(row["ai_backend"], "openai_compatible")
+        self.assertEqual(row["openai_base_url"], "https://relay.example.com/v1")
+        self.assertEqual(row["openai_model"], "saved-model")
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn("AI_BACKEND=openai_compatible", saved)
+        self.assertIn("OPENAI_BASE_URL=https://relay.example.com/v1", saved)
+        self.assertIn("OPENAI_MODEL=saved-model", saved)
+        self.assertNotIn("ONBOARDING_STEP3_DONE", saved)
 
     def test_onboarding_step3_posts_openai_compatible_data(self):
         """POST /api/onboarding/step3 accepts OpenAI-compatible config."""
@@ -2017,28 +2046,38 @@ class OnboardingApiTests(unittest.TestCase):
 
     def test_onboarding_step4_posts_data(self):
         """POST /api/onboarding/step4 writes to .env and returns ok."""
-        with patch("src.web.server._find_or_create_env") as mock_find:
-            fake_env = MagicMock()
-            fake_env.exists.return_value = True
-            fake_env.with_suffix.return_value = fake_env
-            mock_find.return_value = fake_env
-            with (
-                patch("os.replace") as mock_replace,
-                patch("src.web.server._write_onboarding_to_env"),
-            ):
-                post_body = json.dumps({
-                    "fun_enabled": True,
-                    "proactive_enabled": False,
-                    "sticky_mention_enabled": True,
-                })
-                handler, sock = _build_handler(
-                    "/api/onboarding/step4", method="POST",
-                    body=post_body.encode(),
-                    headers={"Content-Type": "application/json"},
-                )
-                parts = sock.get_response_text().split("\r\n\r\n", 1)
-                result = json.loads(parts[1])
-                self.assertTrue(result["ok"])
+        from src.web import server
+
+        server._save_onboarding_state({
+            "step1_done": True,
+            "step2_done": True,
+            "step3_done": True,
+            "key": "c" * 64,
+            "bot_display_name": "FinalBot",
+            "wechat_groups": "*",
+            "openai_model": "final-model",
+        })
+        post_body = json.dumps({
+            "fun_enabled": True,
+            "proactive_enabled": False,
+            "sticky_mention_enabled": True,
+        })
+        handler, sock = _build_handler(
+            "/api/onboarding/step4", method="POST",
+            body=post_body.encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        row = self._read_onboarding_row()
+        self.assertEqual(row["step4_done"], 1)
+        self.assertEqual(row["onboarding_done"], 1)
+        self.assertEqual(row["wcdb_key"], "c" * 64)
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn("ONBOARDING_DONE=true", saved)
+        self.assertIn("WCDB_KEY=" + "c" * 64, saved)
+        self.assertNotIn("ONBOARDING_STEP4_DONE", saved)
 
 
 # ---------------------------------------------------------------------------

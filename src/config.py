@@ -87,6 +87,72 @@ def _resolve_project_root() -> Path:
 PROJECT_ROOT = _resolve_project_root()
 
 
+def _clean_path_value(raw: str | Path | None) -> str:
+    """Normalize a path-like config value without touching path separators."""
+    if raw is None:
+        return ""
+    return os.path.expandvars(str(raw).strip().strip('"').strip("'"))
+
+
+def resolve_webot_data_dir(raw: str | Path | None = None) -> Path:
+    """Return the effective directory for webot-owned runtime data.
+
+    ``WEBOT_DATA_DIR`` is intentionally separate from ``WECHAT_DATA_DIR``:
+    the former stores files created by webot itself, while the latter points
+    at WeChat's own account data directory.
+    """
+    value = _clean_path_value(
+        os.getenv("WEBOT_DATA_DIR", "").strip() if raw is None else raw
+    )
+    app_home = _clean_path_value(os.getenv("WEBOT_APP_HOME", ""))
+    base_dir = Path(app_home).expanduser().resolve() if app_home else PROJECT_ROOT
+    data_dir = Path(value).expanduser() if value else base_dir / "data"
+    if not data_dir.is_absolute():
+        data_dir = base_dir / data_dir
+    return data_dir.resolve()
+
+
+def get_webot_data_dir() -> Path:
+    """Return the current webot-owned data directory from environment."""
+    return resolve_webot_data_dir()
+
+
+def webot_data_path(*parts: str | Path) -> Path:
+    """Return a path under the configured webot data directory."""
+    return get_webot_data_dir().joinpath(*parts)
+
+
+def resolve_webot_storage_path(
+    raw: str | Path | None,
+    legacy_default: str,
+) -> Path:
+    """Resolve a configurable webot-owned file path.
+
+    Legacy defaults such as ``data/messages.db`` and ``data/bot.log`` are
+    treated as relative to ``WEBOT_DATA_DIR`` so old .env files automatically
+    follow the new data directory.  Any other explicit path remains an override.
+    """
+    value = _clean_path_value(raw)
+    legacy = _clean_path_value(legacy_default)
+
+    def _norm(path_value: str) -> str:
+        return path_value.replace("\\", "/").lstrip("./")
+
+    if not value or _norm(value) == _norm(legacy):
+        legacy_path = Path(legacy)
+        parts = legacy_path.parts
+        if parts and parts[0].lower() == "data":
+            parts = parts[1:]
+        return webot_data_path(*parts)
+
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        app_home = _clean_path_value(os.getenv("WEBOT_APP_HOME", ""))
+        base_dir = Path(app_home).expanduser().resolve() if app_home else PROJECT_ROOT
+        path = base_dir / path
+    return path.resolve()
+
+
 def find_env_file() -> Path | None:
     """Find the .env file using a consistent search order.
 
@@ -170,6 +236,11 @@ class BotConfig:
     # Set to the parent directory containing wxid_* folders (e.g. D:\WeChatData).
     wechat_data_dir: str = ""
 
+    # === webot Data Storage ===
+    # Custom directory for files created by webot itself (SQLite DB, logs,
+    # nicknames, welcome templates, caches).  Leave empty to use ./data.
+    webot_data_dir: str = "data"
+
     # === Bot Identity ===
     bot_display_name: str = "群聊小助手"
     # Admin wxid (can manage nicknames and bot settings)
@@ -229,7 +300,7 @@ class BotConfig:
     # === Welcome New Member ===
     # Master switch — automatically send a welcome message when a new
     # member joins a group chat.  Welcome templates and per-group settings
-    # are stored in data/welcome_templates.json.
+    # are stored in the configured webot data directory.
     welcome_enabled: bool = False
 
     # === Sticky Mention ===
@@ -480,9 +551,13 @@ def load_config() -> BotConfig:
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_groups": _decode_wechat_groups(os.getenv("WECHAT_GROUPS", "*")),
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),
+        "webot_data_dir": str(get_webot_data_dir()),
         "bot_display_name": _sanitize_display_name(os.getenv("BOT_DISPLAY_NAME", "群聊小助手")),
         "admin_wxid": os.getenv("ADMIN_WXID", "").strip(),
-        "db_path": os.getenv("DB_PATH", "data/messages.db").strip(),
+        "db_path": str(resolve_webot_storage_path(
+            os.getenv("DB_PATH", "data/messages.db"),
+            "data/messages.db",
+        )),
         "poll_interval_sec": float(os.getenv("POLL_INTERVAL_SEC", "1.0")),
         "dedup_window_sec": int(os.getenv("DEDUP_WINDOW_SEC", "60")),
         "max_messages_for_summary": int(os.getenv("MAX_MESSAGES_FOR_SUMMARY", "5000")),
@@ -521,7 +596,10 @@ def load_config() -> BotConfig:
         "todo_completed_retention_days": int(os.getenv("TODO_COMPLETED_RETENTION_DAYS", "30")),
         "todo_deleted_retention_days": int(os.getenv("TODO_DELETED_RETENTION_DAYS", "30")),
         "log_level": os.getenv("LOG_LEVEL", "INFO").strip(),
-        "log_file": os.getenv("LOG_FILE", "data/bot.log").strip(),
+        "log_file": str(resolve_webot_storage_path(
+            os.getenv("LOG_FILE", "data/bot.log"),
+            "data/bot.log",
+        )),
         # Voice recognition
         "voice_asr_enabled": os.getenv("VOICE_ASR_ENABLED", "false").strip().lower() == "true",
         "voice_asr_backend": os.getenv("VOICE_ASR_BACKEND", "local_whisper").strip(),

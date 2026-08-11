@@ -98,6 +98,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
 | `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
+| `WEBOT_DATA_DIR` | `str` | 当前应用目录下 `data/` (留空) | `src/config.py` | `src/config.py` 路径辅助函数；webot 自有 DB、日志、昵称、模板、群缓存、语音缓存、崩溃日志 |
 | `BOT_DISPLAY_NAME` | `str` | `"群聊小助手"` | `src/config.py` (经 `_sanitize_display_name` 清洗) | `src/router.py:handle()` (多处), `src/bot.py:_log_banner()` |
 | `ADMIN_WXID` | `str` | `""` | `src/config.py` | `src/router.py:handle()` (管理员命令判断) |
 | `TRIGGER_KEYWORDS` | `list[str]` | 见下方默认值 | `src/config.py` | `src/trigger/detector.py:TriggerDetector.__init__()` |
@@ -126,8 +127,8 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `MAX_MESSAGES_FOR_SUMMARY` | `int` | `5000` | `src/config.py` | `src/router.py:_handle_summary()` |
 | `CHUNK_SIZE` | `int` | `400` | `src/config.py` | `src/summarize/__init__.py:create_summarizer()` → 各后端 |
 | `LOG_LEVEL` | `str` | `"INFO"` | `src/config.py` | `src/bot.py:run()` → `setup_logging()` |
-| `LOG_FILE` | `str` | `"data/bot.log"` | `src/config.py` | `src/bot.py:run()` → `setup_logging()` |
-| `DB_PATH` | `str` | `"data/messages.db"` | `src/config.py` | `src/bot.py:run()` → `initialize_db()` |
+| `LOG_FILE` | `str` | `"data/bot.log"` (legacy 默认跟随 `WEBOT_DATA_DIR`) | `src/config.py` | `src/bot.py:run()` → `setup_logging()` |
+| `DB_PATH` | `str` | `"data/messages.db"` (legacy 默认跟随 `WEBOT_DATA_DIR`) | `src/config.py` | `src/bot.py:run()` → `initialize_db()` |
 | `VOICE_ASR_ENABLED` | `bool` | `False` | `src/config.py` | `src/voice/pipeline.py:VoicePipeline.__init__()` |
 | `VOICE_ASR_BACKEND` | `str` | `"local_whisper"` | `src/config.py` | `src/voice/asr.py:create_asr()` |
 | `VOICE_ASR_LANGUAGE` | `str` | `"zh"` | `src/config.py` | `src/voice/pipeline.py:VoicePipeline.__init__()` |
@@ -174,8 +175,8 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WECHAT_PROCESS_NAMES` | `set` | `{"wechat.exe", "weixin.exe"}` | `src/wechat/window_controller.py` | 微信进程名集合 |
 | `MIN_WINDOW_WIDTH` / `MIN_WINDOW_HEIGHT` | `int` | `200` | `src/wechat/window_controller.py` | 窗口最小尺寸验证 |
 | `MSG_TYPE_MAP` | `dict` | 见代码 | `src/wechat/helpers.py` | 消息类型映射表 |
-| `DEFAULT_NICKNAME_PATH` | `Path` | `data/nicknames.json` | `src/nickname.py` | 昵称映射文件路径 |
-| `DEFAULT_WELCOME_CONFIG_PATH` | `Path` | `data/welcome_templates.json` | `src/welcome.py` | 欢迎模板文件路径 |
+| `DEFAULT_NICKNAME_PATH` | `Path` | `<WEBOT_DATA_DIR>/nicknames.json` | `src/nickname.py` | 昵称映射文件路径 |
+| `DEFAULT_WELCOME_CONFIG_PATH` | `Path` | `<WEBOT_DATA_DIR>/welcome_templates.json` | `src/welcome.py` | 欢迎模板文件路径 |
 | `HEX_KEY_LEN` | `int` | `64` | `src/wechat/mac_weflow_client.py` | WCDB 密钥长度 |
 | `_CACHE_MAX_ENTRIES` | `int` | `10000` | `src/voice/pipeline.py` | 语音缓存最大条目 |
 | `_CACHE_TTL_SEC` | `int` | `604800` (7天) | `src/voice/pipeline.py` | 语音缓存过期时间 |
@@ -219,10 +220,15 @@ todo_delete_keywords: list[str] = [
 | `_decode_wechat_groups(raw)` | ~20 | URL解码微信群名称 | `raw: str` | `str` (逗号分隔的解码后群名) |
 | `_sanitize_display_name(name)` | ~40 | 清理机器人显示名中的危险字符 | `name: str` | `str` |
 | `_resolve_project_root()` | ~70 | 解析项目根目录(支持 EXE frozen 模式) | 无 | `Path` |
-| `find_env_file()` | ~85 | 按优先级查找 .env 文件 | 无 | `Path \| None` |
-| `load_config()` | ~180 | 从环境变量加载并验证配置 | 无 | `BotConfig` |
-| `_validate_config(kwargs)` | ~240 | 验证数值配置范围 | `kwargs: dict` | `None` (无效时抛 RuntimeError) |
-| `is_onboarding_done()` | ~370 | 检查引导流程是否完成 | 无 | `bool` |
+| `_clean_path_value(raw)` | ~90 | 清理路径配置值，去掉引号并展开环境变量 | `raw: str \| Path \| None` | `str` |
+| `resolve_webot_data_dir(raw=None)` | ~97 | 解析 webot 自有数据目录；留空默认当前 `WEBOT_APP_HOME`/应用目录下 `data/` | `raw: str \| Path \| None` | `Path` |
+| `get_webot_data_dir()` | ~113 | 从当前环境读取并返回 webot 自有数据目录 | 无 | `Path` |
+| `webot_data_path(*parts)` | ~118 | 拼接 webot 自有数据目录下的文件/子目录路径 | `*parts: str \| Path` | `Path` |
+| `resolve_webot_storage_path(raw, legacy_default)` | ~123 | 解析 webot 自有文件路径；`data/messages.db`、`data/bot.log` 等 legacy 默认跟随 `WEBOT_DATA_DIR`，显式自定义路径保留覆盖 | `raw: str \| Path \| None, legacy_default: str` | `Path` |
+| `find_env_file()` | ~152 | 按优先级查找 .env 文件 | 无 | `Path \| None` |
+| `_validate_config(kwargs)` | ~352 | 验证数值配置范围 | `kwargs: dict` | `None` (无效时抛 RuntimeError) |
+| `load_config()` | ~471 | 从环境变量加载并验证配置，解析 `WEBOT_DATA_DIR`、`DB_PATH`、`LOG_FILE` 的有效路径 | 无 | `BotConfig` |
+| `is_onboarding_done()` | ~637 | 检查引导流程是否完成 | 无 | `bool` |
 
 ### 2.2 `src/bot.py`
 
@@ -335,7 +341,7 @@ todo_delete_keywords: list[str] = [
 | `_merge_chatrooms(target, source)` | 合并群聊元数据，优先保留真实群名 | `target: dict, source: dict` | `int` |
 | `_chatrooms_from_records(records)` | 从 session/contact 记录收集 `@chatroom` 群聊元数据 | `records` | `dict[str, dict]` |
 | `_chatrooms_from_contacts()` | 从联系人列表加载群聊，作为 session 缺失时的兜底 | 无 | `dict[str, dict]` |
-| `_load_cached_group_names()` | 读取 `data/group_names.json` 中的持久化群名映射 | 无 | `dict[str, dict]` |
+| `_load_cached_group_names()` | 读取 `<WEBOT_DATA_DIR>/group_names.json` 中的持久化群名映射 | 无 | `dict[str, dict]` |
 | `_add_configured_chatroom_ids(chatrooms)` | 接受 `WECHAT_GROUPS` 中直接配置的 `@chatroom` ID | `chatrooms: dict` | `int` |
 | `_resolve_groups()` | 按 session → contacts → 缓存 → 直接 ID 解析群组名称到 talker ID | 无 | `None` |
 | `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
@@ -650,12 +656,13 @@ todo_delete_keywords: list[str] = [
 | `_set_env_key(env_path, key, value)` | 原子设置 .env 键值 | `env_path: Path, key: str, value: str` | `None` |
 | `_read_env_raw(env_path)` | 从 `.env` 读取简单键值对，忽略注释和空行 | `env_path: Path \| None` | `dict[str, str]` |
 | `_write_env_updates(env_path, updates)` | 批量原子写入 `.env` 并同步 `os.environ` | `env_path: Path, updates: dict[str, str \| None]` | `list[str]` |
+| `_migrate_webot_data_dir(old_raw, new_raw)` | `WEBOT_DATA_DIR` 变更且 bot 已停止时，非覆盖复制旧目录中的 webot 自有数据文件/模型目录到新目录 | `old_raw: str, new_raw: str` | `list[str]` |
 | `_remove_env_keys(env_path, keys)` | 从 `.env` 和 `os.environ` 移除指定键，用于清理旧引导草稿键 | `env_path: Path, keys: set[str]` | `None` |
-| `_onboarding_db_path()` | 返回结构化应用状态使用的 SQLite 路径 | 无 | `Path` |
+| `_onboarding_db_path()` | 返回结构化应用状态使用的 SQLite 路径；legacy `DB_PATH=data/messages.db` 跟随 `WEBOT_DATA_DIR` | 无 | `Path` |
 | `_read_onboarding_state()` | 读取 SQLite `onboarding_state` 单行草稿/进度 | 无 | `dict \| None` |
 | `_save_onboarding_state(updates)` | 将引导草稿/步骤进度增量保存到 SQLite | `updates: dict` | `None` |
 | `_reset_onboarding_state()` | 删除 SQLite 引导草稿/进度行 | 无 | `None` |
-| `_runtime_data_dir()` | 返回运行缓存/日志所在的可写 `data/` 目录 | 无 | `Path` |
+| `_runtime_data_dir()` | 返回运行缓存/日志所在的 webot 自有数据目录 | 无 | `Path` |
 | `_reset_runtime_database(db_path)` | 清空 `messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos` 等运行表，保留 `onboarding_state` | `db_path: Path` | `dict` |
 | `_reset_runtime_files(data_dir)` | 删除生成的运行日志和缓存文件，如 `bot.log`、`bot_status.json`、群元数据、昵称缓存 | `data_dir: Path` | `list[str]` |
 | `_reset_runtime_data()` | 停止状态下重置本地运行数据并刷新 WebSocket 状态；运行中返回 `requires_stop` | 无 | `dict` |
@@ -667,8 +674,8 @@ todo_delete_keywords: list[str] = [
 | `_platform_dependency_report(...)` | 平台依赖诊断 | 可选参数 | `dict` |
 | `_platform_wechat_report(...)` | 微信进程状态诊断 | 可选参数 | `dict` |
 | `_macos_wechat_diagnostics(...)` | macOS 微信权限诊断 | 可选参数 | `dict` |
-| `_read_recent_logs()` | 读取最近 500 行日志 | 无 | `dict` |
-| `_clear_log_file()` | 清空 `data/bot.log`，并截断活动中的日志 `FileHandler` | 无 | `dict` |
+| `_read_recent_logs()` | 从配置后的日志路径读取最近 500 行日志 | 无 | `dict` |
+| `_clear_log_file()` | 清空配置后的 `bot.log`，并截断活动中的日志 `FileHandler` | 无 | `dict` |
 | `_run_step1_extraction()` | 后台执行密钥提取 | 无 | `None` |
 | `_write_onboarding_to_env(env_path)` | 写入引导数据到 .env | `env_path` | `None` |
 
@@ -684,7 +691,7 @@ todo_delete_keywords: list[str] = [
 | `Dashboard.jsx` | `KeyExtractionBanner` | 内联密钥提取横幅(单文件内组件) |
 | `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮/清空日志文件) |
 | `ConfigPanel.jsx` | `AiSection` | 系统配置里的 AI 协议配置；支持模型获取和选择 |
-| `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的微信数据目录配置；支持浏览、检测和手输路径 |
+| `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 webot 数据目录与微信数据目录配置；webot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
 
 ---
@@ -778,10 +785,10 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/stop           → _stop_bot()
   ├── /api/runtime/reset  → _reset_runtime_data() → 清运行表/缓存文件并刷新状态
   ├── /api/load-config    → _find_or_create_env() → 读取 .env
-  ├── /api/config         → 写入 .env
+  ├── /api/config         → 写入 .env；WEBOT_DATA_DIR 变更且 bot 停止时复制旧 webot 数据
   ├── /api/ai/models      → _fetch_ai_models() → _request_json()
   ├── /api/nicknames      → NicknameService
-  ├── /api/nicknames/groups → group_names.json / messages.db
+  ├── /api/nicknames/groups → <WEBOT_DATA_DIR>/group_names.json / messages.db
   ├── /api/welcome/templates → WelcomeManager
   ├── /api/sandbox/test   → create_summarizer() → .chat()
   ├── /api/todos          → TodoStore
@@ -944,11 +951,11 @@ WcdbBackend.start(callback)
   ├── _resolve_groups()
   │     ├── get_sessions() → 从最近会话收集 @chatroom
   │     ├── get_contacts() → session 无群/缺群时从联系人收集 @chatroom
-  │     ├── _load_cached_group_names() → 读取 data/group_names.json 兜底
+  │     ├── _load_cached_group_names() → 读取 <WEBOT_DATA_DIR>/group_names.json 兜底
   │     ├── _add_configured_chatroom_ids() → 接受 WECHAT_GROUPS 中的直接 @chatroom ID
   │     ├── get_group_members() → 解析群成员
   │     ├── get_display_names() → 批量解析昵称
-  │     └── _save_group_names() → 持久化到 data/group_names.json
+  │     └── _save_group_names() → 持久化到 <WEBOT_DATA_DIR>/group_names.json
   │
   └── while self._running:           # 主轮询循环
         ├── _poll_cycle(callback)
@@ -1166,9 +1173,9 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/stop` | 停止 bot | 无 |
 | `POST` | `/api/runtime/reset` | 停止状态下清空本地运行数据；保留 `.env`、密钥、功能配置和 `onboarding_state` | 无 |
 | `GET` | `/api/load-config` | 加载当前配置 (保留可编辑密钥原值用于配置回填) | 无 |
-| `POST` | `/api/config` | 保存配置到 .env | 无 |
+| `POST` | `/api/config` | 保存配置到 .env；持久化 `WEBOT_DATA_DIR`，停止状态下复制旧 webot 数据到新目录 | 无 |
 | `GET` | `/api/config/export` | 导出配置为 JSON 文件 | 无 |
-| `POST` | `/api/config/import` | 导入 JSON 配置文件 | 无 |
+| `POST` | `/api/config/import` | 导入 JSON 配置文件；支持导入 `WEBOT_DATA_DIR` 并迁移旧 webot 数据 | 无 |
 | `POST` | `/api/ai/models` | 根据 `ai_backend`、请求地址和 Key 动态获取模型列表 | 无 |
 | `GET` | `/api/nicknames?chat_id=xxx` | 获取群成员昵称列表 | 无 |
 | `POST` | `/api/nicknames` | 保存/删除昵称映射 | 无 |
@@ -1179,7 +1186,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/todos/counts?chat_id=xxx` | 获取各状态待办计数 | 无 |
 | `POST` | `/api/todos/action` | 执行待办操作 (complete/delete/restore/clear) | 无 |
 | `GET` | `/api/logs` | 获取最近 500 行日志 | 无 |
-| `POST` | `/api/logs/clear` | 清空 `data/bot.log` 并重置运行日志页展示 | 无 |
+| `POST` | `/api/logs/clear` | 清空配置后的 `bot.log` 并重置运行日志页展示 | 无 |
 | `POST` | `/api/sandbox/test` | AI 沙盒测试 (不发送) | 无 |
 | `GET` | `/api/lots` | 获取抽签配置 | 无 |
 | `POST` | `/api/lots` | 保存抽签配置 | 无 |
@@ -1615,7 +1622,7 @@ MacHybridBackend
         ├── AppleScript (System Events) — 微信激活/搜索/发送
         ├── CoreGraphics (CGEventPost) — 屏幕点击
         ├── Vision OCR (VNRecognizeTextRequest) — 搜索匹配/标题验证
-        └── 聊天标题映射缓存 — group_names.json + 日志行解析
+        └── 聊天标题映射缓存 — group_names.json + 日志行解析；实时 contacts/chatrooms 标题可覆盖旧缓存，sessions 标题保守替换
 ```
 
 #### MacUIBackend (纯界面自动化)
@@ -1675,6 +1682,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com     # 旧预设 API 地址
 WECHAT_BACKEND=wcdb                            # "wcdb" / "mac_hybrid" / "mac_ui"
 WECHAT_GROUPS=*                                # 群名(逗号分隔, URL编码, "*"=全部)
 WECHAT_DATA_DIR=                               # 微信数据目录(留空自动从微信进程参数/默认目录检测)
+WEBOT_DATA_DIR=                                # webot 自身数据目录(留空=程序目录下 data；不影响微信数据目录)
 
 # === 机器人身份 ===
 BOT_DISPLAY_NAME=群聊小助手                     # 机器人显示名
@@ -1717,10 +1725,10 @@ CHUNK_SIZE=400
 
 # === 日志 ===
 LOG_LEVEL=INFO
-LOG_FILE=data/bot.log
+LOG_FILE=data/bot.log                           # 留空/保持 legacy 默认时跟随 WEBOT_DATA_DIR；显式自定义路径则覆盖
 
 # === 数据库 ===
-DB_PATH=data/messages.db
+DB_PATH=data/messages.db                        # 留空/保持 legacy 默认时跟随 WEBOT_DATA_DIR；显式自定义路径则覆盖
 
 # === 趣味功能 ===
 FUN_ENABLED=true
@@ -1804,19 +1812,22 @@ WCDB_KEY=
 
 ### 5.5 数据文件 (运行时生成)
 
+默认情况下，webot 自身生成的数据写入 `WEBOT_DATA_DIR`（留空时为程序目录下 `data/`）。`DB_PATH` 与 `LOG_FILE` 如果保持 `data/messages.db` / `data/bot.log` legacy 默认，也会跟随 `WEBOT_DATA_DIR`；只有填写其他显式路径时才单独覆盖。`WECHAT_DATA_DIR` 仍只指向微信自己的数据目录，不参与这些文件的存储。
+
 | 文件路径 | 生成者 | 内容 |
 |---|---|---|
-| `data/messages.db` | `src/db/schema.py` | SQLite 消息数据库 |
-| `data/bot.log` | `src/utils/logging_config.py` | 运行日志 |
-| `data/bot_status.json` | `src/bot.py:HealthMonitor` | 状态 JSON (外部监控) |
-| `data/nicknames.json` | `src/nickname.py` | wxid → 昵称映射 |
-| `data/group_names.json` | `src/wechat/wcdb_backend.py` | chat_id → {name, member_count} |
-| `data/group_members.json` | `src/wechat/wcdb_backend.py` | chat_id → {wxid: display_name} |
-| `data/welcome_templates.json` | `src/welcome.py` | 欢迎模板 + 群映射 |
-| `data/lots.json` | `src/fun.py` | 自定义抽签配置 |
-| `data/feishu_resources.json` | `src/integrations/feishu/knowledge.py` | 飞书知识库资源 ID |
-| `data/voice_cache.json` | `src/voice/pipeline.py` | 语音识别缓存 |
-| `data/send_failures.log` | `src/wechat/window_controller.py` | 发送失败记录 |
-| `data/crash.log` | `desktop.py` / `desktop_mac.py` | 崩溃日志 |
+| `<WEBOT_DATA_DIR>/messages.db` | `src/db/schema.py` | SQLite 消息数据库 |
+| `<WEBOT_DATA_DIR>/bot.log` | `src/utils/logging_config.py` | 运行日志 |
+| `<WEBOT_DATA_DIR>/bot_status.json` | `src/bot.py:HealthMonitor` | 状态 JSON (外部监控) |
+| `<WEBOT_DATA_DIR>/nicknames.json` | `src/nickname.py` | wxid → 昵称映射 |
+| `<WEBOT_DATA_DIR>/group_names.json` | `src/wechat/wcdb_backend.py` | chat_id → {name, member_count} |
+| `<WEBOT_DATA_DIR>/group_members.json` | `src/wechat/wcdb_backend.py` | chat_id → {wxid: display_name} |
+| `<WEBOT_DATA_DIR>/welcome_templates.json` | `src/welcome.py` | 欢迎模板 + 群映射 |
+| `<WEBOT_DATA_DIR>/lots.json` | `src/fun.py` | 自定义抽签配置 |
+| `<WEBOT_DATA_DIR>/feishu_resources.json` | `src/integrations/feishu/knowledge.py` | 飞书知识库资源 ID |
+| `<WEBOT_DATA_DIR>/voice_cache.json` | `src/voice/pipeline.py` | 语音识别缓存 |
+| `<WEBOT_DATA_DIR>/send_failures.log` | `src/wechat/window_controller.py` | 发送失败记录 |
+| `<WEBOT_DATA_DIR>/crash.log` | `desktop.py` / `desktop_mac.py` | 崩溃日志 |
+| `<WEBOT_DATA_DIR>/models/` | `src/voice/asr.py` | 本地 Whisper 模型缓存 |
 
-`POST /api/runtime/reset` 会清空 `data/messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)并删除运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)；不删除 `.env`、`onboarding_state`、欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。
+`POST /api/runtime/reset` 会清空配置后的 `messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)并删除当前 webot 数据目录中的运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)；不删除 `.env`、`onboarding_state`、欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。

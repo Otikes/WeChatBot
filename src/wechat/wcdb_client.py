@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from .data_dir import find_wxid_and_dbpath
+from src.config import webot_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -462,7 +463,7 @@ class WcdbNativeClient:
                 self._nicknames[username] = nick
 
         # Manual overrides from nicknames.json
-        nick_file = Path("data/nicknames.json")
+        nick_file = webot_data_path("nicknames.json")
         if nick_file.exists():
             try:
                 manual = json.loads(nick_file.read_text(encoding="utf-8"))

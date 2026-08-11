@@ -247,7 +247,7 @@ export default function LogViewer() {
             <div className="p-16 text-center text-text-muted">
               <p className="text-base font-semibold text-text-main font-mono">Console Offline</p>
               <p className="text-xs mt-1.5 font-medium text-text-muted">启动机器人后，日志数据流将在此输出</p>
-              <p className="text-xs mt-1 font-mono text-text-muted/65">位置: data/bot.log</p>
+              <p className="text-xs mt-1 font-mono text-text-muted/65">位置: webot 数据目录/bot.log</p>
             </div>
           )
         ) : (

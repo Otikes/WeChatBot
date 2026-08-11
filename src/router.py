@@ -17,6 +17,7 @@ from .proactive.sticky import StickyMentionTracker
 from .memory.consolidator import MemoryConsolidator
 from .todo.store import TodoStore
 from .todo.handler import TodoHandler, format_todo_reply
+from .config import webot_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -308,8 +309,7 @@ class MessageRouter:
         if not self._group_names_loaded:
             self._group_names_loaded = True
             import json
-            from pathlib import Path
-            path = Path("data/group_names.json")
+            path = webot_data_path("group_names.json")
             if path.exists():
                 try:
                     self._group_names_cache = json.loads(

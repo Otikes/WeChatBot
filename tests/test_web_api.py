@@ -1271,6 +1271,25 @@ class ApiConfigEndpointTests(unittest.TestCase):
             self.assertEqual(config["bot_display_name"], "MyBot")
             self.assertFalse(config["fun_enabled"])
 
+    def test_load_config_reads_webot_data_dir(self):
+        """GET /api/load-config returns raw and resolved webot data dir."""
+        data_dir = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: data_dir.rmdir() if data_dir.exists() else None)
+        with patch("src.web.server._find_or_create_env") as mock_find:
+            fake_env = MagicMock()
+            fake_env.exists.return_value = True
+            fake_env.read_text.return_value = f"WEBOT_DATA_DIR={data_dir}\n"
+            mock_find.return_value = fake_env
+            handler, sock = _build_handler("/api/load-config")
+            parts = sock.get_response_text().split("\r\n\r\n", 1)
+            body = json.loads(parts[1])
+            config = body["config"]
+            self.assertEqual(config["webot_data_dir"], str(data_dir))
+            self.assertEqual(
+                Path(config["resolved_webot_data_dir"]),
+                data_dir.resolve(),
+            )
+
     def test_load_config_maps_legacy_deepseek_to_chat_completions(self):
         """Legacy provider config is displayed as the Chat Completions protocol."""
         with patch("src.web.server._find_or_create_env") as mock_find:
@@ -1516,6 +1535,45 @@ class ApiConfigEndpointTests(unittest.TestCase):
             for f in tmp_dir.glob("*"):
                 f.unlink(missing_ok=True)
             tmp_dir.rmdir()
+
+    def test_save_config_persists_and_migrates_webot_data_dir(self):
+        """POST /api/config stores WEBOT_DATA_DIR and copies existing data."""
+        from src.web import server
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            old_dir = root / "old-data"
+            new_dir = root / "new-data"
+            old_dir.mkdir()
+            (old_dir / "nicknames.json").write_text("{}", encoding="utf-8")
+            tmp_env = root / ".env"
+            tmp_env.write_text(
+                f"WEBOT_DATA_DIR={old_dir}\nAI_BACKEND=openai_compatible\n",
+                encoding="utf-8",
+            )
+            save_body = json.dumps({
+                "webot_data_dir": str(new_dir),
+                "ai_backend": "openai_compatible",
+            }).encode()
+            server._bot_control.mark_stopped()
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("src.web.server._find_or_create_env", return_value=tmp_env),
+            ):
+                handler, sock = _build_handler(
+                    "/api/config", method="POST",
+                    body=save_body,
+                    headers={"Content-Type": "application/json",
+                             "Content-Length": str(len(save_body))},
+                )
+                parts = sock.get_response_text().split("\r\n\r\n", 1)
+                result = json.loads(parts[1])
+
+            self.assertTrue(result["ok"])
+            self.assertFalse(result["migration_skipped"])
+            self.assertTrue((new_dir / "nicknames.json").exists())
+            saved = tmp_env.read_text(encoding="utf-8")
+            self.assertIn(f"WEBOT_DATA_DIR={new_dir}", saved)
 
     def test_save_config_roundtrip_openai_compatible_values(self):
         """POST /api/config persists OpenAI-compatible settings and load-config reads them."""
@@ -1849,47 +1907,44 @@ class ClearLogFileTests(unittest.TestCase):
     """Tests for _clear_log_file."""
 
     def test_truncates_existing_log_file(self):
-        """Clearing logs truncates data/bot.log and reads back empty."""
+        """Clearing logs truncates the configured bot.log and reads back empty."""
         from src.web.server import _clear_log_file, _read_recent_logs
 
-        original_cwd = Path.cwd()
         with tempfile.TemporaryDirectory() as tmp:
-            os.chdir(tmp)
-            try:
-                log_path = Path("data/bot.log")
-                log_path.parent.mkdir(parents=True)
-                log_path.write_text(
-                    "2024-06-01 12:00:00 [INFO] bot: Old log\n",
-                    encoding="utf-8",
-                )
+            data_dir = Path(tmp) / "data"
+            log_path = data_dir / "bot.log"
+            log_path.parent.mkdir(parents=True)
+            log_path.write_text(
+                "2024-06-01 12:00:00 [INFO] bot: Old log\n",
+                encoding="utf-8",
+            )
 
+            with patch.dict(os.environ, {"WEBOT_DATA_DIR": str(data_dir)}, clear=True):
                 result = _clear_log_file()
 
                 self.assertTrue(result["ok"])
                 self.assertEqual(log_path.read_text(encoding="utf-8"), "")
                 self.assertEqual(_read_recent_logs()["logs"], [])
-            finally:
-                os.chdir(original_cwd)
 
     def test_truncates_active_file_handler_without_detaching_it(self):
         """Clearing logs keeps the active FileHandler usable for new lines."""
         from src.web.server import _clear_log_file
 
-        original_cwd = Path.cwd()
         root_logger = logging.getLogger()
         handler = None
         with tempfile.TemporaryDirectory() as tmp:
-            os.chdir(tmp)
+            data_dir = Path(tmp) / "data"
+            log_path = data_dir / "bot.log"
+            log_path.parent.mkdir(parents=True)
             try:
-                log_path = Path("data/bot.log")
-                log_path.parent.mkdir(parents=True)
                 handler = logging.FileHandler(str(log_path), encoding="utf-8")
                 root_logger.addHandler(handler)
 
                 root_logger.warning("before clear")
                 handler.flush()
 
-                result = _clear_log_file()
+                with patch.dict(os.environ, {"WEBOT_DATA_DIR": str(data_dir)}, clear=True):
+                    result = _clear_log_file()
 
                 self.assertTrue(result["ok"])
                 self.assertEqual(result["cleared_handlers"], 1)
@@ -1904,7 +1959,6 @@ class ClearLogFileTests(unittest.TestCase):
                 if handler is not None:
                     root_logger.removeHandler(handler)
                     handler.close()
-                os.chdir(original_cwd)
 
 
 # ---------------------------------------------------------------------------

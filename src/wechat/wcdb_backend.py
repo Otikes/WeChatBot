@@ -21,6 +21,7 @@ from .base import AbstractWeChatBackend, MessageCallback
 from .wcdb_client import WcdbNativeClient
 from .window_controller import WeChatWindowController
 from .helpers import DedupSet
+from src.config import webot_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -361,8 +362,8 @@ class WcdbBackend(AbstractWeChatBackend):
 
     @staticmethod
     def _load_cached_group_names() -> dict[str, dict]:
-        """Load persisted chatroom metadata from data/group_names.json."""
-        path = Path("data/group_names.json")
+        """Load persisted chatroom metadata from group_names.json."""
+        path = webot_data_path("group_names.json")
         if not path.exists():
             return {}
         try:
@@ -545,9 +546,9 @@ class WcdbBackend(AbstractWeChatBackend):
 
     @staticmethod
     def _save_group_members(chat_members: dict[str, dict[str, str]]) -> None:
-        """Persist chat_id -> {wxid: display_name} to data/group_members.json."""
+        """Persist chat_id -> {wxid: display_name} to group_members.json."""
         import os as _os
-        path = Path("data/group_members.json")
+        path = webot_data_path("group_members.json")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = path.with_suffix(".tmp")
@@ -561,9 +562,9 @@ class WcdbBackend(AbstractWeChatBackend):
 
     @staticmethod
     def _save_group_names(chatrooms: dict[str, dict]) -> None:
-        """Persist chat_id -> {name, member_count} to data/group_names.json atomically."""
+        """Persist chat_id -> {name, member_count} to group_names.json atomically."""
         import os as _os
-        path = Path("data/group_names.json")
+        path = webot_data_path("group_names.json")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp_path = path.with_suffix(".tmp")

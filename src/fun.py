@@ -5,7 +5,7 @@ import logging
 import random
 from pathlib import Path
 
-from src.config import PROJECT_ROOT
+from src.config import webot_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +126,9 @@ _DEFAULT_LEVELS = [
 
 _DEFAULT_WEIGHTS = [12, 23, 30, 20, 15]
 
-# ── JSON 文件路径 ──────────────────────────────────────────────────
-
-_LOTS_PATH = Path("data/lots.json")
+def _lots_path() -> Path:
+    """Return the configured path for custom lots JSON."""
+    return webot_data_path("lots.json")
 
 # ── 缓存 ────────────────────────────────────────────────────────────
 
@@ -170,8 +170,9 @@ def save_lots_config(data: dict) -> None:
 
     # ── 恢复默认：空数据 → 删除 JSON 文件 ──────────────────────
     if (not weights or len(weights) == 0) and (not levels or len(levels) == 0):
-        if _LOTS_PATH.exists():
-            _LOTS_PATH.unlink()
+        path = _lots_path()
+        if path.exists():
+            path.unlink()
         reset_lots_cache()
         logger.info("抽签配置已恢复为默认值（删除了 lots.json）")
         return
@@ -198,14 +199,15 @@ def save_lots_config(data: dict) -> None:
             raise ValueError(f"「{level.get('name', i)}」至少需要一条签文")
 
     # ── 写入 ──────────────────────────────────────────────────────
-    _LOTS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = _LOTS_PATH.with_suffix(".tmp")
+    path = _lots_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(_LOTS_PATH)
+    tmp.replace(path)
 
     # 清除缓存
     reset_lots_cache()
-    logger.info("抽签配置已保存到 %s", _LOTS_PATH)
+    logger.info("抽签配置已保存到 %s", path)
 
 
 def reset_lots_cache() -> None:
@@ -216,10 +218,11 @@ def reset_lots_cache() -> None:
 
 def _load_lots_from_json() -> tuple[list, list] | None:
     """从 JSON 文件加载抽签配置。失败返回 None。"""
-    if not _LOTS_PATH.exists():
+    path = _lots_path()
+    if not path.exists():
         return None
     try:
-        data = json.loads(_LOTS_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         weights = data.get("weights", [])
         levels = data.get("levels", [])
 
@@ -263,7 +266,7 @@ def _get_lots() -> tuple[list, list]:
 def draw_lots(requester_name: str) -> str:
     """抽签 — 返回带解读的运势结果。
 
-    优先使用 data/lots.json 中的自定义配置，文件不存在时使用默认签文。
+    优先使用 webot 数据目录中的 lots.json 自定义配置，文件不存在时使用默认签文。
     """
     levels_data, weights = _get_lots()
 

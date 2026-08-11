@@ -1,20 +1,22 @@
 """Reconcile WeChat wxids with exported chat display names.
 
 Reads:
-  - data/messages.db
-  - data/nicknames.json
+  - configured webot messages database
+  - configured webot nicknames.json
   - wechatdata/*.xlsx
 
 Writes:
-  - data/nicknames.json
-  - data/nickname_reconcile_report.json
+  - configured webot nicknames.json
+  - configured webot nickname_reconcile_report.json
 """
 
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -24,9 +26,21 @@ from openpyxl import load_workbook
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "data" / "messages.db"
-NICKNAMES_PATH = ROOT / "data" / "nicknames.json"
-REPORT_PATH = ROOT / "data" / "nickname_reconcile_report.json"
+sys.path.insert(0, str(ROOT))
+
+try:
+    from src.config import resolve_webot_storage_path, webot_data_path
+
+    DB_PATH = resolve_webot_storage_path(
+        os.getenv("DB_PATH", "data/messages.db"),
+        "data/messages.db",
+    )
+    NICKNAMES_PATH = webot_data_path("nicknames.json")
+    REPORT_PATH = webot_data_path("nickname_reconcile_report.json")
+except Exception:
+    DB_PATH = ROOT / "data" / "messages.db"
+    NICKNAMES_PATH = ROOT / "data" / "nicknames.json"
+    REPORT_PATH = ROOT / "data" / "nickname_reconcile_report.json"
 XLSX_DIR = ROOT / "wechatdata"
 
 MAX_TIME_DELTA_SEC = 180
@@ -219,6 +233,7 @@ def main() -> None:
     for key in sorted(merged):
         ordered[key] = merged[key]
 
+    NICKNAMES_PATH.parent.mkdir(parents=True, exist_ok=True)
     with NICKNAMES_PATH.open("w", encoding="utf-8") as f:
         json.dump(ordered, f, ensure_ascii=False, indent=2)
         f.write("\n")
@@ -231,6 +246,7 @@ def main() -> None:
         "updates": updates,
         "decisions": decisions,
     }
+    REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with REPORT_PATH.open("w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
         f.write("\n")

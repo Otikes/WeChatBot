@@ -905,10 +905,11 @@ function FeishuSection({ form, update }) {
 const sectionTitles = { ai: 'AI 协议配置', voice: '语音识别配置', identity: '机器人身份', data: '数据路径', sandbox: '提示词沙箱' }
 const sectionAccents = { ai: '#18E299', voice: '#10b981', identity: '#3772cf', data: '#18E299', sandbox: '#8b5cf6' }
 
-// ── Data Path Section (微信数据目录配置) ──────────────────────────────
+// ── Data Path Section (webot + 微信数据目录配置) ───────────────────────
 
 function DataPathSection({ form, update, detectedDataDir }) {
   const [browseOpen, setBrowseOpen] = useState(false)
+  const [browseTarget, setBrowseTarget] = useState('wechat')
   const [browsePath, setBrowsePath] = useState('')
   const [browseEntries, setBrowseEntries] = useState([])
   const [browseLoading, setBrowseLoading] = useState(false)
@@ -941,8 +942,11 @@ function DataPathSection({ form, update, detectedDataDir }) {
     setBrowseLoading(false)
   }
 
-  function openBrowse() {
-    const initialPath = form.wechat_data_dir || detectedDataDir || ''
+  function openBrowse(target = 'wechat') {
+    setBrowseTarget(target)
+    const initialPath = target === 'webot'
+      ? (form.webot_data_dir || form.resolved_webot_data_dir || '')
+      : (form.wechat_data_dir || detectedDataDir || '')
     setBrowseInput(initialPath)
     setBrowseOpen(true)
     loadBrowseDir(initialPath)
@@ -975,9 +979,13 @@ function DataPathSection({ form, update, detectedDataDir }) {
   }
 
   function selectCurrentPath() {
-    update('wechat_data_dir', browsePath)
+    if (browseTarget === 'webot') {
+      update('webot_data_dir', browsePath)
+    } else {
+      update('wechat_data_dir', browsePath)
+      setDetectResult(null)
+    }
     setBrowseOpen(false)
-    setDetectResult(null)
   }
 
   // ── Detect API ────────────────────────────────────────────────
@@ -1013,9 +1021,56 @@ function DataPathSection({ form, update, detectedDataDir }) {
   }
 
   const hasCustomPath = (form.wechat_data_dir || '').trim().length > 0
+  const hasWebotCustomPath = (form.webot_data_dir || '').trim().length > 0
 
   return (
-    <div>
+    <div className="space-y-6">
+      <Field label="webot 数据目录"
+        hint="webot 自己生成的数据存储位置；不影响微信聊天记录目录。留空则使用程序目录下的 data。">
+        <div className="flex items-start gap-2">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              value={form.webot_data_dir || ''}
+              onChange={e => update('webot_data_dir', e.target.value)}
+              placeholder={form.resolved_webot_data_dir || '程序目录下的 data'}
+              className="w-full bg-bg-raised border border-border-main rounded-full pl-5 pr-5 py-2.5 text-[14px] text-text-main
+                         placeholder:text-text-muted/65 font-mono tabular-nums
+                         focus:outline-none focus:border-brand-green focus:ring-2 focus:ring-brand-green/15
+                         transition-all duration-200
+                         hover:border-text-muted/30 dark:hover:border-text-muted/40"
+            />
+            {hasWebotCustomPath && (
+              <button
+                type="button"
+                onClick={() => update('webot_data_dir', '')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted/60 hover:text-[#d45656] text-lg leading-none transition-colors cursor-pointer"
+                title="恢复默认目录"
+              >&times;</button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => openBrowse('webot')}
+            className="shrink-0 px-4 py-2.5 bg-bg-main border border-border-main rounded-full text-[13px] text-text-main font-medium hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer"
+          >
+            浏览...
+          </button>
+        </div>
+      </Field>
+
+      {form.resolved_webot_data_dir && !hasWebotCustomPath && (
+        <div className="flex items-center gap-2 px-3 py-2 bg-bg-raised border border-border-main rounded-full text-xs text-text-muted font-medium">
+          <CheckCircle size={14} weight="fill" className="text-brand-green-hover dark:text-brand-green" />
+          <span className="truncate font-mono">当前默认: {form.resolved_webot_data_dir}</span>
+        </div>
+      )}
+      {hasWebotCustomPath && (
+        <p className="text-xs text-text-muted leading-relaxed">
+          保存后重启生效；机器人停止时会复制旧目录中已有的 webot 数据，目标目录已有文件不会覆盖。
+        </p>
+      )}
+
       <Field label="微信数据目录"
         hint="微信聊天记录存储的父目录（包含 wxid_* 文件夹）。留空则自动从 Documents 检测。">
         <div className="flex items-start gap-2">
@@ -1042,7 +1097,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
           </div>
           <button
             type="button"
-            onClick={openBrowse}
+            onClick={() => openBrowse('wechat')}
             className="shrink-0 px-4 py-2.5 bg-bg-main border border-border-main rounded-full text-[13px] text-text-main font-medium hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer"
           >
             浏览...
@@ -1133,7 +1188,9 @@ function DataPathSection({ form, update, detectedDataDir }) {
           >
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-main/60">
-              <h4 className="text-sm font-semibold text-text-main">选择微信数据目录</h4>
+              <h4 className="text-sm font-semibold text-text-main">
+                选择{browseTarget === 'webot' ? 'webot 数据目录' : '微信数据目录'}
+              </h4>
               <button
                 type="button"
                 onClick={() => setBrowseOpen(false)}
@@ -1912,6 +1969,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     feishu_bitable_app_token: '', feishu_bitable_table_id: '',
     feishu_doc_folder_token: '',
     log_level: 'INFO', wechat_data_dir: '',
+    webot_data_dir: '', resolved_webot_data_dir: '',
     voice_asr_enabled: false, voice_asr_backend: 'local_whisper', voice_asr_language: 'zh',
     voice_openai_api_key: '', voice_openai_base_url: '', voice_local_model: 'small',
   })
@@ -2051,6 +2109,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           feishu_doc_folder_token: form.feishu_doc_folder_token,
           log_level: form.log_level,
           wechat_data_dir: form.wechat_data_dir,
+          webot_data_dir: form.webot_data_dir,
           voice_asr_enabled: form.voice_asr_enabled,
           voice_asr_backend: form.voice_asr_backend,
           voice_asr_language: form.voice_asr_language,
@@ -2061,6 +2120,9 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
       })
       const data = await res.json()
       if (data.ok) {
+        if (data.webot_data_dir) {
+          setForm(prev => ({ ...prev, resolved_webot_data_dir: data.webot_data_dir }))
+        }
         setSaved(true)
         setTimeout(() => setSaved(false), 3000)
       } else {

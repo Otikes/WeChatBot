@@ -38,7 +38,11 @@ DASHBOARD_URL = "http://127.0.0.1:7327"
 
 def _write_crash_log(exc_info: str) -> None:
     try:
-        crash_dir = APP_HOME / "data"
+        try:
+            from src.config import get_webot_data_dir
+            crash_dir = get_webot_data_dir()
+        except Exception:
+            crash_dir = APP_HOME / "data"
         crash_dir.mkdir(parents=True, exist_ok=True)
         with open(crash_dir / "crash.log", "a", encoding="utf-8") as f:
             f.write(f"\n{'='*60}\n")
@@ -63,6 +67,7 @@ def ensure_macos_env_file() -> Path:
             "MAC_WECHAT_SEND_SHORTCUT=enter\n"
             "BOT_DISPLAY_NAME=群聊小助手\n"
             "WECHAT_GROUPS=*\n"
+            "WEBOT_DATA_DIR=\n"
             "ONBOARDING_DONE=true\n"
             "LOG_LEVEL=INFO\n"
             "LOG_FILE=data/bot.log\n",

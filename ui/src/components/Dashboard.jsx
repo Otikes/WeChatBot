@@ -348,7 +348,7 @@ export default function Dashboard({ status }) {
             {[
               ['微信后端', backendLabels[status.wechat_backend] || status.wechat_backend || '—'],
               ['AI 协议', aiLabels[status.ai_backend] || status.ai_backend || '—'],
-              ['日志文件', 'data/bot.log'],
+              ['日志文件', 'webot 数据目录/bot.log'],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between items-center py-0.5">
                 <span className="text-xs text-text-muted font-medium">{k}</span>

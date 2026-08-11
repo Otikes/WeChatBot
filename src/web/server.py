@@ -26,7 +26,13 @@ from urllib import request as urlrequest
 # conditional blocks, but for Python's scoping those later imports still
 # make the name a local — so it must be imported at module level too,
 # otherwise the first branch that references it raises UnboundLocalError.
-from src.config import _decode_wechat_groups
+from src.config import (
+    _decode_wechat_groups,
+    get_webot_data_dir,
+    resolve_webot_data_dir,
+    resolve_webot_storage_path,
+    webot_data_path,
+)
 from src.utils.ai_compat import (
     OPENAI_COMPATIBLE_BASE_URL,
     normalize_ai_backend as _normalize_ai_backend,
@@ -87,7 +93,8 @@ def _find_or_create_env() -> Path:
         "OPENAI_MODEL=\n"
         "WECHAT_BACKEND=wcdb\n"
         "BOT_DISPLAY_NAME=\n"
-        "WECHAT_GROUPS=\n",
+        "WECHAT_GROUPS=\n"
+        "WEBOT_DATA_DIR=\n",
         encoding="utf-8",
     )
     logger.info("Created minimal .env at %s", env_path.resolve())
@@ -494,6 +501,53 @@ def _write_env_updates(env_path: Path, updates: dict[str, str | None]) -> list[s
     return sorted(saved)
 
 
+_WEBOT_DATA_MIGRATION_ITEMS = (
+    "messages.db",
+    "messages.db-wal",
+    "messages.db-shm",
+    "bot.log",
+    "bot_status.json",
+    "send_failures.log",
+    "group_members.json",
+    "group_names.json",
+    "nicknames.json",
+    "welcome_templates.json",
+    "lots.json",
+    "feishu_resources.json",
+    "voice_cache.json",
+    "crash.log",
+    "models",
+)
+
+
+def _migrate_webot_data_dir(old_raw: str, new_raw: str) -> list[str]:
+    """Copy existing webot-owned data files when WEBOT_DATA_DIR changes."""
+    old_dir = resolve_webot_data_dir(old_raw)
+    new_dir = resolve_webot_data_dir(new_raw)
+    if old_dir == new_dir or not old_dir.exists():
+        return []
+
+    new_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[str] = []
+    import shutil
+
+    for name in _WEBOT_DATA_MIGRATION_ITEMS:
+        src = old_dir / name
+        dst = new_dir / name
+        if not src.exists() or dst.exists():
+            continue
+        try:
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            copied.append(str(dst))
+        except Exception:
+            logger.warning("Failed to migrate webot data item %s -> %s", src, dst, exc_info=True)
+    return copied
+
+
 def _remove_env_keys(env_path: Path, keys: set[str]) -> None:
     """Remove keys from .env and the current process env."""
     if not env_path.exists():
@@ -568,13 +622,10 @@ _LEGACY_ONBOARDING_ENV_KEYS = {
 
 def _onboarding_db_path() -> Path:
     """Return the SQLite path used for structured app state."""
-    from src.config import PROJECT_ROOT
-
-    raw = os.getenv("DB_PATH", "data/messages.db").strip() or "data/messages.db"
-    db_path = Path(raw)
-    if not db_path.is_absolute():
-        db_path = PROJECT_ROOT / db_path
-    return db_path
+    return resolve_webot_storage_path(
+        os.getenv("DB_PATH", "data/messages.db"),
+        "data/messages.db",
+    )
 
 
 def _read_onboarding_state() -> dict | None:
@@ -656,9 +707,7 @@ _RUNTIME_RESET_FILES = (
 
 def _runtime_data_dir() -> Path:
     """Return the writable data directory used by runtime cache/log files."""
-    from src.config import PROJECT_ROOT
-
-    return PROJECT_ROOT / "data"
+    return get_webot_data_dir()
 
 
 def _reset_runtime_database(db_path: Path) -> dict:
@@ -887,8 +936,10 @@ def _run_step1_extraction():
     # all log output from extract_key.py goes to stdout only, which is
     # invisible in Windows GUI mode — making failures un-debuggable.
     from src.utils.logging_config import setup_logging
-    from src.config import PROJECT_ROOT
-    setup_logging(level="INFO", log_file=str(PROJECT_ROOT / "data" / "bot.log"))
+    setup_logging(level="INFO", log_file=str(resolve_webot_storage_path(
+        os.getenv("LOG_FILE", "data/bot.log"),
+        "data/bot.log",
+    )))
 
     from src.wechat.extract_key import extract_wcdb_key
 
@@ -951,7 +1002,7 @@ def _run_step1_extraction():
 def _list_dir_entries(target: Path) -> list[dict]:
     """List directory entries for the filesystem browser API.
 
-    Returns only directories (the user is browsing for parent dir of wxid_*).
+    Returns only directories for path selection controls.
     Sorted: directories first, then alphabetically.
     """
     entries = []
@@ -976,9 +1027,10 @@ def _read_recent_logs():
     (configured in src/utils/logging_config.py).
     """
     import re
-    # CWD is set to app home by desktop.py; relative path works for both
-    # frozen (EXE dir) and dev (project root) modes.
-    log_path = Path("data/bot.log")
+    log_path = resolve_webot_storage_path(
+        os.getenv("LOG_FILE", "data/bot.log"),
+        "data/bot.log",
+    )
     if not log_path.exists():
         return {"ok": True, "logs": [], "message": "日志文件尚未创建"}
     try:
@@ -1015,7 +1067,10 @@ def _read_recent_logs():
 
 def _clear_log_file():
     """Clear the persisted bot log file and any active file handler stream."""
-    log_path = Path("data/bot.log")
+    log_path = resolve_webot_storage_path(
+        os.getenv("LOG_FILE", "data/bot.log"),
+        "data/bot.log",
+    )
     try:
         target = log_path.resolve()
         cleared_handlers = 0
@@ -1674,6 +1729,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 ],
                 "log_level": raw.get("LOG_LEVEL", "INFO"),
                 "wechat_data_dir": raw.get("WECHAT_DATA_DIR", ""),
+                "webot_data_dir": raw.get("WEBOT_DATA_DIR", ""),
+                "resolved_webot_data_dir": str(resolve_webot_data_dir(raw.get("WEBOT_DATA_DIR", ""))),
                 "voice_asr_enabled": raw.get("VOICE_ASR_ENABLED", "false").lower() == "true",
                 "voice_asr_backend": raw.get("VOICE_ASR_BACKEND", "local_whisper"),
                 "voice_asr_language": raw.get("VOICE_ASR_LANGUAGE", "zh"),
@@ -1725,6 +1782,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     ],
                     "log_level": raw.get("LOG_LEVEL", "INFO"),
                     "wechat_data_dir": raw.get("WECHAT_DATA_DIR", ""),
+                    "webot_data_dir": raw.get("WEBOT_DATA_DIR", ""),
+                    "resolved_webot_data_dir": str(resolve_webot_data_dir(raw.get("WEBOT_DATA_DIR", ""))),
                 }
                 export_data.update(_feishu_config_from_raw(raw))
                 filename = f"webot-config-{_dt_date.today().isoformat()}.json"
@@ -1748,6 +1807,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
             try:
                 config = json.loads(body)
                 env_path = _find_or_create_env()
+                old_raw = _read_env_raw(env_path)
+                old_webot_data_dir = old_raw.get("WEBOT_DATA_DIR", "")
+                new_webot_data_dir = config.get("webot_data_dir") or ""
+                resolve_webot_data_dir(new_webot_data_dir).mkdir(parents=True, exist_ok=True)
                 if env_path.exists():
                     lines = env_path.read_text(encoding="utf-8").splitlines()
                 else:
@@ -1773,6 +1836,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "TRIGGER_KEYWORDS": ",".join(config.get("trigger_keywords", [])) if config.get("trigger_keywords") else None,
                     "LOG_LEVEL": config.get("log_level"),
                     "WECHAT_DATA_DIR": config.get("wechat_data_dir"),
+                    "WEBOT_DATA_DIR": new_webot_data_dir,
                     "VOICE_ASR_ENABLED": str(config.get("voice_asr_enabled", False)).lower(),
                     "VOICE_ASR_BACKEND": config.get("voice_asr_backend", "local_whisper"),
                     "VOICE_ASR_LANGUAGE": config.get("voice_asr_language", "zh"),
@@ -1802,10 +1866,23 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 for key, val in updates.items():
                     if val is not None:
                         os.environ[key] = str(val)
+                migrated = []
+                migration_skipped = False
+                if old_webot_data_dir != new_webot_data_dir:
+                    if _bot_control.is_running():
+                        migration_skipped = True
+                    else:
+                        migrated = _migrate_webot_data_dir(
+                            old_webot_data_dir,
+                            new_webot_data_dir,
+                        )
                 self.send_json({
                     "ok": True,
                     "saved": list(seen),
                     "requires_restart": True,
+                    "webot_data_dir": str(resolve_webot_data_dir(new_webot_data_dir)),
+                    "migrated_files": migrated,
+                    "migration_skipped": migration_skipped,
                 })
             except Exception as e:
                 logger.exception("Failed to save config")
@@ -1824,6 +1901,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 if not has_keys:
                     raise ValueError("无效的配置文件格式：缺少必需字段")
                 env_path = _find_or_create_env()
+                old_raw = _read_env_raw(env_path)
+                old_webot_data_dir = old_raw.get("WEBOT_DATA_DIR", "")
+                new_webot_data_dir = config.get("webot_data_dir") or ""
+                resolve_webot_data_dir(new_webot_data_dir).mkdir(parents=True, exist_ok=True)
                 if env_path.exists():
                     lines = env_path.read_text(encoding="utf-8").splitlines()
                 else:
@@ -1848,6 +1929,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "TRIGGER_KEYWORDS": ",".join(config.get("trigger_keywords", [])) if config.get("trigger_keywords") else None,
                     "LOG_LEVEL": config.get("log_level"),
                     "WECHAT_DATA_DIR": config.get("wechat_data_dir"),
+                    "WEBOT_DATA_DIR": new_webot_data_dir,
                     "VOICE_ASR_ENABLED": str(config.get("voice_asr_enabled", False)).lower(),
                     "VOICE_ASR_BACKEND": config.get("voice_asr_backend", "local_whisper"),
                     "VOICE_ASR_LANGUAGE": config.get("voice_asr_language", "zh"),
@@ -1878,10 +1960,23 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 for key, val in updates.items():
                     if val is not None:
                         os.environ[key] = str(val)
+                migrated = []
+                migration_skipped = False
+                if old_webot_data_dir != new_webot_data_dir:
+                    if _bot_control.is_running():
+                        migration_skipped = True
+                    else:
+                        migrated = _migrate_webot_data_dir(
+                            old_webot_data_dir,
+                            new_webot_data_dir,
+                        )
                 self.send_json({
                     "ok": True,
                     "imported": list(seen),
                     "requires_restart": True,
+                    "webot_data_dir": str(resolve_webot_data_dir(new_webot_data_dir)),
+                    "migrated_files": migrated,
+                    "migration_skipped": migration_skipped,
                 })
             except ValueError as e:
                 self.send_json({"ok": False, "error": str(e)})
@@ -1929,14 +2024,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             break
                 groups_raw = _decode_wechat_groups(groups_raw)
 
-                db_path = "data/messages.db"
-                if env_path and env_path.exists():
-                    for line in env_path.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("DB_PATH="):
-                            db_path = line.strip().split("=", 1)[1].strip().strip('"').strip("'")
-                            break
-
-                conn = sqlite3.connect(db_path)
+                conn = sqlite3.connect(_onboarding_db_path())
                 conn.row_factory = sqlite3.Row
 
                 # ── Load persisted chat_id -> group info ─────────────────
@@ -1944,7 +2032,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 # resolves group names from WeChat's session DB via WCDB DLL.
                 # New format: {chat_id: {name, member_count}}
                 # Old format: {chat_id: "name"} (backward compatible)
-                group_names_path = Path("data/group_names.json")
+                group_names_path = webot_data_path("group_names.json")
                 group_info: dict[str, dict] = {}
                 if group_names_path.exists():
                     try:
@@ -2052,7 +2140,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 conn.close()
 
                 # 2) From group_members.json (full member list from WCDB)
-                gm_path = Path("data/group_members.json")
+                gm_path = webot_data_path("group_members.json")
                 if gm_path.exists():
                     try:
                         group_members = json.loads(gm_path.read_text(encoding="utf-8"))
@@ -2145,15 +2233,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             search = params.get("search", "")
             try:
                 from src.todo.store import TodoStore
-                from src.config import find_env_file
-                db_path = "data/messages.db"
-                env_path = find_env_file()
-                if env_path and env_path.exists():
-                    for line in env_path.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("DB_PATH="):
-                            db_path = line.strip().split("=", 1)[1].strip()
-                            break
-                store = TodoStore(db_path)
+                store = TodoStore(str(_onboarding_db_path()))
                 items = store.get_all(status=status, chat_id=chat_id, search=search)
                 groups = store.get_active_groups()
                 self.send_json({
@@ -2191,15 +2271,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 chat_id = params.get("chat_id", "")
             try:
                 from src.todo.store import TodoStore
-                from src.config import find_env_file
-                db_path = "data/messages.db"
-                env_path = find_env_file()
-                if env_path and env_path.exists():
-                    for line in env_path.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("DB_PATH="):
-                            db_path = line.strip().split("=", 1)[1].strip()
-                            break
-                store = TodoStore(db_path)
+                store = TodoStore(str(_onboarding_db_path()))
                 counts = store.get_counts(chat_id=chat_id)
                 self.send_json({"ok": True, "counts": counts})
             except Exception as e:
@@ -2216,15 +2288,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 chat_id = data.get("chat_id", "")
                 target = data.get("target", "")
                 from src.todo.store import TodoStore
-                from src.config import find_env_file
-                db_path = "data/messages.db"
-                env_path = find_env_file()
-                if env_path and env_path.exists():
-                    for line in env_path.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("DB_PATH="):
-                            db_path = line.strip().split("=", 1)[1].strip()
-                            break
-                store = TodoStore(db_path)
+                store = TodoStore(str(_onboarding_db_path()))
                 if action == "complete":
                     result = store.complete(chat_id, target)
                 elif action == "delete":
@@ -2430,7 +2494,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             env_val = "配置文件已存在" if env_ok else "配置文件尚未创建"
 
             # 5. DB permissions check
-            data_dir = project_root / "data"
+            data_dir = get_webot_data_dir()
             db_perm_ok = True
             db_perm_err = None
             try:

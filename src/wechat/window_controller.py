@@ -23,6 +23,8 @@ import win32clipboard
 import win32process
 from PIL import ImageGrab, ImageStat
 
+from src.config import webot_data_path
+
 logger = logging.getLogger(__name__)
 
 # ── Constants ─────────────────────────────────────────────────────
@@ -34,8 +36,11 @@ MAX_CANDIDATES_LOG = 20
 WHITE_SCREEN_MEAN_THRESHOLD = 248
 WHITE_SCREEN_STDDEV_THRESHOLD = 3.5
 
-FAILURE_LOG = Path("data/send_failures.log")
-FAILURE_LOG.parent.mkdir(parents=True, exist_ok=True)
+def _failure_log_path() -> Path:
+    """Return the configured send-failure log path."""
+    path = webot_data_path("send_failures.log")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @dataclass
@@ -965,7 +970,7 @@ class WeChatWindowController:
     @staticmethod
     def _log_failure(group: str, text: str, reason: str,
                      hwnd: Optional[int] = None) -> None:
-        """Log a send failure to both the logger and data/send_failures.log."""
+        """Log a send failure to both the logger and send_failures.log."""
         fg_info = ""
         try:
             fg = win32gui.GetForegroundWindow()
@@ -984,7 +989,7 @@ class WeChatWindowController:
         logger.error(f"Send failure: {msg.strip()}")
 
         try:
-            with open(FAILURE_LOG, "a", encoding="utf-8") as f:
+            with open(_failure_log_path(), "a", encoding="utf-8") as f:
                 f.write(msg)
         except Exception:
             pass

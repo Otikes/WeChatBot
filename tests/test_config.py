@@ -612,6 +612,49 @@ class LoadConfigTests(unittest.TestCase):
             config = load_config()
             self.assertEqual(config.deepseek_model, "legacy-ultra-model")
 
+    def test_webot_data_dir_controls_default_db_and_log_paths(self):
+        """WEBOT_DATA_DIR should relocate legacy DB_PATH/LOG_FILE defaults."""
+        from src.config import load_config
+
+        data_dir = Path("F:/tmp/webot-data")
+        with patch.dict(os.environ, {
+            "OPENAI_MODEL": "chat-model",
+            "WEBOT_DATA_DIR": str(data_dir),
+            "DB_PATH": "data/messages.db",
+            "LOG_FILE": "data/bot.log",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(Path(config.webot_data_dir), data_dir.resolve())
+            self.assertEqual(Path(config.db_path), data_dir.resolve() / "messages.db")
+            self.assertEqual(Path(config.log_file), data_dir.resolve() / "bot.log")
+
+    def test_webot_data_dir_defaults_to_current_app_home(self):
+        """The default webot data dir should follow the active app home."""
+        from src.config import load_config
+
+        app_home = Path("F:/tmp/webot-home")
+        with patch.dict(os.environ, {
+            "OPENAI_MODEL": "chat-model",
+            "WEBOT_APP_HOME": str(app_home),
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(Path(config.webot_data_dir), app_home.resolve() / "data")
+            self.assertEqual(Path(config.db_path), app_home.resolve() / "data" / "messages.db")
+
+    def test_explicit_db_path_overrides_webot_data_dir(self):
+        """A custom DB_PATH should remain an explicit override."""
+        from src.config import load_config
+
+        data_dir = Path("F:/tmp/webot-data")
+        explicit_db = Path("F:/tmp/custom/messages.sqlite")
+        with patch.dict(os.environ, {
+            "OPENAI_MODEL": "chat-model",
+            "WEBOT_DATA_DIR": str(data_dir),
+            "DB_PATH": str(explicit_db),
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(Path(config.db_path), explicit_db.resolve())
+
 
 class ValidateConfigTests(unittest.TestCase):
     """Tests for _validate_config() numeric range validation."""

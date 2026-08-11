@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from src.config import PROJECT_ROOT
+from src.config import webot_data_path
 
 
 SUMMARY_TABLE_KEY = "summary"
@@ -125,10 +125,10 @@ def strip_feishu_sync_command(content: str, bot_display_name: str = "") -> str:
 
 
 class FeishuResourceStore:
-    """Persist generated Feishu Bitable resource ids under data/."""
+    """Persist generated Feishu Bitable resource ids under webot data."""
 
     def __init__(self, path: str | Path | None = None):
-        self.path = Path(path) if path is not None else PROJECT_ROOT / "data" / "feishu_resources.json"
+        self.path = Path(path) if path is not None else webot_data_path("feishu_resources.json")
 
     def load(self) -> dict:
         if not self.path.exists():

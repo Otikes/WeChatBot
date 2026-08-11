@@ -18,6 +18,7 @@ from typing import Any
 from .base import AbstractWeChatBackend, MessageCallback
 from .mac_ui_backend import MacUIAutomation
 from .mac_weflow_client import MacWeFlowClient
+from src.config import resolve_webot_storage_path, webot_data_path
 
 logger = logging.getLogger(__name__)
 
@@ -381,6 +382,7 @@ class MacHybridBackend(AbstractWeChatBackend):
                     username_keys=("name", "username"),
                     title_keys=("display", "remark", "nickname"),
                     default_is_group=True,
+                    force=True,
                 )
 
         get_contacts = getattr(self._client, "get_contacts", None)
@@ -396,6 +398,7 @@ class MacHybridBackend(AbstractWeChatBackend):
                     username_keys=("username", "name"),
                     title_keys=("display", "remark", "nickname"),
                     default_is_group=False,
+                    force=True,
                 )
 
         self._chat_titles_loaded = True
@@ -407,6 +410,7 @@ class MacHybridBackend(AbstractWeChatBackend):
         username_keys: tuple[str, ...],
         title_keys: tuple[str, ...],
         default_is_group: bool,
+        force: bool = False,
     ) -> None:
         if not isinstance(items, list):
             return
@@ -423,6 +427,7 @@ class MacHybridBackend(AbstractWeChatBackend):
                 username,
                 title,
                 default_is_group or _session_is_group(item, username),
+                force=force,
             )
 
     def _remember_chat_session(
@@ -701,6 +706,7 @@ def _chat_title_cache_paths() -> list[Path]:
     explicit = os.getenv("MAC_CHAT_TITLE_CACHE_FILE", "").strip()
     if explicit:
         paths.append(Path(explicit))
+    paths.append(webot_data_path("group_names.json"))
     app_home = os.getenv("WEBOT_APP_HOME", "").strip()
     if app_home:
         paths.append(Path(app_home) / "data" / "group_names.json")
@@ -711,6 +717,10 @@ def _chat_title_cache_paths() -> list[Path]:
 
 def _chat_title_log_paths() -> list[Path]:
     paths: list[Path] = []
+    paths.append(resolve_webot_storage_path(
+        os.getenv("LOG_FILE", "data/bot.log"),
+        "data/bot.log",
+    ))
     app_home = os.getenv("WEBOT_APP_HOME", "").strip()
     if app_home:
         paths.append(Path(app_home) / "data" / "bot.log")
@@ -723,10 +733,7 @@ def _preferred_chat_title_cache_path() -> Path | None:
     explicit = os.getenv("MAC_CHAT_TITLE_CACHE_FILE", "").strip()
     if explicit:
         return Path(explicit)
-    app_home = os.getenv("WEBOT_APP_HOME", "").strip()
-    if app_home:
-        return Path(app_home) / "data" / "group_names.json"
-    return None
+    return webot_data_path("group_names.json")
 
 
 def _unique_paths(paths: list[Path]) -> list[Path]:

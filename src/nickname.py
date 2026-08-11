@@ -1,6 +1,6 @@
 """Nickname service — resolve wxid_xxx to display names and manage mappings.
 
-Persists wxid → nickname mappings in data/nicknames.json for use by
+Persists wxid → nickname mappings in the configured webot data directory for use by
 AI summarization (which should output names, not internal IDs).
 """
 
@@ -11,10 +11,10 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-from src.config import PROJECT_ROOT
+from src.config import webot_data_path
 
 # Default path relative to project root
-DEFAULT_NICKNAME_PATH = PROJECT_ROOT / "data/nicknames.json"
+DEFAULT_NICKNAME_PATH = webot_data_path("nicknames.json")
 
 
 class NicknameService:
@@ -27,8 +27,8 @@ class NicknameService:
         nicks.remove("wxid_abc123")
     """
 
-    def __init__(self, path: Path | str = DEFAULT_NICKNAME_PATH):
-        self._path = Path(path)
+    def __init__(self, path: Path | str | None = None):
+        self._path = Path(path) if path is not None else webot_data_path("nicknames.json")
         self._cache: dict[str, str] | None = None
         self._cache_mtime: float = -1.0
 

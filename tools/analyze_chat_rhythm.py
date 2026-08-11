@@ -1,15 +1,16 @@
 """Analyze group chat message frequency to recommend proactive mode thresholds.
 
-Reads messages from data/messages.db, computes message rate distributions
+Reads messages from the configured webot messages database, computes message rate distributions
 per group, and outputs recommended thresholds for the 5 proactive modes:
 
     SLEEP / QUIET / CASUAL / LIVELY / BURST
 
 Usage:
-    python tools/analyze_chat_rhythm.py [--db data/messages.db] [--window 5]
+    python tools/analyze_chat_rhythm.py [--db path/to/messages.db] [--window 5]
 """
 
 import argparse
+import os
 import sqlite3
 import sys
 from collections import defaultdict
@@ -17,6 +18,18 @@ from pathlib import Path
 
 # Add project root so we can import config if needed
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def default_db_path() -> str:
+    """Return the configured messages database path."""
+    try:
+        from src.config import resolve_webot_storage_path
+        return str(resolve_webot_storage_path(
+            os.getenv("DB_PATH", "data/messages.db"),
+            "data/messages.db",
+        ))
+    except Exception:
+        return "data/messages.db"
 
 
 def load_messages(db_path: str) -> dict[str, list[int]]:
@@ -221,8 +234,8 @@ def main():
         description="Analyze chat rhythm and recommend proactive mode thresholds"
     )
     parser.add_argument(
-        "--db", default="data/messages.db",
-        help="Path to SQLite database (default: data/messages.db)",
+        "--db", default=None,
+        help="Path to SQLite database (default: configured webot data dir)",
     )
     parser.add_argument(
         "--window", type=int, default=5,
@@ -230,11 +243,13 @@ def main():
     )
     args = parser.parse_args()
 
-    if not Path(args.db).exists():
-        print(f"Database not found: {args.db}")
+    db_path = args.db or default_db_path()
+
+    if not Path(db_path).exists():
+        print(f"Database not found: {db_path}")
         sys.exit(1)
 
-    analyze(args.db, args.window)
+    analyze(db_path, args.window)
 
 
 if __name__ == "__main__":

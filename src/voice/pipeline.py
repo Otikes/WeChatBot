@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.config import PROJECT_ROOT
+from src.config import webot_data_path
 from .file_locator import VoiceFileLocator, _extract_msg_svr_id
 from .decoder import SilkDecoder, DecodeError
 from .asr import AbstractASR, ASRError, create_asr
@@ -175,7 +175,7 @@ class VoicePipeline:
         self._locator = VoiceFileLocator(data_dir)
         self._decoder = SilkDecoder()
         self._asr = create_asr(config)
-        self._cache = VoiceCache(PROJECT_ROOT / "data" / "voice_cache.json")
+        self._cache = VoiceCache(webot_data_path("voice_cache.json"))
         self._stats = VoiceStats()
         # Map config language to Whisper language code.
         # "zh-en" means Chinese-English mixed — pass None for auto-detect.

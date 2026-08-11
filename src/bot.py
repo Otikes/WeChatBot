@@ -10,9 +10,8 @@ import os
 import signal
 import threading
 import time
-from pathlib import Path
 
-from .config import BotConfig, PROJECT_ROOT
+from .config import BotConfig, webot_data_path
 from .db import initialize_db, MessageStore
 from .summarize import create_summarizer
 from .trigger import TriggerDetector
@@ -162,7 +161,7 @@ class HealthMonitor:
             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
 
-        out_dir = PROJECT_ROOT / "data"
+        out_dir = webot_data_path()
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / "bot_status.json"
         tmp = path.with_suffix(".tmp")

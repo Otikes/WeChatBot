@@ -1,6 +1,6 @@
 """Welcome template manager — load/save templates and per-group mappings.
 
-Templates are stored in data/welcome_templates.json.  Each template has a
+Templates are stored in the configured webot data directory.  Each template has a
 unique id, a display name, and a message body with ``{new_member}`` as the
 placeholder for the new member's identifier.
 
@@ -17,10 +17,10 @@ from threading import Lock
 
 logger = logging.getLogger(__name__)
 
-from src.config import PROJECT_ROOT
+from src.config import webot_data_path
 
-# Default path relative to project root
-DEFAULT_WELCOME_CONFIG_PATH = PROJECT_ROOT / "data/welcome_templates.json"
+# Default path under the configured webot data directory
+DEFAULT_WELCOME_CONFIG_PATH = webot_data_path("welcome_templates.json")
 
 DISABLED_SENTINEL = "__disabled__"
 
@@ -62,8 +62,8 @@ class WelcomeManager:
             send_to_group(text)
     """
 
-    def __init__(self, path: Path | str = DEFAULT_WELCOME_CONFIG_PATH) -> None:
-        self._path = Path(path)
+    def __init__(self, path: Path | str | None = None) -> None:
+        self._path = Path(path) if path is not None else webot_data_path("welcome_templates.json")
         self._lock = Lock()
 
     # ── Load / Save ──────────────────────────────────────────────

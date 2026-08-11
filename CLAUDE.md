@@ -59,7 +59,7 @@ python -m pytest tests/ -v
 1. **AI 聊天/总结** — 需要真实 API Key + 微信运行
 2. **密钥提取** — 需要微信客户端运行
 3. **主动发言** — 需要微信客户端 + 真实群聊
-4. **昵称管理** — 需要 data/messages.db 有数据
+4. **昵称管理** — 需要配置后的 webot `messages.db` 有数据
 5. **消息发送** — 需要微信窗口可见
 
 ## 项目概述
@@ -110,8 +110,8 @@ pyinstaller build.spec
 
 ## 日志位置
 
-- 源码运行: `data/bot.log`
-- EXE 运行: `dist/data/bot.log`
+- 默认日志: `<WEBOT_DATA_DIR>/bot.log`（`WEBOT_DATA_DIR` 留空时为程序目录下 `data/bot.log`）
+- 兼容说明: `LOG_FILE=data/bot.log` 会跟随 `WEBOT_DATA_DIR`；填写其它路径则单独覆盖
 
 ## 代码参考手册同步更新
 

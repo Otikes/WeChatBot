@@ -12,6 +12,8 @@ from typing import Optional
 
 from opencc import OpenCC
 
+from src.config import webot_data_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,12 +53,12 @@ class AbstractASR(ABC):
 class LocalWhisperASR(AbstractASR):
     """Local Whisper model via faster-whisper.
 
-    The model is downloaded on first use to ``data/models/`` and kept in
+    The model is downloaded on first use to webot's ``models/`` data dir and kept in
     memory thereafter, so subsequent calls are fast and offline.
     """
 
     def __init__(self, model_size: str = "small",
-                 model_dir: str = "data/models",
+                 model_dir: str | Path | None = None,
                  to_simplified: bool = True) -> None:
         """
         Args:
@@ -65,7 +67,7 @@ class LocalWhisperASR(AbstractASR):
             to_simplified: Convert traditional Chinese → simplified via opencc.
         """
         self._model_size = model_size
-        self._model_dir = model_dir
+        self._model_dir = str(model_dir or webot_data_path("models"))
         self._to_simplified = to_simplified
         self._opencc: Optional[OpenCC] = None
         self._model = None  # lazy-init

@@ -24,7 +24,11 @@ if getattr(sys, "frozen", False):
 def _write_crash_log(exc_info: str) -> None:
     """Write crash details to a file for windowed-mode debugging."""
     try:
-        crash_dir = PROJECT_ROOT / "data"
+        try:
+            from src.config import get_webot_data_dir
+            crash_dir = get_webot_data_dir()
+        except Exception:
+            crash_dir = PROJECT_ROOT / "data"
         crash_dir.mkdir(parents=True, exist_ok=True)
         crash_path = crash_dir / "crash.log"
         with open(crash_path, "a", encoding="utf-8") as f:
@@ -119,7 +123,7 @@ def main():
             ctypes.windll.user32.MessageBoxW(
                 0,
                 "Web 服务器启动超时，请检查端口 7327 是否被占用。\n\n"
-                "详情见 data/crash.log",
+                "详情见 webot 数据目录中的 crash.log",
                 "webot — 启动失败",
                 0x10,
             )

@@ -2,6 +2,9 @@
 .env
 .env.*
 
+# 发布产物目录（包含 EXE 与本地 .env，不入库）
+release-bin/
+
 # Data — runtime files only
 data/messages.db
 data/messages.db-shm

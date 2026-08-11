@@ -47,7 +47,7 @@ class TestConfig(unittest.TestCase):
         env = {
             "AI_BACKEND": "deepseek",
             "DEEPSEEK_API_KEY": "sk-test-deepseek-key",
-            "DEEPSEEK_MODEL": "deepseek-v4-flash",
+            "DEEPSEEK_MODEL": "legacy-chat-model",
             "WECHAT_BACKEND": "wcdb",
             "WECHAT_GROUPS": "*",
             "BOT_DISPLAY_NAME": "test-bot",
@@ -58,7 +58,7 @@ class TestConfig(unittest.TestCase):
             self.assertIsInstance(cfg, BotConfig)
             self.assertEqual(cfg.ai_backend, "deepseek")
             self.assertEqual(cfg.deepseek_api_key, "sk-test-deepseek-key")
-            self.assertEqual(cfg.deepseek_model, "deepseek-v4-flash")
+            self.assertEqual(cfg.deepseek_model, "legacy-chat-model")
             self.assertEqual(cfg.bot_display_name, "test-bot")
             self.assertEqual(cfg.trigger_keywords, ["summary", "help", "info"])
             self.assertEqual(cfg.wechat_groups, "*")
@@ -69,7 +69,7 @@ class TestConfig(unittest.TestCase):
         env = {
             "AI_BACKEND": "claude",
             "ANTHROPIC_API_KEY": "sk-ant-test-key",
-            "SUMMARIZE_MODEL": "claude-sonnet-4-5-20250901",
+            "SUMMARIZE_MODEL": "messages-model",
             "WECHAT_BACKEND": "wcdb",
             "BOT_DISPLAY_NAME": "claude-bot",
         }
@@ -77,7 +77,7 @@ class TestConfig(unittest.TestCase):
             cfg = load_config()
             self.assertEqual(cfg.ai_backend, "claude")
             self.assertEqual(cfg.anthropic_api_key, "sk-ant-test-key")
-            self.assertEqual(cfg.summarize_model, "claude-sonnet-4-5-20250901")
+            self.assertEqual(cfg.summarize_model, "messages-model")
             self.assertEqual(cfg.bot_display_name, "claude-bot")
 
     def test_load_config_missing_deepseek_api_key_raises(self):
@@ -101,7 +101,11 @@ class TestConfig(unittest.TestCase):
     def test_load_config_defaults_when_vars_missing(self):
         """load_config should apply dataclass defaults for optional env vars."""
         from src.config import load_config
-        env = {"AI_BACKEND": "deepseek", "DEEPSEEK_API_KEY": "sk-test-key"}
+        env = {
+            "AI_BACKEND": "deepseek",
+            "DEEPSEEK_API_KEY": "sk-test-key",
+            "DEEPSEEK_MODEL": "legacy-chat-model",
+        }
         with patch.dict(os.environ, env, clear=True):
             cfg = load_config()
             self.assertEqual(cfg.poll_interval_sec, 1.0)
@@ -117,7 +121,7 @@ class TestConfig(unittest.TestCase):
         """When TRIGGER_KEYWORDS is unset, the dataclass defaults apply."""
         from src.config import load_config
         env = {"AI_BACKEND": "deepseek", "DEEPSEEK_API_KEY": "sk-test-key",
-               "TRIGGER_KEYWORDS": ""}
+               "DEEPSEEK_MODEL": "legacy-chat-model", "TRIGGER_KEYWORDS": ""}
         with patch.dict(os.environ, env, clear=True):
             cfg = load_config()
             self.assertIn("summarize", cfg.trigger_keywords)
@@ -1010,6 +1014,85 @@ class ApiStartStopEndpointTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# /api/ai/models endpoint tests
+# ---------------------------------------------------------------------------
+
+
+class AiModelsEndpointTests(unittest.TestCase):
+    """Tests for dynamic model discovery by AI protocol."""
+
+    def test_openai_compatible_fetches_models_from_normalized_base_url(self):
+        """Chat Completions protocol calls /models with Bearer auth."""
+        calls = []
+
+        def fake_request(url, headers):
+            calls.append((url, headers))
+            return {
+                "data": [
+                    {"id": "qwen-plus", "owned_by": "workspace"},
+                    {"id": "glm-4.5", "owned_by": "workspace"},
+                    {"id": "qwen-plus", "owned_by": "duplicate"},
+                ],
+            }
+
+        body = json.dumps({
+            "ai_backend": "openai_compatible",
+            "api_key": "sk-test",
+            "base_url": "relay.example.com/v1/chat/completions",
+        }).encode()
+        with patch("src.web.server._request_json", side_effect=fake_request):
+            handler, sock = _build_handler(
+                "/api/ai/models",
+                method="POST",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["protocol"], "openai_compatible")
+        self.assertEqual([m["id"] for m in result["models"]], ["glm-4.5", "qwen-plus"])
+        self.assertEqual(calls[0][0], "https://relay.example.com/v1/models")
+        self.assertEqual(calls[0][1]["Authorization"], "Bearer sk-test")
+
+    def test_messages_fetches_models_with_anthropic_headers(self):
+        """Messages protocol calls /v1/models with protocol headers."""
+        calls = []
+
+        def fake_request(url, headers):
+            calls.append((url, headers))
+            return {
+                "data": [
+                    {"id": "messages-fast", "display_name": "Messages Fast"},
+                    {"id": "messages-pro", "display_name": "Messages Pro"},
+                ],
+            }
+
+        body = json.dumps({
+            "ai_backend": "claude",
+            "api_key": "sk-ant-test",
+            "base_url": "https://messages.example.com/v1/messages",
+        }).encode()
+        with patch("src.web.server._request_json", side_effect=fake_request):
+            handler, sock = _build_handler(
+                "/api/ai/models",
+                method="POST",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["protocol"], "claude")
+        self.assertEqual([m["id"] for m in result["models"]], ["messages-fast", "messages-pro"])
+        self.assertEqual(calls[0][0], "https://messages.example.com/v1/models")
+        self.assertEqual(calls[0][1]["x-api-key"], "sk-ant-test")
+        self.assertIn("anthropic-version", calls[0][1])
+
+
+# ---------------------------------------------------------------------------
 # /api/config and /api/load-config endpoint tests
 # ---------------------------------------------------------------------------
 
@@ -1028,7 +1111,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
             body = json.loads(parts[1])
             self.assertTrue(body["ok"])
             config = body["config"]
-            self.assertEqual(config["ai_backend"], "deepseek")
+            self.assertEqual(config["ai_backend"], "openai_compatible")
             self.assertEqual(config["wechat_backend"], "wcdb")
 
     def test_load_config_reads_env_values(self):
@@ -1053,6 +1136,28 @@ class ApiConfigEndpointTests(unittest.TestCase):
             self.assertEqual(config["anthropic_base_url"], "https://claude-proxy.example.com")
             self.assertEqual(config["bot_display_name"], "MyBot")
             self.assertFalse(config["fun_enabled"])
+
+    def test_load_config_maps_legacy_deepseek_to_chat_completions(self):
+        """Legacy provider config is displayed as the Chat Completions protocol."""
+        with patch("src.web.server._find_or_create_env") as mock_find:
+            fake_env = MagicMock()
+            fake_env.exists.return_value = True
+            fake_env.read_text.return_value = (
+                "AI_BACKEND=deepseek\n"
+                "DEEPSEEK_API_KEY=sk-legacy\n"
+                "DEEPSEEK_BASE_URL=https://legacy.example.com/v1\n"
+                "DEEPSEEK_MODEL=legacy-model\n"
+            )
+            mock_find.return_value = fake_env
+            handler, sock = _build_handler("/api/load-config")
+            parts = sock.get_response_text().split("\r\n\r\n", 1)
+            body = json.loads(parts[1])
+
+        config = body["config"]
+        self.assertEqual(config["ai_backend"], "openai_compatible")
+        self.assertEqual(config["openai_api_key"], "sk-legacy")
+        self.assertEqual(config["openai_base_url"], "https://legacy.example.com/v1")
+        self.assertEqual(config["openai_model"], "legacy-model")
 
     def test_load_config_reads_feishu_export_values(self):
         """GET /api/load-config reads Feishu export settings from .env."""
@@ -1727,7 +1832,7 @@ class OnboardingApiTests(unittest.TestCase):
         post_body = json.dumps({
             "ai_backend": "deepseek",
             "deepseek_api_key": "sk-test",
-            "deepseek_model": "deepseek-v4-flash",
+            "deepseek_model": "legacy-chat-model",
         })
         handler, sock = _build_handler(
             "/api/onboarding/step3", method="POST",

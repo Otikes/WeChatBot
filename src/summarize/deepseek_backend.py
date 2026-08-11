@@ -13,14 +13,11 @@ DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 class DeepSeekSummarizer(OpenAICompatibleSummarizer):
     """Summarization via DeepSeek API (OpenAI-compatible preset)."""
 
-    MODEL_PRO = "deepseek-v4-pro"
-    MODEL_FLASH = "deepseek-v4-flash"
-
     # 1M context window -> 900K safe budget.
     token_budget = 900_000
 
     def __init__(self, api_key: str,
-                 model: str = MODEL_PRO,
+                 model: str = "",
                  base_url: str = DEEPSEEK_BASE_URL,
                  chunk_size: int = 400,
                  max_retries: int = 3):

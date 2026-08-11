@@ -17,6 +17,8 @@ from base64 import b64encode
 from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import unquote
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 # Re-exported from config.py for use in API handlers.
 # NOTE: _decode_wechat_groups is also imported inside _handle_request()
@@ -77,11 +79,11 @@ def _find_or_create_env() -> Path:
     # 3. Last resort: create minimal .env in app home
     env_path = Path(".env")
     env_path.write_text(
-        "AI_BACKEND=deepseek\n"
+        "AI_BACKEND=openai_compatible\n"
         "DEEPSEEK_API_KEY=\n"
         "OPENAI_API_KEY=\n"
         f"OPENAI_BASE_URL={OPENAI_COMPATIBLE_BASE_URL}\n"
-        "OPENAI_MODEL=gpt-4.1-mini\n"
+        "OPENAI_MODEL=\n"
         "WECHAT_BACKEND=wcdb\n"
         "BOT_DISPLAY_NAME=\n"
         "WECHAT_GROUPS=\n",
@@ -187,38 +189,140 @@ def _feishu_config_from_raw(raw: dict[str, str]) -> dict:
 
 def _ai_config_from_raw(raw: dict[str, str]) -> dict:
     """Return UI-facing AI config from env key/value pairs."""
-    backend = _normalize_ai_backend(raw.get("AI_BACKEND", "deepseek"))
+    backend = _normalize_ai_backend(raw.get("AI_BACKEND", "openai_compatible"))
+    ui_backend = "openai_compatible" if backend == "deepseek" else backend
+    openai_api_key = raw.get("OPENAI_API_KEY", "")
+    openai_base_url = raw.get("OPENAI_BASE_URL", "")
+    openai_model = raw.get("OPENAI_MODEL", "")
+    if backend == "deepseek":
+        openai_api_key = openai_api_key or raw.get("DEEPSEEK_API_KEY", "")
+        openai_base_url = openai_base_url or raw.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
+        openai_model = openai_model or raw.get("DEEPSEEK_MODEL", "")
     return {
-        "ai_backend": backend,
+        "ai_backend": ui_backend,
         "deepseek_api_key": raw.get("DEEPSEEK_API_KEY", ""),
         "deepseek_base_url": raw.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
-        "deepseek_model": raw.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
-        "openai_api_key": raw.get("OPENAI_API_KEY", ""),
+        "deepseek_model": raw.get("DEEPSEEK_MODEL", ""),
+        "openai_api_key": openai_api_key,
         "openai_base_url": normalize_openai_base_url(
-            raw.get("OPENAI_BASE_URL", OPENAI_COMPATIBLE_BASE_URL)
+            openai_base_url or OPENAI_COMPATIBLE_BASE_URL
         ),
-        "openai_model": raw.get("OPENAI_MODEL", "gpt-4.1-mini"),
+        "openai_model": openai_model,
         "anthropic_api_key": raw.get("ANTHROPIC_API_KEY", ""),
         "anthropic_base_url": raw.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
-        "summarize_model": raw.get("SUMMARIZE_MODEL", "claude-haiku-4-5-20251001"),
+        "summarize_model": raw.get("SUMMARIZE_MODEL", ""),
     }
 
 
 def _ai_updates_from_config(config: dict) -> dict[str, str | None]:
     """Return env updates for AI config from UI payload."""
+    raw_backend = config.get("ai_backend")
+    openai_base_url = (
+        normalize_openai_base_url(config.get("openai_base_url"))
+        if "openai_base_url" in config
+        else None
+    )
     updates: dict[str, str | None] = {
-        "AI_BACKEND": _normalize_ai_backend(config.get("ai_backend", "deepseek")),
+        "AI_BACKEND": _normalize_ai_backend(raw_backend) if raw_backend is not None else None,
         "DEEPSEEK_API_KEY": config.get("deepseek_api_key"),
         "DEEPSEEK_BASE_URL": config.get("deepseek_base_url"),
         "DEEPSEEK_MODEL": config.get("deepseek_model"),
         "OPENAI_API_KEY": config.get("openai_api_key"),
-        "OPENAI_BASE_URL": normalize_openai_base_url(config.get("openai_base_url")),
+        "OPENAI_BASE_URL": openai_base_url,
         "OPENAI_MODEL": config.get("openai_model"),
         "ANTHROPIC_API_KEY": config.get("anthropic_api_key"),
         "ANTHROPIC_BASE_URL": config.get("anthropic_base_url"),
         "SUMMARIZE_MODEL": config.get("summarize_model"),
     }
     return updates
+
+
+def _normalize_anthropic_base_url(raw: str) -> str:
+    """Normalize an Anthropic Messages base URL for models/messages calls."""
+    value = (raw or "").strip() or "https://api.anthropic.com"
+    if "://" not in value:
+        value = f"https://{value}"
+    value = value.rstrip("/")
+    for suffix in ("/v1/messages", "/v1/models"):
+        if value.lower().endswith(suffix):
+            value = value[: -len(suffix)].rstrip("/")
+            break
+    return value
+
+
+def _extract_model_items(payload: dict | list) -> list[dict[str, str]]:
+    """Extract model rows from common OpenAI-compatible and Anthropic responses."""
+    if isinstance(payload, dict):
+        raw_items = payload.get("data")
+        if raw_items is None:
+            raw_items = payload.get("models")
+        if raw_items is None:
+            raw_items = payload.get("model_list")
+    else:
+        raw_items = payload
+
+    models: list[dict[str, str]] = []
+    seen: set[str] = set()
+    if not isinstance(raw_items, list):
+        return models
+
+    for item in raw_items:
+        model_id = ""
+        label = ""
+        owner = ""
+        if isinstance(item, str):
+            model_id = item
+        elif isinstance(item, dict):
+            model_id = str(item.get("id") or item.get("model") or item.get("name") or "")
+            label = str(item.get("display_name") or item.get("name") or "")
+            owner = str(item.get("owned_by") or item.get("owner") or "")
+        model_id = model_id.strip()
+        if not model_id or model_id in seen:
+            continue
+        seen.add(model_id)
+        models.append({
+            "id": model_id,
+            "label": label.strip() or model_id,
+            "hint": owner.strip(),
+        })
+
+    return sorted(models, key=lambda m: m["id"].lower())
+
+
+def _request_json(url: str, headers: dict[str, str]) -> dict | list:
+    req = urlrequest.Request(url, headers=headers)
+    with urlrequest.urlopen(req, timeout=15) as resp:
+        raw = resp.read().decode("utf-8")
+    return json.loads(raw)
+
+
+def _fetch_ai_models(protocol: str, api_key: str, base_url: str) -> dict:
+    """Fetch model IDs from the selected AI protocol."""
+    backend = _normalize_ai_backend(protocol)
+    api_key = (api_key or "").strip()
+
+    if backend in ("openai_compatible", "deepseek"):
+        base = normalize_openai_base_url(base_url, OPENAI_COMPATIBLE_BASE_URL)
+        url = f"{base}/models"
+        headers = {"Accept": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = _request_json(url, headers)
+        return {"protocol": "openai_compatible", "models": _extract_model_items(payload)}
+
+    if backend == "claude":
+        base = _normalize_anthropic_base_url(base_url)
+        url = f"{base}/v1/models" if not base.lower().endswith("/v1") else f"{base}/models"
+        headers = {
+            "Accept": "application/json",
+            "anthropic-version": "2023-06-01",
+        }
+        if api_key:
+            headers["x-api-key"] = api_key
+        payload = _request_json(url, headers)
+        return {"protocol": "claude", "models": _extract_model_items(payload)}
+
+    raise ValueError(f"Unsupported AI protocol: {protocol}")
 
 
 _DEFAULT_TODO_ADD_KEYWORDS = "记一下,添加待办,新建待办,帮我记,待办"
@@ -381,18 +485,18 @@ def _set_env_key(env_path: Path, key: str, value: str) -> None:
 def _write_onboarding_to_env(env_path):
     """Write accumulated onboarding data to .env file atomically."""
     env_map = {
-        "AI_BACKEND": _normalize_ai_backend(_onboarding_data.get("ai_backend", "deepseek")),
+        "AI_BACKEND": _normalize_ai_backend(_onboarding_data.get("ai_backend", "openai_compatible")),
         "DEEPSEEK_API_KEY": _onboarding_data.get("deepseek_api_key", ""),
         "DEEPSEEK_BASE_URL": _onboarding_data.get("deepseek_base_url", "https://api.deepseek.com"),
-        "DEEPSEEK_MODEL": _onboarding_data.get("deepseek_model", "deepseek-v4-flash"),
+        "DEEPSEEK_MODEL": _onboarding_data.get("deepseek_model", ""),
         "OPENAI_API_KEY": _onboarding_data.get("openai_api_key", ""),
         "OPENAI_BASE_URL": normalize_openai_base_url(
             _onboarding_data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
         ),
-        "OPENAI_MODEL": _onboarding_data.get("openai_model", "gpt-4.1-mini"),
+        "OPENAI_MODEL": _onboarding_data.get("openai_model", ""),
         "ANTHROPIC_API_KEY": _onboarding_data.get("anthropic_api_key", ""),
         "ANTHROPIC_BASE_URL": _onboarding_data.get("anthropic_base_url", "https://api.anthropic.com"),
-        "SUMMARIZE_MODEL": _onboarding_data.get("summarize_model", "claude-haiku-4-5-20251001"),
+        "SUMMARIZE_MODEL": _onboarding_data.get("summarize_model", ""),
         "WECHAT_BACKEND": _onboarding_data.get("wechat_backend", "wcdb"),
         "WECHAT_GROUPS": _onboarding_data.get("wechat_groups", "*"),
         "BOT_DISPLAY_NAME": _onboarding_data.get("bot_display_name", "群聊小助手"),
@@ -862,9 +966,9 @@ _onboarding_data = {
     "step1_done": False, "step2_done": False, "step3_done": False, "step4_done": False,
     "key": "", "wxid": "", "db_path": "",
     "bot_display_name": "", "wechat_groups": "*", "wechat_backend": "wcdb",
-    "ai_backend": "deepseek", "deepseek_api_key": "", "deepseek_model": "deepseek-v4-flash",
-    "openai_api_key": "", "openai_base_url": OPENAI_COMPATIBLE_BASE_URL, "openai_model": "gpt-4.1-mini",
-    "anthropic_api_key": "", "summarize_model": "claude-haiku-4-5-20251001",
+    "ai_backend": "openai_compatible", "deepseek_api_key": "", "deepseek_model": "",
+    "openai_api_key": "", "openai_base_url": OPENAI_COMPATIBLE_BASE_URL, "openai_model": "",
+    "anthropic_api_key": "", "summarize_model": "",
     "proactive_enabled": False,
     "sticky_mention_enabled": True,
 }
@@ -1070,6 +1174,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/onboarding/reset",
                          "/api/onboarding/step1", "/api/onboarding/step2",
                          "/api/onboarding/step3", "/api/onboarding/step4",
+                         "/api/ai/models",
                          "/api/sandbox/test",
                          "/api/lots",
                          "/api/todos/action",
@@ -1311,7 +1416,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             try:
                 config = json.loads(body)
                 # Basic validation: must look like a webot config export
-                expected_keys = ['ai_backend', 'deepseek_model', 'wechat_backend']
+                expected_keys = ['ai_backend', 'openai_model', 'summarize_model', 'wechat_backend']
                 has_keys = any(k in config for k in expected_keys)
                 if not has_keys:
                     raise ValueError("无效的配置文件格式：缺少必需字段")
@@ -1379,6 +1484,29 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)})
             except Exception as e:
                 logger.exception("Failed to import config")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Fetch AI models by protocol ─────────────────────────
+        if self.path == "/api/ai/models":
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len) if content_len else b"{}"
+            try:
+                data = json.loads(body)
+                result = _fetch_ai_models(
+                    protocol=data.get("ai_backend", "openai_compatible"),
+                    api_key=data.get("api_key", ""),
+                    base_url=data.get("base_url", ""),
+                )
+                self.send_json({"ok": True, **result})
+            except urlerror.HTTPError as e:
+                detail = e.read().decode("utf-8", errors="replace")[:500]
+                self.send_json({
+                    "ok": False,
+                    "error": f"模型列表请求失败: HTTP {e.code} {detail}",
+                })
+            except Exception as e:
+                logger.exception("Failed to fetch AI models")
                 self.send_json({"ok": False, "error": str(e)})
             return
 
@@ -1755,7 +1883,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
                 # Load config
                 from dotenv import load_dotenv
-                from src.config import find_env_file, load_config
+                from src.config import BotConfig, find_env_file, load_config
                 from src.summarize import create_summarizer
 
                 env_path = find_env_file()
@@ -1764,7 +1892,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 else:
                     load_dotenv(override=True)
 
-                config = load_config()
+                try:
+                    config = load_config()
+                except Exception as e:
+                    logger.info("Using transient sandbox config: %s", e)
+                    config = BotConfig()
 
                 # Allow overrides from frontend sandbox inputs
                 if data.get("ai_backend"):
@@ -1980,21 +2112,21 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 data = json.loads(body)
-                ai = _normalize_ai_backend(data.get("ai_backend", "deepseek"))
+                ai = _normalize_ai_backend(data.get("ai_backend", "openai_compatible"))
                 with _onboarding_lock:
                     _onboarding_data["step3_done"] = True
                     _onboarding_data["ai_backend"] = ai
                     _onboarding_data["deepseek_api_key"] = data.get("deepseek_api_key", "")
                     _onboarding_data["deepseek_base_url"] = data.get("deepseek_base_url", "https://api.deepseek.com")
-                    _onboarding_data["deepseek_model"] = data.get("deepseek_model", "deepseek-v4-flash")
+                    _onboarding_data["deepseek_model"] = data.get("deepseek_model", "")
                     _onboarding_data["openai_api_key"] = data.get("openai_api_key", "")
                     _onboarding_data["openai_base_url"] = normalize_openai_base_url(
                         data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
                     )
-                    _onboarding_data["openai_model"] = data.get("openai_model", "gpt-4.1-mini")
+                    _onboarding_data["openai_model"] = data.get("openai_model", "")
                     _onboarding_data["anthropic_api_key"] = data.get("anthropic_api_key", "")
                     _onboarding_data["anthropic_base_url"] = data.get("anthropic_base_url", "https://api.anthropic.com")
-                    _onboarding_data["summarize_model"] = data.get("summarize_model", "claude-haiku-4-5-20251001")
+                    _onboarding_data["summarize_model"] = data.get("summarize_model", "")
                 self.send_json({"ok": True})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)})

@@ -54,11 +54,11 @@ def ensure_macos_env_file() -> Path:
     APP_HOME.mkdir(parents=True, exist_ok=True)
     if not MAC_ENV_PATH.exists():
         MAC_ENV_PATH.write_text(
-            "AI_BACKEND=deepseek\n"
+            "AI_BACKEND=openai_compatible\n"
             "DEEPSEEK_API_KEY=\n"
             "OPENAI_API_KEY=\n"
             "OPENAI_BASE_URL=https://api.openai.com/v1\n"
-            "OPENAI_MODEL=gpt-4.1-mini\n"
+            "OPENAI_MODEL=\n"
             "WECHAT_BACKEND=mac_hybrid\n"
             "MAC_WECHAT_SEND_SHORTCUT=enter\n"
             "BOT_DISPLAY_NAME=群聊小助手\n"

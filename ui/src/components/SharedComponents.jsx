@@ -70,6 +70,7 @@ export function Select({ value, onChange, options }) {
   }, [])
 
   const selected = options.find(o => o.value === value)
+  const selectedCode = selected && selected.showValue === false ? '' : (selected?.code || selected?.value)
 
   return (
     <div ref={ref} className="relative">
@@ -81,7 +82,7 @@ export function Select({ value, onChange, options }) {
                    transition-all duration-200 cursor-pointer text-left
                    hover:border-text-muted/30 dark:hover:border-text-muted/40"
       >
-        {selected ? <><span>{selected.desc}</span><span className="text-text-muted/60 ml-1.5 font-normal text-[13px]">({selected.value})</span></> : value}
+        {selected ? <><span>{selected.desc}</span>{selectedCode && selectedCode !== selected.desc ? <span className="text-text-muted/60 ml-1.5 font-normal text-[13px]">({selectedCode})</span> : null}</> : value}
       </button>
       <span
         className="absolute right-5 top-1/2 pointer-events-none select-none text-text-muted text-lg font-mono transition-all duration-200"
@@ -92,23 +93,36 @@ export function Select({ value, onChange, options }) {
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
-          className="absolute z-50 left-0 right-0 mt-1.5 bg-bg-card border border-border-main rounded-2xl shadow-xl overflow-hidden"
+          className="absolute z-50 left-0 right-0 mt-1.5 bg-bg-card border border-border-main rounded-2xl shadow-xl overflow-hidden max-h-[320px] overflow-y-auto"
         >
-          {options.map(opt => (
-            <button
-              key={opt.value}
-              type="button"
-              onClick={() => { onChange(opt.value); setOpen(false) }}
-              className={`w-full text-left px-5 py-2.5 text-[14px] transition-colors flex items-center gap-3 font-mono cursor-pointer
-                ${value === opt.value ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green font-semibold' : 'text-text-main hover:bg-bg-raised'}`}
-            >
-              <span className="w-[120px] shrink-0 font-semibold whitespace-normal break-words leading-snug">{opt.value}</span>
-              <span className="w-[4px] shrink-0 opacity-40 text-text-muted self-start mt-[3px]">·</span>
-              <span className="w-[132px] shrink-0 whitespace-normal break-words leading-snug">{opt.desc}</span>
-              <span className="w-[4px] shrink-0 opacity-40 text-text-muted self-start mt-[3px]">·</span>
-              <span className="flex-1 min-w-0 text-text-muted whitespace-normal break-words leading-snug">{opt.hint}</span>
-            </button>
-          ))}
+          {options.map(opt => {
+            const code = opt.showValue === false ? '' : (opt.code || opt.value)
+            const desc = opt.desc || opt.value
+            const showCode = Boolean(code && code !== desc)
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => { onChange(opt.value); setOpen(false) }}
+                className={`w-full text-left px-5 py-2.5 text-[14px] transition-colors flex items-center gap-3 font-mono cursor-pointer
+                  ${value === opt.value ? 'bg-brand-green-light text-brand-green-hover dark:text-brand-green font-semibold' : 'text-text-main hover:bg-bg-raised'}`}
+              >
+                {showCode && (
+                  <>
+                    <span className="w-[156px] shrink-0 font-semibold whitespace-normal break-words leading-snug">{code}</span>
+                    <span className="w-[4px] shrink-0 opacity-40 text-text-muted self-start mt-[3px]">·</span>
+                  </>
+                )}
+                <span className={`${showCode ? 'w-[180px] shrink-0' : 'flex-1 min-w-0'} whitespace-normal break-words leading-snug`}>{desc}</span>
+                {opt.hint ? (
+                  <>
+                    <span className="w-[4px] shrink-0 opacity-40 text-text-muted self-start mt-[3px]">·</span>
+                    <span className="flex-1 min-w-0 text-text-muted whitespace-normal break-words leading-snug">{opt.hint}</span>
+                  </>
+                ) : null}
+              </button>
+            )
+          })}
         </motion.div>
       )}
     </div>

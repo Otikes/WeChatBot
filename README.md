@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20%7C%20macOS-blue?style=flat-square&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.13%2B-green?style=flat-square&logo=python" alt="Python" />
-  <img src="https://img.shields.io/badge/AI-Claude%20%7C%20DeepSeek%20%7C%20OpenAI%20Compatible-purple?style=flat-square" alt="AI Backend" />
+  <img src="https://img.shields.io/badge/AI-Chat%20Completions%20%7C%20Messages-purple?style=flat-square" alt="AI Protocols" />
   <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="License" />
 </p>
 
@@ -65,7 +65,7 @@
 
 **怎么用**
 
-- `@机器人 DeepSeek 和 Claude 哪个好？`
+- `@机器人 这几个模型协议怎么选？`
 - `@机器人 刚才他们说的那个餐厅地址是什么？`
 
 ### 4. 群友昵称
@@ -117,7 +117,7 @@
 打开 EXE 后会自动弹出网页控制台，左侧菜单依次是：
 
 - **运行状态**：看机器人在不在线、处理了多少消息
-- **系统配置**：设置 AI 后端和 Key、机器人名字、数据目录、测试提示词
+- **系统配置**：设置 AI 协议、请求地址、Key、机器人名字、数据目录、测试提示词
 - **功能开关**：各项功能的开关和参数调整
 - **群聊待办**：待办功能配置 + 所有群的待办列表
 - **群友昵称**：给群成员取别名
@@ -169,7 +169,7 @@ python desktop.py
 
 所有设置都在控制台里直接改，不需要手动编辑文件。保存后重启机器人即可生效。
 
-在「系统配置 → AI 后端配置」选择服务商并填写模型配置。DeepSeek 和 Claude 需要 API Key；OpenAI 兼容模式可接 New API、One API、LiteLLM、OpenRouter、Ollama、LM Studio 等兼容 Chat Completions 的服务。本地无鉴权服务可以不填 Key，Base URL 可粘 `.../v1` 或完整的 `.../v1/chat/completions`，保存时会自动纠正。
+在「系统配置 → AI 协议配置」选择接口协议，填写请求地址和 Key 后点击「获取模型」，再从返回列表里选择一个模型作为当前使用模型。Chat Completions 协议会请求 `/v1/models`，实际聊天走 `/v1/chat/completions`；Messages 协议会请求 `/v1/models`，实际聊天走 `/v1/messages`。本地无鉴权的 Chat Completions 兼容服务可以不填 Key，请求地址可粘 `.../v1`、`.../v1/chat/completions` 或 `.../v1/models`，保存时会自动纠正。
 
 ---
 
@@ -182,7 +182,7 @@ python desktop.py
 目前没有已知案例，但请自行评估风险。
 
 **支持哪些 AI？费用多少？**
-DeepSeek（推荐，极低价格）、Claude，以及任意 OpenAI 兼容服务。普通群一天用下来不到一毛钱。
+支持 Chat Completions 和 Messages 两类主流协议。只要服务能通过请求地址和 Key 获取模型列表，就可以选择返回的模型来使用；费用取决于你接入的模型服务。
 
 **微信能最小化吗？**
 读消息不受影响，发消息时微信窗口需要可见。

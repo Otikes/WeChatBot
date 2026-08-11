@@ -176,7 +176,7 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
     - Conservative token budget for unknown model context windows
     """
 
-    MODEL_DEFAULT = "gpt-4.1-mini"
+    MODEL_DEFAULT = ""
 
     # A safe default across many compatible providers. Larger-context models
     # still work through map-reduce chunking, just with earlier splitting.
@@ -191,11 +191,14 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                  max_retries: int = 3,
                  extra_body: dict[str, Any] | None = None):
         normalized_base_url = normalize_openai_base_url(base_url)
+        selected_model = (model or "").strip()
+        if not selected_model:
+            raise ValueError("模型未设置，请先获取并选择一个模型")
         self.client = OpenAI(
             api_key=openai_api_key_for_client(api_key),
             base_url=normalized_base_url,
         )
-        self.model = model
+        self.model = selected_model
         self.base_url = normalized_base_url
         self.chunk_size = chunk_size
         self.max_retries = max_retries

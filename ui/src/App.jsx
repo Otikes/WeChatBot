@@ -18,7 +18,7 @@ const TABS = [
   {
     id: 'config', label: '系统配置', icon: Gear,
     subs: [
-      { id: 'ai', label: 'AI 后端配置' },
+      { id: 'ai', label: 'AI 协议配置' },
       { id: 'voice', label: '语音识别配置' },
       { id: 'identity', label: '机器人身份' },
       { id: 'data', label: '数据路径' },
@@ -124,7 +124,7 @@ export default function App() {
     uptime_sec: 0,
     messages_processed: 0,
     wechat_backend: 'wcdb',
-    ai_backend: 'deepseek',
+    ai_backend: 'openai_compatible',
     db_ok: false,
     last_api_call_sec_ago: -1,
     last_api_call_time: 0,

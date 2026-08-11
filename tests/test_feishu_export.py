@@ -17,6 +17,7 @@ class FeishuConfigTests(unittest.TestCase):
         env = {
             "AI_BACKEND": "deepseek",
             "DEEPSEEK_API_KEY": "sk-test-key",
+            "DEEPSEEK_MODEL": "legacy-chat-model",
             "FEISHU_EXPORT_ENABLED": "true",
             "FEISHU_APP_ID": "cli_test",
             "FEISHU_APP_SECRET": "secret_test",
@@ -54,6 +55,7 @@ class FeishuConfigTests(unittest.TestCase):
         env = {
             "AI_BACKEND": "deepseek",
             "DEEPSEEK_API_KEY": "sk-test-key",
+            "DEEPSEEK_MODEL": "legacy-chat-model",
             "FEISHU_EXPORT_MODE": "calendar",
         }
         with patch.dict(os.environ, env, clear=True):

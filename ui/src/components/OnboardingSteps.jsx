@@ -532,15 +532,82 @@ export function Step2WeChatConfig({ data, updateData, onDone }) {
 
 // ── Step 3: AI Backend ────────────────────────────────────────────────
 
+const AI_PROTOCOL_OPTIONS = [
+  { value: 'openai_compatible', desc: 'Chat Completions', hint: '/v1/chat/completions · /v1/models', showValue: false },
+  { value: 'claude', desc: 'Messages', hint: '/v1/messages · /v1/models', showValue: false },
+]
+
+function normalizeProtocol(value) {
+  if (value === 'deepseek' || value === 'openai') return 'openai_compatible'
+  return value || 'openai_compatible'
+}
+
 export function Step3AIConfig({ data, updateData, onDone }) {
   const [busy, setBusy] = useState(false)
-  const isDeepSeek = data.ai_backend === 'deepseek'
-  const isOpenAI = data.ai_backend === 'openai_compatible' || data.ai_backend === 'openai'
-  const apiKey = isDeepSeek ? data.deepseek_api_key : isOpenAI ? data.openai_api_key : data.anthropic_api_key
-  const model = isDeepSeek ? data.deepseek_model : isOpenAI ? data.openai_model : data.summarize_model
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelError, setModelError] = useState('')
+  const [modelOptions, setModelOptions] = useState([])
+  const protocol = normalizeProtocol(data.ai_backend)
+  const isOpenAI = protocol === 'openai_compatible'
+  const apiKey = isOpenAI ? data.openai_api_key : data.anthropic_api_key
+  const baseUrl = isOpenAI ? data.openai_base_url : data.anthropic_base_url
+  const modelKey = isOpenAI ? 'openai_model' : 'summarize_model'
+  const model = data[modelKey] || ''
   const valid = isOpenAI
     ? (model || '').trim().length > 0
     : (apiKey || '').trim().length >= 8 && (model || '').trim().length > 0
+  const modelSelectOptions = (() => {
+    const seen = new Set()
+    const rows = modelOptions.map(m => ({
+      value: m.id,
+      code: m.id,
+      desc: m.label || m.id,
+      hint: m.hint || '',
+    })).filter(opt => {
+      if (!opt.value || seen.has(opt.value)) return false
+      seen.add(opt.value)
+      return true
+    })
+    if (model && !seen.has(model)) {
+      rows.unshift({ value: model, code: model, desc: model, hint: '当前配置' })
+    }
+    if (!model && rows.length) {
+      rows.unshift({ value: '', desc: '请选择模型', hint: '从获取到的列表中选择', showValue: false })
+    }
+    return rows
+  })()
+
+  async function fetchModels() {
+    setModelBusy(true)
+    setModelError('')
+    try {
+      const res = await fetchWithRetry(`${API}/api/ai/models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ai_backend: protocol,
+          api_key: apiKey || '',
+          base_url: baseUrl || '',
+        }),
+      })
+      const result = await res.json()
+      if (!result.ok) throw new Error(result.error || '获取模型失败')
+      const models = result.models || []
+      setModelOptions(models)
+      if (!models.length) setModelError('接口没有返回可用模型')
+    } catch (e) {
+      setModelOptions([])
+      setModelError(e.message || '获取模型失败')
+    } finally {
+      setModelBusy(false)
+    }
+  }
+
+  function handleProtocolChange(value) {
+    updateData({ ai_backend: value })
+    setModelOptions([])
+    setModelError('')
+  }
 
   async function handleNext() {
     setBusy(true)
@@ -548,16 +615,16 @@ export function Step3AIConfig({ data, updateData, onDone }) {
       await fetchWithRetry(`${API}/api/onboarding/step3`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ai_backend: data.ai_backend || 'deepseek',
+          ai_backend: protocol,
           deepseek_api_key: data.deepseek_api_key || '',
           deepseek_base_url: data.deepseek_base_url || 'https://api.deepseek.com',
-          deepseek_model: data.deepseek_model || 'deepseek-v4-flash',
+          deepseek_model: data.deepseek_model || '',
           openai_api_key: data.openai_api_key || '',
           openai_base_url: data.openai_base_url || 'https://api.openai.com/v1',
-          openai_model: data.openai_model || 'gpt-4.1-mini',
+          openai_model: data.openai_model || '',
           anthropic_api_key: data.anthropic_api_key || '',
           anthropic_base_url: data.anthropic_base_url || 'https://api.anthropic.com',
-          summarize_model: data.summarize_model || 'claude-haiku-4-5-20251001',
+          summarize_model: data.summarize_model || '',
         }),
       })
       onDone()
@@ -571,58 +638,60 @@ export function Step3AIConfig({ data, updateData, onDone }) {
     <div>
       <div className="flex items-center gap-2 mb-6">
         <div className="w-1.5 h-4.5 rounded-full bg-[#3772cf]" />
-        <h3 className="text-base font-semibold tracking-tight text-text-main">AI 后端配置</h3>
+        <h3 className="text-base font-semibold tracking-tight text-text-main">AI 协议配置</h3>
       </div>
 
       <div className="space-y-6 mt-4">
-        <Field label="AI 服务商" hint="推荐 DeepSeek，中文群聊效果更好">
-          <Select value={data.ai_backend || 'deepseek'} onChange={v => updateData({ ai_backend: v })} options={[
-            { value: 'deepseek', desc: 'DeepSeek', hint: '推荐 · 中文效果好' },
-            { value: 'openai_compatible', desc: 'OpenAI 兼容', hint: 'New API / 代理 / 自建转发' },
-            { value: 'claude', desc: 'Claude', hint: 'Anthropic' },
-          ]} />
+        <Field label="AI 协议" hint="按接口协议选择；具体模型由请求地址和 Key 动态获取">
+          <Select value={protocol} onChange={handleProtocolChange} options={AI_PROTOCOL_OPTIONS} />
         </Field>
 
-        {isDeepSeek ? (
+        {isOpenAI ? (
           <>
-            <Field label="DeepSeek API Key" hint="在 platform.deepseek.com/api_keys 注册获取">
-              <Input type="password" value={data.deepseek_api_key || ''} onChange={v => updateData({ deepseek_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx" />
+            <Field label="API Key" hint="云端接口通常需要；本地无鉴权服务可留空">
+              <Input type="password" value={data.openai_api_key || ''} onChange={v => updateData({ openai_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx（可选）" />
             </Field>
-            <Field label="API Base URL" hint="兼容 OpenAI 的转发地址；留默认值使用官方 API">
-              <Input value={data.deepseek_base_url || 'https://api.deepseek.com'} onChange={v => updateData({ deepseek_base_url: v })} placeholder="https://api.deepseek.com" />
+            <Field label="请求地址" hint="可填 base URL，也可直接粘完整 /v1/chat/completions 或 /v1/models；保存时会自动纠正">
+              <Input value={data.openai_base_url || 'https://api.openai.com/v1'} onChange={v => updateData({ openai_base_url: v })} placeholder="https://example.com/v1" />
             </Field>
-            <Field label="模型选择">
-              <Select value={data.deepseek_model || 'deepseek-v4-flash'} onChange={v => updateData({ deepseek_model: v })} options={[
-                { value: 'deepseek-v4-flash', desc: 'V4 Flash', hint: '极速 · 极低费用' },
-                { value: 'deepseek-v4-pro', desc: 'V4 Pro', hint: '百万上下文 · 旗舰版' },
-              ]} />
-            </Field>
-          </>
-        ) : isOpenAI ? (
-          <>
-            <Field label="OpenAI 兼容 API Key" hint="云端服务请填写；Ollama、LM Studio 等本地兼容服务可留空">
-              <Input type="password" value={data.openai_api_key || ''} onChange={v => updateData({ openai_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx（本地服务可留空）" />
-            </Field>
-            <Field label="API Base URL" hint="可填 base URL，也可直接粘 /v1/chat/completions，保存时会自动纠正">
-              <Input value={data.openai_base_url || 'https://api.openai.com/v1'} onChange={v => updateData({ openai_base_url: v })} placeholder="https://api.openai.com/v1" />
-            </Field>
-            <Field label="模型名称" hint="填写服务商实际提供的模型 ID">
-              <Input value={data.openai_model || 'gpt-4.1-mini'} onChange={v => updateData({ openai_model: v })} placeholder="gpt-4.1-mini" />
+            <Field label="模型" hint={modelOptions.length ? `已获取 ${modelOptions.length} 个模型` : '填写请求地址和 Key 后获取模型列表'} error={modelError || null}>
+              <div className="flex gap-2">
+                <div className="flex-1 min-w-0">
+                  {modelSelectOptions.length ? (
+                    <Select value={model} onChange={v => updateData({ [modelKey]: v })} options={modelSelectOptions} />
+                  ) : (
+                    <Input value={model} onChange={v => updateData({ [modelKey]: v })} placeholder="先获取模型，或手动填写模型 ID" />
+                  )}
+                </div>
+                <button type="button" onClick={fetchModels} disabled={modelBusy}
+                  className="shrink-0 px-5 py-2.5 rounded-full bg-brand-green text-[#0d0d0d] text-[14px] font-semibold hover:opacity-90 disabled:opacity-45 transition-opacity cursor-pointer">
+                  {modelBusy ? '获取中' : '获取模型'}
+                </button>
+              </div>
             </Field>
           </>
         ) : (
           <>
-            <Field label="Anthropic API Key" hint="在 console.anthropic.com 获取">
-              <Input type="password" value={data.anthropic_api_key || ''} onChange={v => updateData({ anthropic_api_key: v })} placeholder="sk-ant-xxxxxxxxxxxxxxxx" />
+            <Field label="API Key" hint="通过 x-api-key 认证">
+              <Input type="password" value={data.anthropic_api_key || ''} onChange={v => updateData({ anthropic_api_key: v })} placeholder="sk-xxxxxxxxxxxxxxxx" />
             </Field>
-            <Field label="API Base URL" hint="Anthropic API 地址；可填兼容代理或中转服务">
-              <Input value={data.anthropic_base_url || 'https://api.anthropic.com'} onChange={v => updateData({ anthropic_base_url: v })} placeholder="https://api.anthropic.com" />
+            <Field label="请求地址" hint="Messages API base URL；模型列表会请求 /v1/models">
+              <Input value={data.anthropic_base_url || 'https://api.anthropic.com'} onChange={v => updateData({ anthropic_base_url: v })} placeholder="https://api.example.com" />
             </Field>
-            <Field label="模型选择">
-              <Select value={data.summarize_model || 'claude-haiku-4-5-20251001'} onChange={v => updateData({ summarize_model: v })} options={[
-                { value: 'claude-haiku-4-5-20251001', desc: 'Haiku 4.5', hint: '快速 · 低成本' },
-                { value: 'claude-sonnet-4-6', desc: 'Sonnet 4.6', hint: '高质量 · 推荐' },
-              ]} />
+            <Field label="模型" hint={modelOptions.length ? `已获取 ${modelOptions.length} 个模型` : '填写请求地址和 Key 后获取模型列表'} error={modelError || null}>
+              <div className="flex gap-2">
+                <div className="flex-1 min-w-0">
+                  {modelSelectOptions.length ? (
+                    <Select value={model} onChange={v => updateData({ [modelKey]: v })} options={modelSelectOptions} />
+                  ) : (
+                    <Input value={model} onChange={v => updateData({ [modelKey]: v })} placeholder="先获取模型，或手动填写模型 ID" />
+                  )}
+                </div>
+                <button type="button" onClick={fetchModels} disabled={modelBusy}
+                  className="shrink-0 px-5 py-2.5 rounded-full bg-brand-green text-[#0d0d0d] text-[14px] font-semibold hover:opacity-90 disabled:opacity-45 transition-opacity cursor-pointer">
+                  {modelBusy ? '获取中' : '获取模型'}
+                </button>
+              </div>
             </Field>
           </>
         )}

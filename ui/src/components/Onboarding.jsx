@@ -10,7 +10,7 @@ const iconVariants = {
 const STEPS = [
   { id: 1, label: '环境诊断与密钥', desc: '诊断系统 & 提取/输入密钥' },
   { id: 2, label: '微信配置', desc: '设置机器人身份' },
-  { id: 3, label: 'AI 后端', desc: '配置 AI 服务' },
+  { id: 3, label: 'AI 协议', desc: '配置模型服务' },
   { id: 4, label: '功能设置', desc: '选择功能开关' },
 ]
 
@@ -42,12 +42,12 @@ export default function Onboarding({ onComplete }) {
     // Step 2
     bot_display_name: '', wechat_groups: '*',
     // Step 3
-    ai_backend: 'deepseek', deepseek_api_key: '', deepseek_model: 'deepseek-v4-flash',
+    ai_backend: 'openai_compatible', deepseek_api_key: '', deepseek_model: '',
     deepseek_base_url: 'https://api.deepseek.com',
     openai_api_key: '', openai_base_url: 'https://api.openai.com/v1',
-    openai_model: 'gpt-4.1-mini',
+    openai_model: '',
     anthropic_api_key: '', anthropic_base_url: 'https://api.anthropic.com',
-    summarize_model: 'claude-haiku-4-5-20251001',
+    summarize_model: '',
     // Step 4
     fun_enabled: true,
     proactive_enabled: false,

@@ -85,16 +85,16 @@ grep "文件名" CODEBASE_REFERENCE.md
 
 | 环境变量名 | 类型 | 默认值 | 定义位置 | 消费位置 |
 |---|---|---|---|---|
-| `AI_BACKEND` | `str` | `"claude"` | `src/config.py:load_config()` | `src/summarize/__init__.py:create_summarizer()` |
+| `AI_BACKEND` | `str` | `"openai_compatible"` | `src/config.py:load_config()` | `src/summarize/__init__.py:create_summarizer()`, `src/web/server.py:_fetch_ai_models()` |
 | `ANTHROPIC_API_KEY` | `str` | `""` | `src/config.py` | `src/summarize/claude_backend.py:ClaudeSummarizer.__init__()` |
 | `ANTHROPIC_BASE_URL` | `str` | `"https://api.anthropic.com"` | `src/config.py` | `src/summarize/claude_backend.py` |
-| `SUMMARIZE_MODEL` | `str` | `"claude-haiku-4-5-20251001"` | `src/config.py` | `src/bot.py:_log_banner()`, `src/summarize/claude_backend.py` |
+| `SUMMARIZE_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/bot.py:_log_banner()`, `src/summarize/claude_backend.py` |
 | `DEEPSEEK_API_KEY` | `str` | `""` | `src/config.py` | `src/summarize/deepseek_backend.py:DeepSeekSummarizer.__init__()` |
-| `DEEPSEEK_MODEL` | `str` | `"deepseek-v4-flash"` | `src/config.py` | `src/summarize/deepseek_backend.py`, `src/bot.py:_log_banner()` |
+| `DEEPSEEK_MODEL` | `str` | `""` (legacy preset 需显式填写) | `src/config.py` | `src/summarize/deepseek_backend.py`, `src/bot.py:_log_banner()` |
 | `DEEPSEEK_BASE_URL` | `str` | `"https://api.deepseek.com"` | `src/config.py` | `src/summarize/deepseek_backend.py` |
 | `OPENAI_API_KEY` | `str` | `""` (本地兼容服务可空) | `src/config.py` | `src/utils/ai_compat.py:openai_api_key_for_client()`, `src/summarize/openai_compatible_backend.py` |
 | `OPENAI_BASE_URL` | `str` | `"https://api.openai.com/v1"` | `src/config.py` (经 `normalize_openai_base_url()` 规范化) | `src/summarize/openai_compatible_backend.py` |
-| `OPENAI_MODEL` | `str` | `"gpt-4.1-mini"` | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
+| `OPENAI_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
 | `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
@@ -280,18 +280,18 @@ todo_delete_keywords: list[str] = [
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `__init__(api_key, model, base_url, chunk_size, max_retries)` | 初始化 Claude 客户端 | API配置 | `None` |
-| `_call_chat_api(system_prompt, messages)` | Claude 对话 API | prompt + messages | `str` |
-| `_summarize_direct(messages, requester_name)` | 直接总结(Claude Pydantic parse) | 消息列表 | `SummaryResult` |
-| `_summarize_chunk(chunk, chunk_num, total, requester_name)` | 分块提取(Haiku) | 分块消息 | `str` |
-| `_merge_chunk_summaries(chunk_summaries, requester_name)` | 合并分块(Claude Pydantic parse) | 摘要列表 | `SummaryResult` |
-| `consolidate_memory(existing_memory, new_messages)` | 记忆合并(Haiku) | 现有记忆 + 新消息 | `str` |
+| `__init__(api_key, model, base_url, chunk_size, max_retries)` | 初始化 Messages 协议客户端；`model` 为空时报错 | API配置 | `None` |
+| `_call_chat_api(system_prompt, messages)` | Messages 对话 API，使用所选 `self.model` | prompt + messages | `str` |
+| `_summarize_direct(messages, requester_name)` | 直接总结(Messages Pydantic parse) | 消息列表 | `SummaryResult` |
+| `_summarize_chunk(chunk, chunk_num, total, requester_name)` | 分块提取，使用所选 `self.model` | 分块消息 | `str` |
+| `_merge_chunk_summaries(chunk_summaries, requester_name)` | 合并分块(Messages Pydantic parse) | 摘要列表 | `SummaryResult` |
+| `consolidate_memory(existing_memory, new_messages)` | 记忆合并，使用所选 `self.model` | 现有记忆 + 新消息 | `str` |
 
 ### 2.6 `src/summarize/openai_compatible_backend.py` (OpenAICompatibleSummarizer)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `__init__(api_key, model, base_url, chunk_size, max_retries, extra_body=None)` | 初始化 OpenAI 兼容客户端 | API配置 | `None` |
+| `__init__(api_key, model, base_url, chunk_size, max_retries, extra_body=None)` | 初始化 Chat Completions 兼容客户端；`model` 为空时报错 | API配置 | `None` |
 | `_call_chat_api(system_prompt, messages)` | 通用对话 API | prompt + messages | `str` |
 | `_summarize_direct(messages, requester_name)` | 直接总结(tool calling + fallback) | 消息列表 | `SummaryResult` |
 | `_summarize_chunk(chunk, chunk_num, total, requester_name)` | 分块提取 | 分块消息 | `str` |
@@ -586,8 +586,8 @@ todo_delete_keywords: list[str] = [
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `normalize_ai_backend(raw)` | 将 openai/new-api/one-api/litellm/openrouter 等别名归一化为 `openai_compatible` | `raw: str` | `str` |
-| `normalize_openai_base_url(raw, default)` | 规范化 OpenAI 兼容 Base URL，自动补协议并剥离 `/chat/completions` / `/responses` 端点后缀 | `raw: str, default: str` | `str` |
+| `normalize_ai_backend(raw)` | 将 `chat-completions` / openai / new-api / one-api / litellm / openrouter 等别名归一化为 `openai_compatible`，将 `messages` / anthropic 等别名归一化为 `claude` | `raw: str` | `str` |
+| `normalize_openai_base_url(raw, default)` | 规范化 Chat Completions 兼容 Base URL，自动补协议并剥离 `/chat/completions` / `/responses` / `/models` 端点后缀 | `raw: str, default: str` | `str` |
 | `openai_api_key_for_client(raw)` | 为 OpenAI SDK 返回可用 key；空值转为本地兼容服务占位 key | `raw: str` | `str` |
 
 ### 2.33 `src/utils/logging_config.py`
@@ -614,6 +614,12 @@ todo_delete_keywords: list[str] = [
 | `_read_ws_frame(sock)` | 读取 WebSocket 帧 | `sock` | `bytes \| None` |
 | `_recv_exactly(sock, n)` | 精确接收 n 字节 | `sock, n: int` | `bytes \| None` |
 | `_find_or_create_env()` | 查找或创建 .env 文件 | 无 | `Path` |
+| `_ai_config_from_raw(raw)` | 从 `.env` 键值生成 UI AI 协议配置；legacy `deepseek` 映射为 Chat Completions | `raw: dict[str, str]` | `dict` |
+| `_ai_updates_from_config(config)` | 从 UI payload 生成 AI 相关 `.env` 更新；缺失字段返回 `None` 以保留现值 | `config: dict` | `dict[str, str \| None]` |
+| `_normalize_anthropic_base_url(raw)` | 规范化 Messages 协议 Base URL，剥离 `/v1/messages` / `/v1/models` | `raw: str` | `str` |
+| `_extract_model_items(payload)` | 从常见模型列表响应中提取、去重并排序模型项 | `payload: dict \| list` | `list[dict[str, str]]` |
+| `_request_json(url, headers)` | 发起 JSON GET 请求 | `url: str, headers: dict[str, str]` | `dict \| list` |
+| `_fetch_ai_models(protocol, api_key, base_url)` | 按协议动态请求模型列表；Chat Completions 调 `/models`，Messages 调 `/v1/models` | `protocol: str, api_key: str, base_url: str` | `dict` |
 | `_detect_wxid_and_db_path()` | 自动检测微信 wxid 和数据库路径 | 无 | `tuple[str \| None, str \| None]` |
 | `_set_env_key(env_path, key, value)` | 原子设置 .env 键值 | `env_path: Path, key: str, value: str` | `None` |
 | `_detect_default_data_dir()` | 检测默认微信数据目录 | 无 | `str` |
@@ -629,11 +635,14 @@ todo_delete_keywords: list[str] = [
 | 文件 | 组件名 | 描述 |
 |---|---|---|
 | `Onboarding.jsx` | `Onboarding` | 4步引导流程主容器(侧边栏+步骤内容) |
+| `OnboardingSteps.jsx` | `Step3AIConfig` | AI 协议配置步骤；按请求地址和 Key 动态获取模型列表 |
 | `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏) |
 | `Dashboard.jsx` | `MetricCard` | 指标卡片组件(图标/标签/数值/副标题/迷你SVG图表) |
 | `Dashboard.jsx` | `LiveIndicator` | 实时状态指示灯(脉冲动画) |
 | `Dashboard.jsx` | `KeyExtractionBanner` | 内联密钥提取横幅(单文件内组件) |
 | `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮) |
+| `ConfigPanel.jsx` | `AiSection` | 系统配置里的 AI 协议配置；支持模型获取和选择 |
+| `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
 
 ---
 
@@ -650,7 +659,7 @@ desktop.py  (桌面入口)
     └── src/bot.py  (Bot 主控)
             │
             ├── src/config.py  (配置加载 .env → BotConfig)
-            ├── src/utils/ai_compat.py  (AI 后端别名 + OpenAI 兼容 URL 规范化)
+            ├── src/utils/ai_compat.py  (AI 协议别名 + Chat Completions URL 规范化)
             ├── src/db/  (数据库层)
             │     ├── schema.py  → initialize_db()
             │     └── store.py   → MessageStore
@@ -670,7 +679,7 @@ desktop.py  (桌面入口)
             │       ├── src/fun.py  (趣味功能:抽签)
             │       ├── src/welcome.py  (欢迎新成员)
             │       └── src/integrations/feishu/  (飞书导出)
-            ├── src/summarize/  (AI 后端)
+            ├── src/summarize/  (AI 协议后端)
             │     ├── base.py           → AbstractSummarizer
             │     ├── claude_backend.py  → ClaudeSummarizer
             │     ├── openai_compatible_backend.py → OpenAICompatibleSummarizer
@@ -726,6 +735,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/stop           → _stop_bot()
   ├── /api/load-config    → _find_or_create_env() → 读取 .env
   ├── /api/config         → 写入 .env
+  ├── /api/ai/models      → _fetch_ai_models() → _request_json()
   ├── /api/nicknames      → NicknameService
   ├── /api/nicknames/groups → group_names.json / messages.db
   ├── /api/welcome/templates → WelcomeManager
@@ -763,7 +773,7 @@ AbstractWeChatBackend (base.py)
           └── MacUIAutomation — 复用 UI 自动化(发送)
 ```
 
-#### src/summarize/* → AI后端的层次结构
+#### src/summarize/* → AI 协议后端的层次结构
 
 ```
 AbstractSummarizer (base.py)
@@ -776,9 +786,9 @@ AbstractSummarizer (base.py)
     ├── ClaudeSummarizer (claude_backend.py)
     │     ├── _call_chat_api()           — client.messages.create()
     │     ├── _summarize_direct()        — client.messages.parse() + Pydantic
-    │     ├── _summarize_chunk()         — client.messages.create() (Haiku)
+    │     ├── _summarize_chunk()         — client.messages.create() + selected model
     │     ├── _merge_chunk_summaries()   — client.messages.parse() + Pydantic
-    │     └── consolidate_memory()       — client.messages.create() (Haiku)
+    │     └── consolidate_memory()       — client.messages.create() + selected model
     │
     ├── OpenAICompatibleSummarizer (openai_compatible_backend.py)
     │     ├── _call_chat_api()           — client.chat.completions.create()
@@ -994,18 +1004,19 @@ MessageRouter.handle(msg)
 | `MAX_CONTENT_LENGTH` | `997` | 单条消息最大字符数 |
 | `AT_MENTION_MAX_AGE_SEC` | `300` | @mention 最大有效年龄(秒) |
 
-#### Claude 后端特有
+#### Messages 协议后端特有
 
 - 使用 `client.messages.parse()` 进行原生 Pydantic 结构化输出
+- 聊天、直接总结、分块提取、合并和记忆整理均使用 UI 选择的 `SUMMARIZE_MODEL`
 - 重试异常: `RateLimitError`, `APIConnectionError`, `InternalServerError`, `OverloadedError`
-- 分块提取使用 `claude-haiku-4-5-20251001` (Haiku, 速度快成本低)
 
-#### OpenAI 兼容后端特有
+#### Chat Completions 兼容后端特有
 
 - 通过 `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` 接入任意兼容 Chat Completions 的服务
-- `AI_BACKEND` 支持 `openai`, `new-api`, `one-api`, `litellm`, `openrouter` 等别名，统一归一化为 `openai_compatible`
-- `OPENAI_BASE_URL` 会自动补全协议，并将误填的完整 `/chat/completions` 或 `/responses` endpoint 修正为 SDK base URL
+- `AI_BACKEND` 支持 `chat-completions`, `openai`, `new-api`, `one-api`, `litellm`, `openrouter` 等别名，统一归一化为 `openai_compatible`
+- `OPENAI_BASE_URL` 会自动补全协议，并将误填的完整 `/chat/completions`、`/responses` 或 `/models` endpoint 修正为 SDK base URL
 - `OPENAI_API_KEY` 允许为空；`openai_api_key_for_client()` 会用本地兼容服务占位 key 调用 OpenAI SDK
+- `OPENAI_MODEL` 不提供代码默认值，需通过模型列表接口获取后选择或手动填写
 - 优先使用 OpenAI-compatible tool calling (`STORE_SUMMARY_TOOL`) 进行结构化输出
 - 当服务商拒绝 tool calling 时自动重试普通 Chat Completions，并把 tool call / JSON / fenced JSON / 文本包装为 `SummaryResult`
 - 重试异常: `RateLimitError`, `APIConnectionError`, `APIStatusError`
@@ -1014,6 +1025,7 @@ MessageRouter.handle(msg)
 
 - `DeepSeekSummarizer` 继承 `OpenAICompatibleSummarizer`
 - 默认 `DEEPSEEK_BASE_URL=https://api.deepseek.com`
+- `DEEPSEEK_MODEL` 不提供代码默认值，legacy preset 也需显式填写
 - **禁用 thinking 模式**: `extra_body={"thinking": {"type": "disabled"}}`
 
 ---
@@ -1103,6 +1115,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/config` | 保存配置到 .env | 无 |
 | `GET` | `/api/config/export` | 导出配置为 JSON 文件 | 无 |
 | `POST` | `/api/config/import` | 导入 JSON 配置文件 | 无 |
+| `POST` | `/api/ai/models` | 根据 `ai_backend`、请求地址和 Key 动态获取模型列表 | 无 |
 | `GET` | `/api/nicknames?chat_id=xxx` | 获取群成员昵称列表 | 无 |
 | `POST` | `/api/nicknames` | 保存/删除昵称映射 | 无 |
 | `GET` | `/api/nicknames/groups` | 获取群组列表 | 无 |
@@ -1548,23 +1561,23 @@ MacHybridBackend
 ### 5.1 `.env` 文件完整配置项
 
 ```ini
-# === AI 后端 ===
-AI_BACKEND=deepseek                           # "deepseek" / "claude" / "openai_compatible"；兼容 new-api/openrouter/litellm 等别名
+# === AI 协议 ===
+AI_BACKEND=openai_compatible                  # "openai_compatible"=Chat Completions；"claude"=Messages；legacy "deepseek" 仍兼容
 
-# === DeepSeek ===
-DEEPSEEK_API_KEY=sk-xxx                        # DeepSeek API 密钥
-DEEPSEEK_MODEL=deepseek-v4-flash               # 模型 ID
-DEEPSEEK_BASE_URL=https://api.deepseek.com     # API 地址
+# === Chat Completions 协议 ===
+OPENAI_API_KEY=sk-xxx                          # API 密钥；本地无鉴权服务可空
+OPENAI_BASE_URL=https://api.openai.com/v1      # API 地址；可填 .../v1 或完整 .../v1/chat/completions / .../v1/models
+OPENAI_MODEL=                                  # 通过 UI 获取模型后选择
 
-# === OpenAI-compatible / New API / 自定义转发 ===
-OPENAI_API_KEY=sk-xxx                          # OpenAI 兼容 API 密钥；本地无鉴权服务可空
-OPENAI_BASE_URL=https://api.openai.com/v1      # API 地址；可填 .../v1 或完整 .../v1/chat/completions
-OPENAI_MODEL=gpt-4.1-mini                      # 模型 ID
-
-# === Claude (Anthropic) ===
-ANTHROPIC_API_KEY=sk-ant-xxx                   # Anthropic API 密钥
+# === Messages 协议 ===
+ANTHROPIC_API_KEY=sk-xxx                       # API 密钥
 ANTHROPIC_BASE_URL=https://api.anthropic.com   # API 地址
-SUMMARIZE_MODEL=claude-haiku-4-5-20251001      # Claude 模型
+SUMMARIZE_MODEL=                               # 通过 UI 获取模型后选择
+
+# === Legacy provider preset fields ===
+DEEPSEEK_API_KEY=sk-xxx                        # 旧预设兼容字段
+DEEPSEEK_MODEL=                                # 旧预设模型 ID，需显式填写
+DEEPSEEK_BASE_URL=https://api.deepseek.com     # 旧预设 API 地址
 
 # === 微信后端 ===
 WECHAT_BACKEND=wcdb                            # "wcdb" / "mac_hybrid" / "mac_ui"

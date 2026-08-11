@@ -9,6 +9,7 @@ OPENAI_COMPATIBLE_LOCAL_API_KEY = "webot-local-compatible"
 _OPENAI_ENDPOINT_SUFFIXES = (
     "/chat/completions",
     "/responses",
+    "/models",
 )
 
 
@@ -17,8 +18,12 @@ def normalize_ai_backend(raw: str) -> str:
     backend = (raw or "").strip().lower().replace("-", "_")
     aliases = {
         "anthropic": "claude",
+        "anthropic_messages": "claude",
+        "messages": "claude",
         "openai": "openai_compatible",
         "openai_compat": "openai_compatible",
+        "chat_completions": "openai_compatible",
+        "chat_completion": "openai_compatible",
         "compatible": "openai_compatible",
         "custom": "openai_compatible",
         "newapi": "openai_compatible",

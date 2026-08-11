@@ -142,24 +142,25 @@ else:
 class BotConfig:
     """All configuration for the WeChat summarizer bot."""
 
-    # === AI Backend ===
-    # "claude", "deepseek", or "openai_compatible"
-    ai_backend: str = "claude"
+    # === AI protocol/backend ===
+    # "openai_compatible" (Chat Completions) or "claude" (Messages).
+    # "deepseek" is accepted as a legacy OpenAI-compatible preset.
+    ai_backend: str = "openai_compatible"
 
     # === Claude (Anthropic) ===
     anthropic_api_key: str = ""
     anthropic_base_url: str = "https://api.anthropic.com"
-    summarize_model: str = "claude-haiku-4-5-20251001"
+    summarize_model: str = ""
 
     # === DeepSeek ===
     deepseek_api_key: str = ""
-    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_model: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
 
     # === OpenAI-compatible ===
     openai_api_key: str = ""
     openai_base_url: str = OPENAI_COMPATIBLE_BASE_URL
-    openai_model: str = "gpt-4.1-mini"
+    openai_model: str = ""
 
     # === WeChat Backend ===
     wechat_backend: str = "wcdb"
@@ -406,7 +407,7 @@ def load_config() -> BotConfig:
     Returns a validated BotConfig instance.
     Raises RuntimeError if required configuration is missing.
     """
-    ai_backend = _normalize_ai_backend(os.getenv("AI_BACKEND", "claude"))
+    ai_backend = _normalize_ai_backend(os.getenv("AI_BACKEND", "openai_compatible"))
     if ai_backend not in ("claude", "deepseek", "openai_compatible"):
         raise RuntimeError(
             f"AI_BACKEND must be one of claude, deepseek, openai_compatible; got {ai_backend}"
@@ -418,10 +419,20 @@ def load_config() -> BotConfig:
         if not api_key:
             msg = "DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
             raise RuntimeError(msg)
+        if not os.getenv("DEEPSEEK_MODEL", "").strip():
+            msg = "DEEPSEEK_MODEL 未设置，请先获取并选择一个模型"
+            raise RuntimeError(msg)
     elif ai_backend == "claude":
         api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
             msg = "ANTHROPIC_API_KEY 未设置，请在 .env 文件中配置或通过引导页完成设置"
+            raise RuntimeError(msg)
+        if not os.getenv("SUMMARIZE_MODEL", "").strip():
+            msg = "SUMMARIZE_MODEL 未设置，请先获取并选择一个模型"
+            raise RuntimeError(msg)
+    elif ai_backend == "openai_compatible":
+        if not os.getenv("OPENAI_MODEL", "").strip():
+            msg = "OPENAI_MODEL 未设置，请先获取并选择一个模型"
             raise RuntimeError(msg)
 
     # Parse trigger keywords from comma-separated string
@@ -457,7 +468,7 @@ def load_config() -> BotConfig:
         "ai_backend": ai_backend,
         "anthropic_api_key": os.getenv("ANTHROPIC_API_KEY", "").strip(),
         "anthropic_base_url": os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com").strip(),
-        "summarize_model": os.getenv("SUMMARIZE_MODEL", "claude-haiku-4-5-20251001").strip(),
+        "summarize_model": os.getenv("SUMMARIZE_MODEL", "").strip(),
         "deepseek_api_key": os.getenv("DEEPSEEK_API_KEY", "").strip(),
         "deepseek_base_url": os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip(),
         # deepseek_model handled conditionally below (dataclass default)
@@ -465,7 +476,7 @@ def load_config() -> BotConfig:
         "openai_base_url": normalize_openai_base_url(
             os.getenv("OPENAI_BASE_URL", OPENAI_COMPATIBLE_BASE_URL)
         ),
-        "openai_model": os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip(),
+        "openai_model": os.getenv("OPENAI_MODEL", "").strip(),
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_groups": _decode_wechat_groups(os.getenv("WECHAT_GROUPS", "*")),
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),

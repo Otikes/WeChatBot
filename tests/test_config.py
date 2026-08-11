@@ -355,12 +355,12 @@ class LoadConfigTests(unittest.TestCase):
         from src.config import load_config, BotConfig
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test-key",
+            "OPENAI_MODEL": "chat-model",
         }, clear=True):
             config = load_config()
             self.assertIsInstance(config, BotConfig)
-            self.assertEqual(config.ai_backend, "claude")
-            self.assertEqual(config.anthropic_api_key, "sk-ant-test-key")
+            self.assertEqual(config.ai_backend, "openai_compatible")
+            self.assertEqual(config.openai_model, "chat-model")
 
     def test_load_config_with_deepseek_backend(self):
         """When AI_BACKEND=deepseek, DEEPSEEK_API_KEY is required."""
@@ -369,10 +369,12 @@ class LoadConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "AI_BACKEND": "deepseek",
             "DEEPSEEK_API_KEY": "sk-ds-test-key",
+            "DEEPSEEK_MODEL": "legacy-chat-model",
         }, clear=True):
             config = load_config()
             self.assertEqual(config.ai_backend, "deepseek")
             self.assertEqual(config.deepseek_api_key, "sk-ds-test-key")
+            self.assertEqual(config.deepseek_model, "legacy-chat-model")
 
     def test_load_config_with_openai_compatible_backend(self):
         """When AI_BACKEND=openai_compatible, OPENAI_* config is loaded."""
@@ -397,6 +399,7 @@ class LoadConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "AI_BACKEND": "openai",
             "OPENAI_API_KEY": "sk-openai-test-key",
+            "OPENAI_MODEL": "chat-model",
         }, clear=True):
             config = load_config()
             self.assertEqual(config.ai_backend, "openai_compatible")
@@ -405,7 +408,7 @@ class LoadConfigTests(unittest.TestCase):
         """Common gateway aliases are accepted as openai_compatible."""
         from src.config import load_config
 
-        for alias in ("new-api", "newapi", "one-api", "litellm", "openrouter"):
+        for alias in ("chat-completions", "new-api", "newapi", "one-api", "litellm", "openrouter"):
             with self.subTest(alias=alias):
                 with patch.dict(os.environ, {
                     "AI_BACKEND": alias,
@@ -413,6 +416,18 @@ class LoadConfigTests(unittest.TestCase):
                 }, clear=True):
                     config = load_config()
                     self.assertEqual(config.ai_backend, "openai_compatible")
+
+    def test_load_config_normalizes_messages_alias(self):
+        """AI_BACKEND=messages is accepted as the Messages protocol."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "messages",
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "SUMMARIZE_MODEL": "messages-model",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(config.ai_backend, "claude")
 
     def test_load_config_allows_empty_openai_key_for_local_services(self):
         """OpenAI-compatible local services can be configured without auth."""
@@ -440,11 +455,35 @@ class LoadConfigTests(unittest.TestCase):
             config = load_config()
             self.assertEqual(config.openai_base_url, "https://relay.example.com/v1")
 
-    def test_load_config_raises_when_api_key_missing_claude(self):
-        """load_config() with default (claude) backend and no API key → RuntimeError."""
+    def test_load_config_normalizes_openai_models_url(self):
+        """Full model-list URLs are also trimmed to SDK base URLs."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "openai_compatible",
+            "OPENAI_BASE_URL": "relay.example.com/v1/models",
+            "OPENAI_MODEL": "qwen-plus",
+        }, clear=True):
+            config = load_config()
+            self.assertEqual(config.openai_base_url, "https://relay.example.com/v1")
+
+    def test_load_config_raises_when_model_missing_openai_compatible(self):
+        """Default Chat Completions protocol requires selecting a model."""
         from src.config import load_config
 
         with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                load_config()
+            self.assertIn("OPENAI_MODEL", str(ctx.exception))
+
+    def test_load_config_raises_when_api_key_missing_claude(self):
+        """Messages protocol requires an API key."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "claude",
+            "SUMMARIZE_MODEL": "messages-model",
+        }, clear=True):
             with self.assertRaises(RuntimeError) as ctx:
                 load_config()
             self.assertIn("ANTHROPIC_API_KEY", str(ctx.exception))
@@ -460,12 +499,38 @@ class LoadConfigTests(unittest.TestCase):
                 load_config()
             self.assertIn("DEEPSEEK_API_KEY", str(ctx.exception))
 
+    def test_load_config_raises_when_model_missing_deepseek(self):
+        """Legacy deepseek preset also requires an explicit selected model."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "deepseek",
+            "DEEPSEEK_API_KEY": "sk-ds-test",
+        }, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                load_config()
+            self.assertIn("DEEPSEEK_MODEL", str(ctx.exception))
+
+    def test_load_config_raises_when_model_missing_claude(self):
+        """Messages protocol also requires an explicit selected model."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "AI_BACKEND": "claude",
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+        }, clear=True):
+            with self.assertRaises(RuntimeError) as ctx:
+                load_config()
+            self.assertIn("SUMMARIZE_MODEL", str(ctx.exception))
+
     def test_load_config_parses_trigger_keywords(self):
         """Custom TRIGGER_KEYWORDS should be parsed from comma-separated string."""
         from src.config import load_config
 
         with patch.dict(os.environ, {
             "ANTHROPIC_API_KEY": "sk-ant-test",
+            "AI_BACKEND": "claude",
+            "SUMMARIZE_MODEL": "messages-model",
             "TRIGGER_KEYWORDS": "总结,回顾,summarize",
         }, clear=True):
             config = load_config()
@@ -479,7 +544,7 @@ class LoadConfigTests(unittest.TestCase):
         from src.config import load_config
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_MODEL": "chat-model",
         }, clear=True):
             config = load_config()
             self.assertEqual(config.poll_interval_sec, 1.0)
@@ -495,7 +560,7 @@ class LoadConfigTests(unittest.TestCase):
         from src.config import load_config
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_MODEL": "chat-model",
             "POLL_INTERVAL_SEC": "2.5",
             "CHUNK_SIZE": "500",
             "MAX_MESSAGES_FOR_SUMMARY": "2000",
@@ -514,7 +579,7 @@ class LoadConfigTests(unittest.TestCase):
         from src.config import load_config
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_MODEL": "chat-model",
             "FUN_ENABLED": "false",
             "PROACTIVE_ENABLED": "true",
             "STICKY_MENTION_ENABLED": "false",
@@ -529,7 +594,7 @@ class LoadConfigTests(unittest.TestCase):
         from src.config import load_config
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_MODEL": "chat-model",
         }, clear=True):
             config = load_config()
             self.assertTrue(config.sticky_mention_enabled)
@@ -542,10 +607,10 @@ class LoadConfigTests(unittest.TestCase):
         with patch.dict(os.environ, {
             "AI_BACKEND": "deepseek",
             "DEEPSEEK_API_KEY": "sk-ds-test",
-            "DEEPSEEK_MODEL": "deepseek-v4-ultra",
+            "DEEPSEEK_MODEL": "legacy-ultra-model",
         }, clear=True):
             config = load_config()
-            self.assertEqual(config.deepseek_model, "deepseek-v4-ultra")
+            self.assertEqual(config.deepseek_model, "legacy-ultra-model")
 
 
 class ValidateConfigTests(unittest.TestCase):
@@ -725,7 +790,7 @@ class LoadConfigValidationIntegrationTests(unittest.TestCase):
         from src.config import load_config
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_MODEL": "chat-model",
             "CHUNK_SIZE": "5",
         }, clear=True):
             with self.assertRaises(RuntimeError) as ctx:
@@ -737,7 +802,7 @@ class LoadConfigValidationIntegrationTests(unittest.TestCase):
         from src.config import load_config
 
         with patch.dict(os.environ, {
-            "ANTHROPIC_API_KEY": "sk-ant-test",
+            "OPENAI_MODEL": "chat-model",
             "STICKY_MENTION_TTL_SEC": "999",
         }, clear=True):
             with self.assertRaises(RuntimeError) as ctx:

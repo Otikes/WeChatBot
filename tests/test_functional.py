@@ -101,20 +101,24 @@ def server():
 
     project_root = Path(__file__).resolve().parent.parent
     env_path = project_root / ".env"
-    env_existed = env_path.exists()
-    if not env_existed:
-        env_path.write_text(
-            "AI_BACKEND=deepseek\n"
-            "DEEPSEEK_API_KEY=\n"  # empty → sandbox returns error immediately without retrying real API
-            "DEEPSEEK_MODEL=deepseek-v4-flash\n"
-            "WECHAT_GROUPS=*\n"
-            "ONBOARDING_DONE=true\n"  # skip onboarding → dashboard loads directly
-        )
+    original_env = env_path.read_text(encoding="utf-8") if env_path.exists() else None
+    env_path.write_text(
+        "AI_BACKEND=openai_compatible\n"
+        "OPENAI_API_KEY=\n"
+        "OPENAI_MODEL=chat-model\n"
+        "WECHAT_GROUPS=*\n"
+        "ONBOARDING_DONE=true\n",  # skip onboarding -> dashboard loads directly
+        encoding="utf-8",
+    )
 
     t = _start_server(SERVER_PORT)
-    yield
-    if not env_existed and env_path.exists():
-        env_path.unlink()
+    try:
+        yield
+    finally:
+        if original_env is None:
+            env_path.unlink(missing_ok=True)
+        else:
+            env_path.write_text(original_env, encoding="utf-8")
 
 
 # ── API-level functional tests ──────────────────────────────────────────────
@@ -162,6 +166,7 @@ class TestConfigDeepseekBaseUrl:
         monkeypatch.setenv("DEEPSEEK_BASE_URL", "https://custom-proxy.example.com")
         monkeypatch.setenv("AI_BACKEND", "deepseek")
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        monkeypatch.setenv("DEEPSEEK_MODEL", "legacy-chat-model")
         from src.config import load_config
         config = load_config()
         assert config.deepseek_base_url == "https://custom-proxy.example.com"
@@ -178,6 +183,7 @@ class TestConfigAnthropicBaseUrl:
         monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://claude-proxy.example.com")
         monkeypatch.setenv("AI_BACKEND", "claude")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("SUMMARIZE_MODEL", "messages-model")
         from src.config import load_config
         config = load_config()
         assert config.anthropic_base_url == "https://claude-proxy.example.com"
@@ -194,6 +200,7 @@ class TestConfigOpenAICompatibleBaseUrl:
         monkeypatch.setenv("OPENAI_BASE_URL", "https://relay.example.com/v1")
         monkeypatch.setenv("AI_BACKEND", "openai_compatible")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-test")
+        monkeypatch.setenv("OPENAI_MODEL", "chat-model")
         from src.config import load_config
         config = load_config()
         assert config.openai_base_url == "https://relay.example.com/v1"

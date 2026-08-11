@@ -31,10 +31,6 @@ class ClaudeSummarizer(AbstractSummarizer):
     - Map-Reduce chunking for large conversations
     """
 
-    # Claude-specific constants
-    MODEL_HAIKU = "claude-haiku-4-5-20251001"
-    MODEL_SONNET = "claude-sonnet-4-5-20250929"
-
     # 200K context window → 150K safe budget
     token_budget = 150_000
 
@@ -48,12 +44,15 @@ class ClaudeSummarizer(AbstractSummarizer):
     )
 
     def __init__(self, api_key: str,
-                 model: str = MODEL_HAIKU,
+                 model: str = "",
                  base_url: str = "https://api.anthropic.com",
                  chunk_size: int = 400,
                  max_retries: int = 3):
+        selected_model = (model or "").strip()
+        if not selected_model:
+            raise ValueError("模型未设置，请先获取并选择一个模型")
         self.client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
-        self.model = model
+        self.model = selected_model
         self.chunk_size = chunk_size
         self.max_retries = max_retries
 
@@ -63,7 +62,7 @@ class ClaudeSummarizer(AbstractSummarizer):
                         messages: list[dict]) -> str:
         """Claude-specific: uses client.messages.create() with system param."""
         response = self.client.messages.create(
-            model=self.MODEL_HAIKU,
+            model=self.model,
             max_tokens=400,
             system=system_prompt,
             messages=messages,
@@ -100,7 +99,7 @@ class ClaudeSummarizer(AbstractSummarizer):
 
         def call():
             response = self.client.messages.create(
-                model=self.MODEL_HAIKU,
+                model=self.model,
                 max_tokens=1024,
                 system=CHUNK_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
@@ -132,7 +131,7 @@ class ClaudeSummarizer(AbstractSummarizer):
                            new_messages: list[dict]) -> str:
         """Update group memory by incorporating new messages.
 
-        Uses Claude Haiku for low cost and latency.  Returns the updated
+        Uses the selected Messages-model for consistency. Returns the updated
         first-person diary-style memory text (≤2000 chars).
 
         Args:
@@ -172,7 +171,7 @@ class ClaudeSummarizer(AbstractSummarizer):
 
         def call():
             response = self.client.messages.create(
-                model=self.MODEL_HAIKU,
+                model=self.model,
                 max_tokens=2048,
                 system=system_prompt,
                 messages=[{

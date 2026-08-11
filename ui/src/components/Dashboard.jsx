@@ -118,7 +118,7 @@ function LiveIndicator({ label, ok }) {
 }
 
 const backendLabels = { wcdb: '本地数据库直读', mac_hybrid: 'macOS WeFlow 直读', mac_ui: 'macOS 界面自动化', direct: 'UIA 窗口读取' }
-const aiLabels = { deepseek: 'DeepSeek', openai_compatible: 'OpenAI 兼容', claude: 'Claude' }
+const aiLabels = { deepseek: 'Chat Completions', openai_compatible: 'Chat Completions', claude: 'Messages' }
 
 export default function Dashboard({ status }) {
   const [busy, setBusy] = useState(false)
@@ -280,7 +280,7 @@ export default function Dashboard({ status }) {
           <div className="divide-y divide-border-main/40">
             <LiveIndicator label="数据库连接" ok={status.db_ok} />
             <LiveIndicator label="微信后端" ok={!!status.wechat_backend} />
-            <LiveIndicator label="AI 后端" ok={!!status.ai_backend} />
+            <LiveIndicator label="AI 协议" ok={!!status.ai_backend} />
             <LiveIndicator label="机器人进程" ok={status.running} />
           </div>
           {diagResult && (
@@ -301,7 +301,7 @@ export default function Dashboard({ status }) {
           <div className="space-y-4 pt-1">
             {[
               ['微信后端', backendLabels[status.wechat_backend] || status.wechat_backend || '—'],
-              ['AI 后端', aiLabels[status.ai_backend] || status.ai_backend || '—'],
+              ['AI 协议', aiLabels[status.ai_backend] || status.ai_backend || '—'],
               ['日志文件', 'data/bot.log'],
             ].map(([k, v]) => (
               <div key={k} className="flex justify-between items-center py-0.5">

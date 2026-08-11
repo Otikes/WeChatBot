@@ -181,6 +181,93 @@ class WcdbBackendPollingTests(unittest.TestCase):
 
         self.assertEqual(seen, [])
 
+    def test_standardize_keeps_empty_image_message_as_placeholder(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 10,
+            "sender_username": "wxid_alice",
+            "message_content": "",
+            "localType": 3,
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Test Group", "test@chatroom")
+
+        self.assertIsNotNone(msg)
+        self.assertEqual(msg["content"], "[图片]")
+        self.assertEqual(msg["msg_type"], 3)
+
+    def test_standardize_summarizes_image_xml_without_leaking_xml(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 11,
+            "sender_username": "wxid_alice",
+            "message_content": '<msg><img length="2048" md5="secret" /></msg>',
+            "localType": 3,
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Test Group", "test@chatroom")
+
+        self.assertEqual(msg["content"], "[图片 2.0 KB]")
+        self.assertNotIn("<msg", msg["content"])
+        self.assertNotIn("secret", msg["content"])
+
+    def test_standardize_summarizes_emoji_xml_without_leaking_xml(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 12,
+            "sender_username": "wxid_alice",
+            "message_content": '<msg><emoji len="4096" md5="secret" /></msg>',
+            "localType": "47",
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Test Group", "test@chatroom")
+
+        self.assertEqual(msg["content"], "[表情 4.0 KB]")
+        self.assertEqual(msg["msg_type"], 47)
+        self.assertNotIn("secret", msg["content"])
+
+    def test_standardize_summarizes_pdf_or_ppt_file_appmsg(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 13,
+            "sender_username": "wxid_alice",
+            "message_content": (
+                "<msg><appmsg><title>方案.pptx</title>"
+                "<des></des><appattach><totallen>2097152</totallen>"
+                "<fileext>pptx</fileext></appattach></appmsg></msg>"
+            ),
+            "localType": 49,
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Test Group", "test@chatroom")
+
+        self.assertEqual(msg["content"], "[文件: 方案.pptx (PPT, 2.0 MB)]")
+        self.assertEqual(msg["msg_type"], 49)
+
+    def test_standardize_summarizes_plain_file_name_without_xml(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 14,
+            "sender_username": "wxid_alice",
+            "message_content": r"C:\Users\Alice\Documents\复盘.pdf",
+            "localType": "file",
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Test Group", "test@chatroom")
+
+        self.assertEqual(msg["content"], "[文件: 复盘.pdf (PDF)]")
+        self.assertEqual(msg["msg_type"], 49)
+
 
 if __name__ == "__main__":
     unittest.main()

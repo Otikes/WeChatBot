@@ -21,7 +21,7 @@ from typing import Optional
 from .base import AbstractWeChatBackend, MessageCallback
 from .wcdb_client import WcdbNativeClient
 from .window_controller import WeChatWindowController
-from .helpers import DedupSet
+from .helpers import DedupSet, format_nontext_content, normalize_msg_type
 from src.config import webot_data_path
 
 logger = logging.getLogger(__name__)
@@ -788,8 +788,9 @@ class WcdbBackend(AbstractWeChatBackend):
         """Convert WCDB raw message to standard format."""
         # WCDB message fields: sender_username, message_content, local_type, create_time
         sender = str(msg.get("sender_username", msg.get("senderUsername", msg.get("sender", ""))))
-        content = str(msg.get("message_content", msg.get("content", ""))).strip()
-        local_type = int(msg.get("localType", msg.get("msg_type", 1)))
+        raw_content = str(msg.get("message_content", msg.get("content", ""))).strip()
+        local_type = normalize_msg_type(msg.get("localType", msg.get("msg_type", 1)))
+        content = raw_content
 
         # ── Voice recognition ──────────────────────────────────────
         # Voice messages (localType=34) have empty message_content;
@@ -800,6 +801,8 @@ class WcdbBackend(AbstractWeChatBackend):
                 content = f"[语音] {voice_text}"
             else:
                 content = "[语音]"
+        elif local_type not in (1, 10000):
+            content = format_nontext_content(local_type, raw_content)
         elif not content:
             return None
 
@@ -907,7 +910,7 @@ class WcdbBackend(AbstractWeChatBackend):
             "sender_id": str(sender),
             "sender_name": str(sender_name),
             "content": resolved_content,
-            "msg_type": int(msg.get("localType", msg.get("msg_type", 1))),
+            "msg_type": local_type,
             "timestamp": ts,
             "is_at_mentioned": bool(is_at),
             "bot_mention_text": bot_mention_text,

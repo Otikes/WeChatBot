@@ -175,6 +175,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WECHAT_PROCESS_NAMES` | `set` | `{"wechat.exe", "weixin.exe"}` | `src/wechat/window_controller.py` | 微信进程名集合 |
 | `MIN_WINDOW_WIDTH` / `MIN_WINDOW_HEIGHT` | `int` | `200` | `src/wechat/window_controller.py` | 窗口最小尺寸验证 |
 | `MSG_TYPE_MAP` | `dict` | 见代码 | `src/wechat/helpers.py` | 消息类型映射表 |
+| `_FILE_EXT_LABELS` | `dict` | 见代码 | `src/wechat/helpers.py` | 文件扩展名 → 摘要显示类型(PDF/PPT/Word等) |
 | `DEFAULT_NICKNAME_PATH` | `Path` | `<WEBOT_DATA_DIR>/nicknames.json` | `src/nickname.py` | 昵称映射文件路径 |
 | `DEFAULT_WELCOME_CONFIG_PATH` | `Path` | `<WEBOT_DATA_DIR>/welcome_templates.json` | `src/welcome.py` | 欢迎模板文件路径 |
 | `HEX_KEY_LEN` | `int` | `64` | `src/wechat/mac_weflow_client.py` | WCDB 密钥长度 |
@@ -268,8 +269,8 @@ todo_delete_keywords: list[str] = [
 
 | 函数 | 行号 | 描述 | 参数 | 返回值 |
 |---|---|---|---|---|
-| `chat(message, ...)` | ~20 | AI 对话响应 (@bot) | `message: str, context_messages=None, requester_name="", bot_name="", group_name="", group_memory=""` | `str` |
-| `proactive_chat(mode, context_messages, ...)` | ~50 | 主动发言 | `mode: ProactiveMode, context_messages: list[dict], bot_name="", group_name="", group_memory=""` | `str` |
+| `chat(message, ...)` | ~20 | AI 对话响应 (@bot)；上下文中的图片/表情/文件占位禁止脑补画面 | `message: str, context_messages=None, requester_name="", bot_name="", group_name="", group_memory=""` | `str` |
+| `proactive_chat(mode, context_messages, ...)` | ~50 | 主动发言；上下文中的图片/表情/文件占位禁止脑补画面 | `mode: ProactiveMode, context_messages: list[dict], bot_name="", group_name="", group_memory=""` | `str` |
 | `summarize(messages, requester_name)` | ~80 | 生成结构化摘要 | `messages: list[dict], requester_name: str` | `SummaryResult` |
 | `_multi_level_map_reduce(chunks, requester_name)` | ~100 | 多级 Map-Reduce 处理大量消息 | `chunks: list[list[dict]], requester_name: str` | `SummaryResult` |
 | `format_summary_for_reply(result, requester_name)` | ~130 | 格式化摘要为微信回复 | `result: SummaryResult, requester_name: str` | `str` |
@@ -318,9 +319,9 @@ todo_delete_keywords: list[str] = [
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `build_summary_prompt(messages, requester_name)` | 构建直接总结 XML prompt | 消息列表 + 请求人 | `str` |
-| `build_chunk_summary_prompt(messages, chunk_num, total_chunks, requester_name)` | 构建分块提取 prompt | 消息 + 序号 | `str` |
-| `build_merge_prompt(chunk_summaries, requester_name)` | 构建分块合并 prompt | 摘要列表 | `str` |
+| `build_summary_prompt(messages, requester_name)` | 构建直接总结 XML prompt；非文本占位只按占位/文件名理解 | 消息列表 + 请求人 | `str` |
+| `build_chunk_summary_prompt(messages, chunk_num, total_chunks, requester_name)` | 构建分块提取 prompt；非文本占位禁止脑补内容 | 消息 + 序号 | `str` |
+| `build_merge_prompt(chunk_summaries, requester_name)` | 构建分块合并 prompt；合并非文本占位时不编造画面细节 | 摘要列表 | `str` |
 | `_format_messages_xml(messages)` | 将消息格式化为 XML(内部) | 消息列表 | `str` |
 | `_format_time(timestamp)` | Unix时间戳→HH:MM(内部) | `timestamp: int` | `str` |
 | `_escape_xml(text)` | XML 特殊字符转义(内部) | `text: str` | `str` |
@@ -352,7 +353,7 @@ todo_delete_keywords: list[str] = [
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池) | `group_name, talker, standardized, callback` | `None` |
 | `_stable_id_text(value)` | 过滤 WCDB 空值/`0` 占位 ID，避免把所有 `server_id=0` 消息视为同一条 | `value` | `str` |
 | `_raw_message_key(msg, talker)` | 生成轮询去重和消息 ID 使用的稳定群内原始键；优先非零 server/local ID，否则用发送人+内容+时间+类型 | `msg: dict, talker: str` | `str` |
-| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
+| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；图片/表情/文件转干净摘要占位；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
 | `_send_and_confirm(group_name, talker, content)` | 通过键盘发送；成功后按 `(talker, content, timestamp)` 写入 `_recent_sends` 供同群自发自排除 | `group_name, talker, content` | `bool` |
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
 | `_try_voice(msg)` | 尝试语音识别 | `msg: dict` | `str \| None` |
@@ -419,8 +420,17 @@ todo_delete_keywords: list[str] = [
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `normalize_msg_type(raw_type)` | 标准化消息类型码 | `raw_type: Any` | `int` |
-| `format_nontext_content(raw_type)` | 非文本消息占位符 | `raw_type: Any` | `str` |
+| `normalize_msg_type(raw_type)` | 标准化消息类型码；支持数字字符串和中文/英文类型名 | `raw_type: Any` | `int` |
+| `format_nontext_content(raw_type, raw_content="")` | 非文本消息摘要；图片/表情/视频提取大小，文件/链接提取标题、扩展名和大小，避免 XML 泄漏进总结 | `raw_type: Any, raw_content: str` | `str` |
+| `_format_media_placeholder(label, raw_content)` | 格式化图片/表情/视频占位，解析 XML 中的大小字段 | `label: str, raw_content: str` | `str` |
+| `_format_app_message(raw_content)` | 格式化 appmsg/文件/链接消息，提取标题、描述、扩展名和大小 | `raw_content: str` | `str` |
+| `_format_plain_app_content(raw_content)` | 格式化没有 XML 的文件/链接消息，普通文件名或路径只保留文件名和类型 | `raw_content: str` | `str` |
+| `_file_display_name(title)` | 将文件标题/路径清洗为可展示文件名 | `title: str` | `str` |
+| `_parse_wechat_xml(raw_content)` | 从微信内容中解析 XML payload | `raw_content: str` | `Element \| None` |
+| `_extract_xml_payload(raw_content)` | 去掉群消息前缀并提取 `<msg>/<appmsg>/<img>/<emoji>/<videomsg>` XML 起点 | `raw_content: str` | `str` |
+| `_first_xml_text(root, names)` | 读取第一个非空 XML 节点文本 | `root: Element, names: tuple[str, ...]` | `str` |
+| `_has_element(root, name)` | 判断 XML 树是否包含指定元素 | `root: Element, name: str` | `bool` |
+| `_format_size(raw_size)` | 字节数格式化为 B/KB/MB/GB | `raw_size: Any` | `str` |
 | `generate_message_id(*fields)` | 生成稳定消息 ID(MD5) | `*fields: Any` | `str` |
 | `DedupSet.__init__(max_size)` | 初始化去重集合 | `max_size: int` | `None` |
 | `DedupSet.add(item)` | 添加并自动裁剪 | `item: str` | `None` |
@@ -761,7 +771,7 @@ desktop.py  (桌面入口)
                   │     └── window_controller.py → WeChatWindowController (键盘操控)
                   ├── extract_key.py       → 密钥提取 (wx_key.dll Hook)
                   ├── keyboard.py          → 键盘模拟 (keybd_event)
-                  ├── helpers.py           → 去重/类型映射
+                  ├── helpers.py           → 去重/类型映射/非文本消息摘要
                   ├── mac_ui_backend.py     → MacUIBackend (macOS 界面自动化)
                   ├── mac_hybrid_backend.py → MacHybridBackend (macOS WCDB + 自动化)
                   └── mac_weflow_client.py  → MacWeFlowClient (macOS WCDB 直读)
@@ -834,7 +844,7 @@ AbstractWeChatBackend (base.py)
     │     ├── data_dir.py — 微信数据目录自动探测(WECHAT_DATA_DIR / 进程参数 / 默认目录)
     │     ├── WeChatWindowController (window_controller.py) — 键盘操控发送
     │     │     └── keyboard.py — keybd_event 底层模拟
-    │     └── helpers.py — DedupSet / 消息类型映射
+    │     └── helpers.py — DedupSet / 消息类型映射 / 图片表情文件摘要
     │
     ├── MacUIBackend (mac_ui_backend.py) — macOS 界面自动化
     │     └── MacUIAutomation — AppleScript + CoreGraphics + Vision OCR
@@ -953,7 +963,7 @@ AbstractSummarizer (base.py)
 | `data_dir.py` | `src/wechat/data_dir.py` | 微信数据目录自动检测，支持自定义路径、微信 4.x 进程参数和常见目录 |
 | `extract_key.py` | `src/wechat/extract_key.py` | 密钥提取 (wx_key.dll Hook) |
 | `base.py` | `src/wechat/base.py` | 抽象基类 (接口定义) |
-| `helpers.py` | `src/wechat/helpers.py` | 去重集合 (DedupSet) |
+| `helpers.py` | `src/wechat/helpers.py` | 去重集合、消息类型映射、图片/表情/文件占位摘要 |
 
 #### 调用链和关键函数
 
@@ -984,6 +994,8 @@ WcdbBackend.start(callback)
         │             ├── get_messages(talker, limit=50)
         │             ├── _raw_message_key() → 非零 ID/内容组合轻量去重，旧消息不进入 standardize
         │             ├── _standardize() → 统一消息格式
+        │             │     └── helpers.format_nontext_content()
+        │             │           → 图片/表情/文件 XML 提炼为可总结文本
         │             ├── 去重 (_known_ids) → 跳过旧消息
         │             ├── 自发自排除 (_recent_sends 同群内容匹配) → 跳过机器人自己的回复
         │             ├── 新消息: 记录 "New message" / "Join event detected" 日志

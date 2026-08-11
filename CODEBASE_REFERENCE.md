@@ -178,6 +178,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `DEFAULT_NICKNAME_PATH` | `Path` | `<WEBOT_DATA_DIR>/nicknames.json` | `src/nickname.py` | 昵称映射文件路径 |
 | `DEFAULT_WELCOME_CONFIG_PATH` | `Path` | `<WEBOT_DATA_DIR>/welcome_templates.json` | `src/welcome.py` | 欢迎模板文件路径 |
 | `HEX_KEY_LEN` | `int` | `64` | `src/wechat/mac_weflow_client.py` | WCDB 密钥长度 |
+| `_FIRST_RUN_ENV_DEFAULTS` | `dict[str, str]` | 见代码 | `src/web/server.py` | 重置为首次运行时需要从进程环境清除的 webot 配置键集合 |
 | `_CACHE_MAX_ENTRIES` | `int` | `10000` | `src/voice/pipeline.py` | 语音缓存最大条目 |
 | `_CACHE_TTL_SEC` | `int` | `604800` (7天) | `src/voice/pipeline.py` | 语音缓存过期时间 |
 
@@ -661,11 +662,14 @@ todo_delete_keywords: list[str] = [
 | `_onboarding_db_path()` | 返回结构化应用状态使用的 SQLite 路径；legacy `DB_PATH=data/messages.db` 跟随 `WEBOT_DATA_DIR` | 无 | `Path` |
 | `_read_onboarding_state()` | 读取 SQLite `onboarding_state` 单行草稿/进度 | 无 | `dict \| None` |
 | `_save_onboarding_state(updates)` | 将引导草稿/步骤进度增量保存到 SQLite | `updates: dict` | `None` |
-| `_reset_onboarding_state()` | 删除 SQLite 引导草稿/进度行 | 无 | `None` |
+| `_reset_onboarding_database(db_path)` | 删除指定 SQLite 数据库中的引导草稿/进度行 | `db_path: Path` | `None` |
+| `_reset_onboarding_state()` | 删除当前 SQLite 数据库中的引导草稿/进度行 | 无 | `None` |
 | `_runtime_data_dir()` | 返回运行缓存/日志所在的 webot 自有数据目录 | 无 | `Path` |
-| `_reset_runtime_database(db_path)` | 清空 `messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos` 等运行表，保留 `onboarding_state` | `db_path: Path` | `dict` |
+| `_reset_runtime_database(db_path)` | 清空 `messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos` 等运行表 | `db_path: Path` | `dict` |
 | `_reset_runtime_files(data_dir)` | 删除生成的运行日志和缓存文件，如 `bot.log`、`bot_status.json`、群元数据、昵称缓存 | `data_dir: Path` | `list[str]` |
-| `_reset_runtime_data()` | 停止状态下重置本地运行数据并刷新 WebSocket 状态；运行中返回 `requires_stop` | 无 | `dict` |
+| `_reset_in_memory_onboarding()` | 重置内存中的引导草稿和密钥提取状态 | 无 | `None` |
+| `_reset_app_config_to_first_run()` | 删除 `.env`、清除进程内 webot 配置键，并重置引导内存状态 | 无 | `dict` |
+| `_reset_runtime_data()` | 停止状态下清空本地数据、删除 `.env`、清理 `onboarding_state` 并返回首次运行状态；运行中返回 `requires_stop` | 无 | `dict` |
 | `_onboarding_draft_from_row(row)` | 从 SQLite 行生成引导页可回填草稿 | `row: dict` | `dict` |
 | `_onboarding_draft_from_raw(raw)` | 从旧 `.env` 键值生成引导页可回填草稿(兼容迁移) | `raw: dict[str, str]` | `dict` |
 | `_load_onboarding_progress()` | 读取引导草稿、步骤完成标记和整体完成状态，优先 SQLite，回退旧 `.env` | 无 | `tuple[dict, dict[str, bool], bool]` |
@@ -685,7 +689,7 @@ todo_delete_keywords: list[str] = [
 |---|---|---|
 | `Onboarding.jsx` | `Onboarding` | 4步引导流程主容器(侧边栏+步骤内容)，启动时从 `/api/onboarding/status` 回填草稿和步骤状态 |
 | `OnboardingSteps.jsx` | `Step3AIConfig` | AI 协议配置步骤；按请求地址和 Key 动态获取模型列表 |
-| `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏+运行数据重置入口) |
+| `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏+数据重置入口；重置成功后回到首次启动引导) |
 | `Dashboard.jsx` | `MetricCard` | 指标卡片组件(图标/标签/数值/副标题/迷你SVG图表) |
 | `Dashboard.jsx` | `LiveIndicator` | 实时状态指示灯(脉冲动画) |
 | `Dashboard.jsx` | `KeyExtractionBanner` | 内联密钥提取横幅(单文件内组件) |
@@ -783,7 +787,7 @@ Bot.run()
 _API 请求 → _UIHandler._handle_request()
   ├── /api/start          → _start_bot_in_thread() → Bot.run()
   ├── /api/stop           → _stop_bot()
-  ├── /api/runtime/reset  → _reset_runtime_data() → 清运行表/缓存文件并刷新状态
+  ├── /api/runtime/reset  → _reset_runtime_data() → 清运行表/缓存文件、删除 .env、重置 onboarding 并刷新状态
   ├── /api/load-config    → _find_or_create_env() → 读取 .env
   ├── /api/config         → 写入 .env；WEBOT_DATA_DIR 变更且 bot 停止时复制旧 webot 数据
   ├── /api/ai/models      → _fetch_ai_models() → _request_json()
@@ -1171,7 +1175,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/status` | 获取 bot 运行状态 | 无 |
 | `POST` | `/api/start` | 启动 bot | 无 |
 | `POST` | `/api/stop` | 停止 bot | 无 |
-| `POST` | `/api/runtime/reset` | 停止状态下清空本地运行数据；保留 `.env`、密钥、功能配置和 `onboarding_state` | 无 |
+| `POST` | `/api/runtime/reset` | 停止状态下清空本地运行数据、删除 `.env`、清除密钥/AI/功能配置和 `onboarding_state`，使前端回到首次启动流程 | 无 |
 | `GET` | `/api/load-config` | 加载当前配置 (保留可编辑密钥原值用于配置回填) | 无 |
 | `POST` | `/api/config` | 保存配置到 .env；持久化 `WEBOT_DATA_DIR`，停止状态下复制旧 webot 数据到新目录 | 无 |
 | `GET` | `/api/config/export` | 导出配置为 JSON 文件 | 无 |
@@ -1778,6 +1782,16 @@ WCDB_KEY=
 # 排除: faster_whisper, ctranslate2, numpy, onnxruntime, pysilk, tkinter, matplotlib, scipy
 ```
 
+#### Windows 安装包 (`installer.nsi`)
+
+- 输出: `dist/webot-setup.exe`
+- 页面: 欢迎 → 许可证 → 安装目录 → webot 数据目录 → 安装进度 → 完成
+- 安装目录默认: `$LOCALAPPDATA\webot`
+- webot 数据目录默认: `$INSTDIR\data`；用户可在安装时浏览/手输其他目录
+- 安装阶段会创建所选数据目录，并向 `$INSTDIR\.env` 追加 `WEBOT_DATA_DIR=<所选目录>`；如果 `.env` 不存在，先从 `.env.example` 复制
+- 该目录只保存 webot 自身数据，不移动、不修改微信自己的数据目录
+- 静默安装未显示自定义页时，`WEBOT_DATA_DIR` 自动回退为 `$INSTDIR\data`
+
 ### 5.3 `requirements.txt` 依赖说明
 
 | 包名 | 用途 | 必需 |
@@ -1830,4 +1844,4 @@ WCDB_KEY=
 | `<WEBOT_DATA_DIR>/crash.log` | `desktop.py` / `desktop_mac.py` | 崩溃日志 |
 | `<WEBOT_DATA_DIR>/models/` | `src/voice/asr.py` | 本地 Whisper 模型缓存 |
 
-`POST /api/runtime/reset` 会清空配置后的 `messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)并删除当前 webot 数据目录中的运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)；不删除 `.env`、`onboarding_state`、欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。
+`POST /api/runtime/reset` 会清空配置后的 `messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)，删除当前及重置后默认 webot 数据目录中的运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)，删除 `.env`，清理 `onboarding_state` 和进程内 webot 配置键，使前端重新进入首次启动流程；不删除欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。

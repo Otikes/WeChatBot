@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { CheckCircle, ArrowRight, Spinner, XCircle, Warning } from '@phosphor-icons/react'
 import { Field, Toggle, Select, Input, spring } from './SharedComponents'
 
-const API = 'http://127.0.0.1:7327'
+const API = window.location.port === '5173' ? 'http://127.0.0.1:7327' : ''
 
 // ── Retry wrapper for fetch: 3 attempts with exponential backoff ────────
 // Transient errors (server starting up, TCP reset) resolve on retry.

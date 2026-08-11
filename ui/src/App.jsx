@@ -132,6 +132,13 @@ export default function App() {
     error: '',
   }
 
+  function handleResetComplete() {
+    setBotStatus(null)
+    setWsConnected(false)
+    setActiveTab('dashboard')
+    setOnboardingDone(false)
+  }
+
   // Loading state
   if (onboardingDone === null) {
     return (
@@ -297,7 +304,7 @@ export default function App() {
             transition={{ duration: 0.2 }}
             className="p-8"
           >
-            {activeTab === 'dashboard' && <Dashboard status={status} />}
+            {activeTab === 'dashboard' && <Dashboard status={status} onResetComplete={handleResetComplete} />}
             {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
             {activeTab === 'features' && <FeaturesPanel activeSection={featuresSection} onNavigate={setFeaturesSection} />}
             {activeTab === 'nicknames' && <NicknameEditor />}

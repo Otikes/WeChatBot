@@ -120,7 +120,12 @@ function LiveIndicator({ label, ok }) {
 const backendLabels = { wcdb: '本地数据库直读', mac_hybrid: 'macOS WeFlow 直读', mac_ui: 'macOS 界面自动化', direct: 'UIA 窗口读取' }
 const aiLabels = { deepseek: 'Chat Completions', openai_compatible: 'Chat Completions', claude: 'Messages' }
 
-export default function Dashboard({ status }) {
+function apiUrl(path) {
+  if (window.location.port === '5173') return `http://127.0.0.1:7327${path}`
+  return path
+}
+
+export default function Dashboard({ status, onResetComplete }) {
   const [busy, setBusy] = useState(false)
   const [resetBusy, setResetBusy] = useState(false)
   const [resetResult, setResetResult] = useState(null)
@@ -171,7 +176,7 @@ export default function Dashboard({ status }) {
     setBusy(true)
     try {
       const endpoint = status.running ? '/api/stop' : '/api/start'
-      await fetch(`http://127.0.0.1:7327${endpoint}`, { method: 'POST' })
+      await fetch(apiUrl(endpoint), { method: 'POST' })
     } catch {}
     setTimeout(() => setBusy(false), 1000)  // debounce
   }
@@ -180,7 +185,7 @@ export default function Dashboard({ status }) {
     setDiagnosing(true)
     setDiagResult(null)
     try {
-      const res = await fetch('http://127.0.0.1:7327/api/onboarding/diagnose')
+      const res = await fetch(apiUrl('/api/onboarding/diagnose'))
       const d = await res.json()
       if (d.ok) {
         const hasError = Object.values(d.diagnostics).some(item => !item.ok)
@@ -199,19 +204,20 @@ export default function Dashboard({ status }) {
   async function handleResetRuntime() {
     if (status.running || resetBusy) return
     const confirmed = window.confirm(
-      '确定要重置运行数据吗？\n\n会清空消息历史、群聊记忆、待办、昵称缓存和运行日志；不会删除 .env、API Key、微信密钥和功能开关。'
+      '确定要重置所有数据吗？\n\n会清空消息历史、群聊记忆、待办、昵称缓存、运行日志、.env 配置、API Key、微信密钥和功能开关，并回到首次启动流程。'
     )
     if (!confirmed) return
 
     setResetBusy(true)
     setResetResult(null)
     try {
-      const res = await fetch('http://127.0.0.1:7327/api/runtime/reset', { method: 'POST' })
+      const res = await fetch(apiUrl('/api/runtime/reset'), { method: 'POST' })
       const data = await res.json()
       if (!data.ok) {
         setResetResult({ ok: false, message: data.error || '重置失败' })
       } else {
-        setResetResult({ ok: true, message: data.message || '运行数据已清理' })
+        setResetResult({ ok: true, message: data.message || '已重置为首次运行状态' })
+        onResetComplete?.(data)
       }
     } catch {
       setResetResult({ ok: false, message: '无法访问后端服务' })
@@ -264,7 +270,7 @@ export default function Dashboard({ status }) {
             whileHover={{ scale: status.running || resetBusy ? 1 : 1.02 }}
             onClick={handleResetRuntime}
             disabled={status.running || resetBusy}
-            title={status.running ? '请先停止机器人再重置数据' : '清空本地运行数据'}
+            title={status.running ? '请先停止机器人再重置数据' : '清空本地数据并回到首次启动流程'}
             className="w-36 py-2.5 rounded-full text-[13px] font-semibold tracking-wide border border-border-main bg-bg-raised text-text-muted hover:text-[#d45656] hover:border-[#d45656]/25 hover:bg-[#d45656]/10 disabled:hover:text-text-muted disabled:hover:border-border-main disabled:hover:bg-bg-raised disabled:opacity-50 transition-all duration-300 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {resetBusy ? (

@@ -25,6 +25,25 @@ SERVER_PORT = None  # discovered at fixture time
 BASE_URL = None
 
 
+def _write_dashboard_env(env_path: Path):
+    """Put the app in completed-onboarding state for dashboard E2E tests."""
+    env_path.write_text(
+        "AI_BACKEND=openai_compatible\n"
+        "OPENAI_API_KEY=\n"
+        "OPENAI_MODEL=chat-model\n"
+        "WECHAT_GROUPS=*\n"
+        "ONBOARDING_DONE=true\n",
+        encoding="utf-8",
+    )
+    os.environ.update({
+        "AI_BACKEND": "openai_compatible",
+        "OPENAI_API_KEY": "",
+        "OPENAI_MODEL": "chat-model",
+        "WECHAT_GROUPS": "*",
+        "ONBOARDING_DONE": "true",
+    })
+
+
 def _find_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -102,14 +121,7 @@ def server():
     project_root = Path(__file__).resolve().parent.parent
     env_path = project_root / ".env"
     original_env = env_path.read_text(encoding="utf-8") if env_path.exists() else None
-    env_path.write_text(
-        "AI_BACKEND=openai_compatible\n"
-        "OPENAI_API_KEY=\n"
-        "OPENAI_MODEL=chat-model\n"
-        "WECHAT_GROUPS=*\n"
-        "ONBOARDING_DONE=true\n",  # skip onboarding -> dashboard loads directly
-        encoding="utf-8",
-    )
+    _write_dashboard_env(env_path)  # skip onboarding -> dashboard loads directly
 
     t = _start_server(SERVER_PORT)
     try:
@@ -392,6 +404,24 @@ class TestPageLoads:
         page.wait_for_timeout(1000)
         reset_btn = page.locator("button:has-text('重置数据')")
         assert reset_btn.count() > 0
+
+    def test_runtime_reset_returns_to_onboarding_flow(self, page):
+        project_root = Path(__file__).resolve().parent.parent
+        env_path = project_root / ".env"
+        try:
+            page.goto(BASE_URL, timeout=10000)
+            page.wait_for_selector("button:has-text('重置数据')", timeout=5000)
+            page.once("dialog", lambda dialog: dialog.accept())
+            page.locator("button:has-text('重置数据')").click()
+            page.wait_for_selector("text=环境准备与密钥", timeout=5000)
+            page.wait_for_selector("button:has-text('开始自动获取')", timeout=5000)
+            page.wait_for_selector("text=配置文件尚未创建", timeout=5000)
+            status, data = _api_get("/api/onboarding/status")
+            assert status == 200
+            assert data["onboarding_done"] is False
+            assert not env_path.exists()
+        finally:
+            _write_dashboard_env(env_path)
 
 
 class TestThemeToggle:

@@ -929,7 +929,7 @@ class PublicApiTests(unittest.TestCase):
 
 
 class RuntimeResetTests(unittest.TestCase):
-    """Tests for clearing runtime data while preserving configuration state."""
+    """Tests for clearing local data and returning to first-run state."""
 
     def setUp(self):
         from src.web import server
@@ -939,7 +939,16 @@ class RuntimeResetTests(unittest.TestCase):
         self.tmp_dir = Path(self.tmp.name)
         self.db_path = self.tmp_dir / "messages.db"
         self.data_dir = self.tmp_dir / "data"
+        self.env_path = self.tmp_dir / ".env"
         self.data_dir.mkdir()
+        self.env_path.write_text(
+            "ONBOARDING_DONE=true\n"
+            "WCDB_KEY=keep-key\n"
+            "OPENAI_API_KEY=sk-old\n"
+            "OPENAI_BASE_URL=https://xindu.xyz/v1\n"
+            "OPENAI_MODEL=gpt-5.5\n",
+            encoding="utf-8",
+        )
         self.db_patch = patch(
             "src.web.server._onboarding_db_path",
             return_value=self.db_path,
@@ -948,10 +957,25 @@ class RuntimeResetTests(unittest.TestCase):
             "src.web.server._runtime_data_dir",
             return_value=self.data_dir,
         )
+        self.env_patch = patch(
+            "src.config.find_env_file",
+            return_value=self.env_path,
+        )
+        self.process_env_patch = patch.dict(os.environ, {
+            "ONBOARDING_DONE": "true",
+            "WCDB_KEY": "keep-key",
+            "OPENAI_API_KEY": "sk-old",
+            "OPENAI_BASE_URL": "https://xindu.xyz/v1",
+            "OPENAI_MODEL": "gpt-5.5",
+        })
         self.db_patch.start()
         self.data_patch.start()
+        self.env_patch.start()
+        self.process_env_patch.start()
         self.addCleanup(self.db_patch.stop)
         self.addCleanup(self.data_patch.stop)
+        self.addCleanup(self.env_patch.stop)
+        self.addCleanup(self.process_env_patch.stop)
         server._bot_control.mark_stopped()
 
     def _seed_runtime_db(self):
@@ -1002,8 +1026,8 @@ class RuntimeResetTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_reset_runtime_data_clears_history_and_preserves_onboarding(self):
-        """Runtime reset clears generated data but keeps onboarding_state."""
+    def test_reset_runtime_data_returns_to_first_run_state(self):
+        """Runtime reset clears generated data, config, and onboarding_state."""
         from src.web import server
 
         self._seed_runtime_db()
@@ -1021,7 +1045,15 @@ class RuntimeResetTests(unittest.TestCase):
             "todos",
         ):
             self.assertEqual(self._count_rows(table), 0, table)
-        self.assertEqual(self._count_rows("onboarding_state"), 1)
+        self.assertEqual(self._count_rows("onboarding_state"), 0)
+        self.assertFalse(self.env_path.exists())
+        self.assertFalse(result["onboarding_done"])
+        self.assertTrue(result["config"]["removed_env"])
+        self.assertNotIn("ONBOARDING_DONE", os.environ)
+        self.assertNotIn("WCDB_KEY", os.environ)
+        self.assertNotIn("OPENAI_API_KEY", os.environ)
+        self.assertNotIn("OPENAI_BASE_URL", os.environ)
+        self.assertNotIn("OPENAI_MODEL", os.environ)
         self.assertFalse((self.data_dir / "group_names.json").exists())
         self.assertFalse((self.data_dir / "bot_status.json").exists())
         snap = server._status.snapshot()

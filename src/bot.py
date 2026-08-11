@@ -129,6 +129,11 @@ class HealthMonitor:
             if hwnd is not None:
                 if wc._validate_hwnd(hwnd):
                     return f"HWND_{hwnd}"
+            # Cache empty/stale — rescan so the status recovers after a
+            # WeChat restart instead of reporting no_hwnd forever.
+            hwnd = wc.find_hwnd()
+            if hwnd:
+                return f"HWND_{hwnd}"
             return "no_hwnd"
         except Exception as e:
             return f"ERR:{e}"

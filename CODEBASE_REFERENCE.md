@@ -241,7 +241,7 @@ todo_delete_keywords: list[str] = [
 | `HealthMonitor._run()` | ~55 | 健康监控主循环(每30s推送, 每5min全检) | 无 | `None` |
 | `HealthMonitor._tick()` | ~75 | 执行一次完整健康检查 | 无 | `None` |
 | `HealthMonitor._check_db()` | ~100 | 检查数据库连接 | 无 | `str` ("OK" 或错误信息) |
-| `HealthMonitor._check_wechat_hwnd()` | ~110 | 检查微信窗口句柄 | 无 | `str` |
+| `HealthMonitor._check_wechat_hwnd()` | ~110 | 检查微信窗口句柄(缓存缺失/失效时调用 `find_hwnd()` 重扫) | 无 | `str` |
 | `HealthMonitor._last_api_ago()` | ~130 | 最后一次 API 调用距今时间 | 无 | `str` |
 | `HealthMonitor._write_status_json()` | ~140 | 写入 bot_status.json 状态文件 | 无 | `None` |
 | `Bot.__init__(config)` | ~165 | 初始化 Bot 实例 | `config: BotConfig` | `None` |
@@ -348,9 +348,9 @@ todo_delete_keywords: list[str] = [
 | `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
 | `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期 | `callback: MessageCallback` | `None` |
-| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息 | `group_name, talker, callback` | `None` |
+| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；去重后记录新消息/join 事件日志再提交线程池 | `group_name, talker, callback` | `None` |
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池) | `group_name, talker, standardized, callback` | `None` |
-| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息 | `msg: dict, group_name: str, talker: str` | `dict \| None` |
+| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；@mention 精确+模糊匹配，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
 | `_send_and_confirm(group_name, talker, content)` | 通过键盘发送并确认 | `group_name, talker, content` | `bool` |
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
 | `_try_voice(msg)` | 尝试语音识别 | `msg: dict` | `str \| None` |
@@ -896,16 +896,18 @@ AbstractSummarizer (base.py)
          │      ├─ feishu export → FeishuExportService.export_recent_chat()
          │      └─ fun (抽签) → draw_lots()
          │
-         └─→ [Proactive 路径]
+         └─→ [非 @ 路径]
                 │
-                ├─ ProactiveGate.should_speak() — 4层门控
-                │     ├─ RateTracker.record() + rate()
-                │     ├─ lookup_mode() — 确定模式
-                │     ├─ 评估间隔检查 + 指数退避
-                │     └─ 概率骰子
+                ├─ 关键词触发 → TriggerDetector.is_trigger(is_at_mentioned=False)
+                │     └─ 命中 (如裸发"总结一下") → _handle_summary()
                 │
-                └─ _handle_proactive_chat()
-                      └─ AbstractSummarizer.proactive_chat()
+                └─ [未命中] ProactiveGate.should_speak() — 4层门控
+                      ├─ RateTracker.record() + rate()
+                      ├─ lookup_mode() — 确定模式
+                      ├─ 评估间隔检查 + 指数退避
+                      └─ 概率骰子
+                           └─ _handle_proactive_chat()
+                                 └─ AbstractSummarizer.proactive_chat()
 
 7. 生成回复文本
          │
@@ -967,6 +969,8 @@ WcdbBackend.start(callback)
         │           _poll_group(group_name, talker, callback)
         │             ├── get_messages(talker, limit=50)
         │             ├── _standardize() → 统一消息格式
+        │             ├── 去重 (_known_ids) → 跳过旧消息
+        │             ├── 新消息: 记录 "New message" / "Join event detected" 日志
         │             └── _handle_message() → 线程池提交
         │
         └── time.sleep(poll_sec)
@@ -994,7 +998,8 @@ WcdbBackend.start(callback)
     "content": str,         # 消息文本 ("[图片]", "[语音]" 等占位符)
     "msg_type": int,        # 1=text, 3=image, 34=voice, 47=emoji, 49=link
     "timestamp": int,       # Unix 秒
-    "is_at_mentioned": bool, # 是否 @机器人
+    "is_at_mentioned": bool, # 是否 @机器人 (精确+模糊匹配 BOT_DISPLAY_NAME)
+    "bot_mention_text": str, # 命中的 @ 文本 (如 "@俞")，供 router 剥离；未命中为 ""
     "is_group": bool,       # 是否群聊(始终 True)
     "is_system_join": bool, # 是否"xxx 加入了群聊"事件
     "new_member_id": str,   # 新成员 wxid
@@ -1023,6 +1028,9 @@ WcdbBackend.start(callback)
 
 ```
 MessageRouter.handle(msg)
+  │
+  ├── 剥离 @前缀: 先用 msg["bot_mention_text"] (后端模糊命中的 @ 文本)，
+  │     再按配置的 BOT_DISPLAY_NAME 剥离，得到 clean_content
   │
   ├── [摘要请求] → _handle_summary(msg)
   │     ├── MessageStore.get_user_previous_timestamp() — 确定摘要起点
@@ -1110,7 +1118,10 @@ MessageRouter.handle(msg)
 ```
 MessageRouter.handle(msg) → [无 @mention]
   │
-  ├── ProactiveGate.should_speak(msg)
+  ├── TriggerDetector.is_trigger(content, is_at_mentioned=False, sender_name)
+  │     └── 关键词命中 (如裸发"总结一下") → _handle_summary(msg)
+  │
+  ├── [关键词未命中] ProactiveGate.should_speak(msg)
   │     │
   │     ├── Gate 1: proactive_enabled? → 主开关
   │     ├── Gate 2: rate = RateTracker.rate(chat_id)

@@ -183,6 +183,14 @@ class MessageRouter:
             )
 
             clean_content = msg["content"]
+            # Prefer the exact mention text matched by the backend (fuzzy
+            # match, e.g. "@俞" when config says 小俞); fall back to the
+            # configured display name below.
+            mention_text = msg.get("bot_mention_text", "")
+            if mention_text:
+                clean_content = re.sub(
+                    re.escape(mention_text) + r"[^\w]*", "", clean_content,
+                ).strip()
             if self._config.bot_display_name:
                 # WeChat @mentions use @wxid<invisible_separator>text format.
                 # The separator (U+2005, U+200B, U+FEFF, etc.) is not removed
@@ -190,7 +198,7 @@ class MessageRouter:
                 # trailing non-word chars in one pass.
                 clean_content = re.sub(
                     re.escape(f"@{self._config.bot_display_name}") + r"[^\w]*",
-                    "", msg["content"]
+                    "", clean_content
                 ).strip()
 
             # Strip WeChat reply-quote prefix: wxid_xxx:\n
@@ -289,12 +297,28 @@ class MessageRouter:
                 except Exception:
                     logger.exception("Automatic Feishu knowledge sync failed")
 
+            # ── Keyword trigger without @mention ─────────────────
+            # A bare "总结一下" (no @) must still summarize — the detector's
+            # keyword condition is independent of @mentions.
+            reply = None
+            if self._detector.is_trigger(
+                content=msg["content"],
+                is_at_mentioned=False,
+                sender_name=msg["sender_name"],
+            ):
+                logger.info(
+                    "Keyword trigger in %s by '%s': %s",
+                    msg["chat_id"], msg["sender_name"], msg["content"][:80],
+                )
+                reply = self._handle_summary(msg)
+
             # ── Proactive path (rate-based ambient participation) ─
-            should_speak, mode, reason = self._proactive.should_speak(msg)
-            if should_speak and mode is not None:
-                reply = self._handle_proactive_chat(msg, mode)
-            else:
-                return None
+            if reply is None:
+                should_speak, mode, reason = self._proactive.should_speak(msg)
+                if should_speak and mode is not None:
+                    reply = self._handle_proactive_chat(msg, mode)
+                else:
+                    return None
 
         # ── Strip markdown — WeChat can't render it ──────────────
         return self._strip_markdown(reply) if reply else None

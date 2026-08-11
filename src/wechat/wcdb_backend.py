@@ -627,6 +627,20 @@ class WcdbBackend(AbstractWeChatBackend):
             if self._bot_name and self._bot_name in standardized["sender_name"]:
                 continue
 
+            # Per-new-message visibility: log what arrived and whether the
+            # @mention was detected, so silently-dropped triggers are
+            # diagnosable from the Web UI log.
+            if standardized["is_system_join"]:
+                logger.info(
+                    "Join event detected: new_member=%s group=%s",
+                    standardized["new_member_id"], group_name[:20],
+                )
+            logger.info(
+                "New message: group='%s' sender='%s' at=%s content=%r",
+                group_name, standardized["sender_name"],
+                standardized["is_at_mentioned"], standardized["content"][:60],
+            )
+
             self._trim_dedup()
 
             # Fire-and-forget: callback (potentially AI call) + send run in
@@ -741,15 +755,12 @@ class WcdbBackend(AbstractWeChatBackend):
         # to avoid backtracking into the wrong quoted string.
         _JOIN_PATTERN = re.compile(r'"([^"]+)"(?:通过[^"]*)?加入了群聊')
         join_match = _JOIN_PATTERN.search(content)
-        new_member_id: str = ""
-        is_system_join: bool = False
-        if join_match:
-            new_member_id = join_match.group(1)
-            is_system_join = True
-            logger.info(
-                "Join event detected: new_member=%s group=%s",
-                new_member_id, group_name[:20],
-            )
+        # WeChat stores placeholder names as "\xa0" (NBSP); strip() removes it
+        # so stale/placeholder join events don't carry a bogus member id.
+        new_member_id: str = join_match.group(1).strip() if join_match else ""
+        is_system_join: bool = bool(join_match)
+        # NOTE: "Join event detected" is logged in _poll_group AFTER the dedup
+        # check — logging here would fire once per poll cycle for old messages.
 
         # Filter other system messages (but NOT join events)
         if not is_system_join:
@@ -780,18 +791,39 @@ class WcdbBackend(AbstractWeChatBackend):
 
         # Resolve @mentions in content
         resolved_content = content
+        mentioned_names: list[str] = []
         if "@" in content:
             def _replace_at(match):
                 at_wxid = match.group(0)[1:]
                 name = self._client.resolve_nickname(at_wxid)
+                if name != at_wxid:
+                    mentioned_names.append(name)
                 return f"@{name}" if name != at_wxid else match.group(0)
             resolved_content = re.sub(r'@wxid_[a-zA-Z0-9]+', _replace_at, content)
 
-        # Detect @mention of bot
-        is_at = self._bot_name and (
-            f"@{self._bot_name}" in resolved_content
-            or f"@{self._bot_name}" in content
-        )
+        # Detect @mention of bot.
+        # Exact match first.  Then fuzzy: WeChat renders the mention with the
+        # group alias / remark name, which may differ slightly from
+        # BOT_DISPLAY_NAME (e.g. config='小俞' but the mention shows '@俞').
+        # Without fuzzy matching such @mentions were silently ignored.
+        is_at = False
+        bot_mention_text = ""
+        if self._bot_name:
+            bot = self._bot_name.strip()
+            if f"@{bot}" in resolved_content or f"@{bot}" in content:
+                is_at = True
+                bot_mention_text = f"@{bot}"
+            else:
+                for name in mentioned_names:
+                    alias = name.strip()
+                    if alias and (alias == bot or alias in bot or bot in alias):
+                        is_at = True
+                        bot_mention_text = f"@{name}"
+                        logger.info(
+                            "Fuzzy @mention match: mention='%s' config='%s'",
+                            alias, bot,
+                        )
+                        break
 
         # Generate stable message ID.
         # For system join messages, use a content-based ID to avoid
@@ -815,7 +847,8 @@ class WcdbBackend(AbstractWeChatBackend):
             "content": resolved_content,
             "msg_type": int(msg.get("localType", msg.get("msg_type", 1))),
             "timestamp": ts,
-            "is_at_mentioned": is_at,
+            "is_at_mentioned": bool(is_at),
+            "bot_mention_text": bot_mention_text,
             "is_group": True,
             "is_system_join": is_system_join,
             "new_member_id": new_member_id,

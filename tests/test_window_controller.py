@@ -7,7 +7,11 @@ import pytest
 if sys.platform != "win32":
     pytest.skip("Windows-only HWND controller tests", allow_module_level=True)
 
-from src.wechat.window_controller import WeChatWindowController, WindowCandidate
+from src.wechat.window_controller import (
+    WeChatWindowController,
+    WindowCandidate,
+    _score_window,
+)
 
 
 class WeChatWindowControllerTests(unittest.TestCase):
@@ -127,6 +131,83 @@ class WeChatWindowControllerTests(unittest.TestCase):
             patch("src.wechat.window_controller._score_window", return_value=small_prompt),
         ):
             self.assertIsNone(controller.find_hwnd(force=True))
+
+    def test_find_hwnd_accepts_hidden_main_window_with_usable_size(self):
+        controller = WeChatWindowController()
+        hidden_main = WindowCandidate(
+            hwnd=300,
+            title="微信",
+            class_name="Qt51514QWindowIcon",
+            pid=1,
+            process_name="weixin.exe",
+            rect=(0, 0, 900, 700),
+            visible=False,
+            iconic=False,
+            score=190,
+            reason="wechat_process+title_wechat+qt_class+reasonable_size",
+        )
+
+        def enum_windows(callback, ctx):
+            callback(300, ctx)
+
+        with (
+            patch("src.wechat.window_controller.win32gui.EnumWindows", side_effect=enum_windows),
+            patch("src.wechat.window_controller._score_window", return_value=hidden_main),
+        ):
+            self.assertEqual(controller.find_hwnd(force=True), 300)
+
+    def test_score_window_uses_restored_rect_for_minimized_window(self):
+        with (
+            patch("src.wechat.window_controller.win32gui.GetWindowText", return_value="微信"),
+            patch(
+                "src.wechat.window_controller.win32gui.GetClassName",
+                return_value="Qt51514QWindowIcon",
+            ),
+            patch(
+                "src.wechat.window_controller.win32gui.IsWindowVisible",
+                return_value=True,
+            ),
+            patch("src.wechat.window_controller.win32gui.IsIconic", return_value=True),
+            patch(
+                "src.wechat.window_controller.win32process.GetWindowThreadProcessId",
+                return_value=(1, 2),
+            ),
+            patch("src.wechat.window_controller._get_process_name", return_value="weixin.exe"),
+            patch(
+                "src.wechat.window_controller.win32gui.GetWindowPlacement",
+                return_value=(0, 0, (0, 0), (0, 0), (10, 20, 910, 720)),
+            ),
+            patch("src.wechat.window_controller.win32gui.GetWindowRect") as get_rect,
+        ):
+            candidate = _score_window(300)
+
+        self.assertEqual(candidate.rect, (10, 20, 910, 720))
+        self.assertIn("reasonable_size", candidate.reason)
+        get_rect.assert_not_called()
+
+    def test_blank_window_detection_rechecks_before_refusing_send(self):
+        fake_image = MagicMock()
+        fake_image.convert.return_value = fake_image
+        blank = MagicMock(mean=[250], stddev=[1])
+        painted = MagicMock(mean=[210], stddev=[20])
+
+        with (
+            patch.object(WeChatWindowController, "_foreground_matches", return_value=True),
+            patch(
+                "src.wechat.window_controller.win32gui.GetWindowRect",
+                return_value=(0, 0, 1000, 800),
+            ),
+            patch(
+                "src.wechat.window_controller.ImageGrab.grab",
+                return_value=fake_image,
+            ) as grab,
+            patch("src.wechat.window_controller.ImageStat.Stat", side_effect=[blank, painted]),
+            patch("src.wechat.window_controller.time.sleep"),
+        ):
+            result = WeChatWindowController._looks_like_blank_window(300)
+
+        self.assertFalse(result)
+        self.assertEqual(grab.call_count, 2)
 
     def test_send_to_chat_adopts_new_wechat_foreground_hwnd_after_navigation(self):
         controller = WeChatWindowController()

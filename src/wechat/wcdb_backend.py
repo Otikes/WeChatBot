@@ -70,7 +70,7 @@ class WcdbBackend(AbstractWeChatBackend):
         # Voice recognition pipeline (lazy-init when voice_asr_enabled)
         self._voice: Optional[object] = None
         self._voice_config = config
-        # Recent own sends: (content, timestamp).  Content-based self-skip so
+        # Recent own sends: (talker, content, timestamp).  Content-based self-skip so
         # the bot never reacts to its own replies, even when the configured
         # display name doesn't match the WCDB-resolved sender name.
         self._recent_sends: deque = deque(maxlen=32)
@@ -625,13 +625,7 @@ class WcdbBackend(AbstractWeChatBackend):
             # (DLL nickname resolution, join detection, logging) ran for
             # all 50 fetched messages on every poll cycle, so old messages
             # were re-processed — and re-logged — once per second forever.
-            raw_key = (
-                str(msg.get("server_id", ""))
-                or str(msg.get("local_id", ""))
-                or f"{msg.get('sender_username', msg.get('senderUsername', msg.get('sender', '')))}|"
-                   f"{msg.get('message_content', msg.get('content', ''))}|"
-                   f"{msg.get('create_time', msg.get('createTime', msg.get('timestamp', '')))}"
-            )
+            raw_key = self._raw_message_key(msg, talker)
             if raw_key in self._known_ids:
                 continue
 
@@ -651,9 +645,12 @@ class WcdbBackend(AbstractWeChatBackend):
             # when the name-based check below misses them (configured
             # BOT_DISPLAY_NAME != WCDB-resolved sender name).
             now = time.time()
-            while self._recent_sends and now - self._recent_sends[0][1] > 300:
+            while self._recent_sends and now - self._recent_sends[0][2] > 300:
                 self._recent_sends.popleft()
-            if any(c == standardized["content"] for c, _ in self._recent_sends):
+            if any(
+                t == talker and c == standardized["content"]
+                for t, c, _ in self._recent_sends
+            ):
                 continue
 
             if self._bot_name and self._bot_name in standardized["sender_name"]:
@@ -756,6 +753,35 @@ class WcdbBackend(AbstractWeChatBackend):
             return None
 
     # ── Message standardization ──────────────────────────────────────
+
+    @staticmethod
+    def _stable_id_text(value) -> str:
+        """Return a usable WCDB id string, ignoring empty / zero placeholders."""
+        if value is None:
+            return ""
+        text = str(value).strip()
+        if not text or text == "0":
+            return ""
+        return text
+
+    @classmethod
+    def _raw_message_key(cls, msg: dict, talker: str) -> str:
+        """Build a stable per-chat key before expensive message standardization."""
+        for key in (
+            "server_id", "serverId", "msgSvrId", "msg_svr_id", "newMsgId",
+            "local_id", "localId", "localID", "localId64",
+        ):
+            value = cls._stable_id_text(msg.get(key))
+            if value:
+                return f"{talker}|{key}|{value}"
+
+        sender = str(
+            msg.get("sender_username", msg.get("senderUsername", msg.get("sender", "")))
+        )
+        content = str(msg.get("message_content", msg.get("content", "")))
+        ts = msg.get("create_time", msg.get("createTime", msg.get("timestamp", "")))
+        local_type = msg.get("localType", msg.get("msg_type", ""))
+        return f"{talker}|{sender}|{content}|{ts}|{local_type}"
 
     def _standardize(self, msg: dict, group_name: str,
                      talker: str) -> Optional[dict]:
@@ -871,11 +897,7 @@ class WcdbBackend(AbstractWeChatBackend):
         if is_system_join:
             raw_id = f"join|{talker}|{new_member_id}|{content}|{ts}"
         else:
-            raw_id = (
-                str(msg.get("server_id", ""))
-                or str(msg.get("local_id", ""))
-                or f"{sender}|{content}|{ts}"
-            )
+            raw_id = self._raw_message_key(msg, talker)
         msg_id = hashlib.md5(str(raw_id).encode()).hexdigest()
 
         return {
@@ -910,5 +932,5 @@ class WcdbBackend(AbstractWeChatBackend):
         """
         success = self._window.send_to_chat(group_name, content)
         if success:
-            self._recent_sends.append((content, time.time()))
+            self._recent_sends.append((talker, content, time.time()))
         return success

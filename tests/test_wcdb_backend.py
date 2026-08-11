@@ -1,21 +1,27 @@
 """Tests for WCDB backend group resolution fallbacks."""
 
+from collections import deque
+import threading
+import time
 import unittest
 from unittest.mock import patch
 
 try:
     from src.wechat.wcdb_backend import WcdbBackend
+    from src.wechat.helpers import DedupSet
     IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover - non-Windows import guard
     WcdbBackend = None
+    DedupSet = None
     IMPORT_ERROR = exc
 
 
 class FakeWcdbClient:
-    def __init__(self, sessions=None, contacts=None, names=None):
+    def __init__(self, sessions=None, contacts=None, names=None, messages=None):
         self.sessions = sessions or []
         self.contacts = contacts or []
         self.names = names or {}
+        self.messages = messages or []
 
     def get_sessions(self):
         return self.sessions
@@ -25,6 +31,9 @@ class FakeWcdbClient:
 
     def get_group_members(self, chat_id):
         return []
+
+    def get_messages(self, talker, limit=50):
+        return self.messages[:limit]
 
     def get_display_names(self, usernames):
         return {username: self.names.get(username, username) for username in usernames}
@@ -91,6 +100,86 @@ class WcdbBackendGroupResolutionTests(unittest.TestCase):
             backend._resolve_groups()
 
         self.assertEqual(backend._talker_ids, {"999999@chatroom": "999999@chatroom"})
+
+
+@unittest.skipIf(WcdbBackend is None, f"wcdb_backend unavailable: {IMPORT_ERROR}")
+class WcdbBackendPollingTests(unittest.TestCase):
+    def _polling_backend(self, messages):
+        backend = object.__new__(WcdbBackend)
+        backend._client = FakeWcdbClient(
+            names={"wxid_alice": "Alice", "wxid_bob": "Bob"},
+            messages=messages,
+        )
+        backend._client_lock = threading.Lock()
+        backend._known_ids = DedupSet(max_size=100)
+        backend._recent_sends = deque(maxlen=32)
+        backend._running = True
+        backend._pool = None
+        backend._bot_name = "Bot"
+        backend._store = None
+        backend._voice = False
+        backend._voice_config = None
+        return backend
+
+    def test_poll_group_keeps_distinct_messages_when_server_id_is_zero(self):
+        messages = [
+            {
+                "server_id": 0,
+                "local_id": 2,
+                "sender_username": "wxid_bob",
+                "message_content": "second",
+                "localType": 1,
+                "create_time": 200,
+            },
+            {
+                "server_id": 0,
+                "local_id": 1,
+                "sender_username": "wxid_alice",
+                "message_content": "first",
+                "localType": 1,
+                "create_time": 100,
+            },
+        ]
+        backend = self._polling_backend(messages)
+        seen = []
+
+        backend._poll_group(
+            "Test Group", "test@chatroom", lambda msg: seen.append(msg) or None,
+        )
+
+        self.assertEqual([m["content"] for m in seen], ["first", "second"])
+        self.assertEqual(len({m["message_id"] for m in seen}), 2)
+
+    def test_recent_self_send_skip_is_scoped_to_the_same_chat(self):
+        messages = [
+            {
+                "server_id": 0,
+                "local_id": 1,
+                "sender_username": "wxid_alice",
+                "message_content": "same reply",
+                "localType": 1,
+                "create_time": 100,
+            },
+        ]
+        backend = self._polling_backend(messages)
+        backend._recent_sends.append(("other@chatroom", "same reply", time.time()))
+        seen = []
+
+        backend._poll_group(
+            "Test Group", "test@chatroom", lambda msg: seen.append(msg) or None,
+        )
+
+        self.assertEqual(len(seen), 1)
+
+        backend = self._polling_backend(messages)
+        backend._recent_sends.append(("test@chatroom", "same reply", time.time()))
+        seen = []
+
+        backend._poll_group(
+            "Test Group", "test@chatroom", lambda msg: seen.append(msg) or None,
+        )
+
+        self.assertEqual(seen, [])
 
 
 if __name__ == "__main__":

@@ -270,7 +270,7 @@ function VoiceSection({ form, update }) {
               {/* ── OpenAI settings ──────────────────────────── */}
               {isOpenAi && (
                 <>
-                  <Field label="OpenAI API Key" hint="用于调用 Whisper API；留空则复用 AI 协议配置中的 Key">
+                  <Field label="OpenAI API Key" hint="用于调用 Whisper API；留空则复用 LLM模型配置中的 Key">
                     <Input type="password" value={form.voice_openai_api_key || ''}
                       onChange={v => update('voice_openai_api_key', v)}
                       placeholder="sk-xxxxxxxxxxxxxxxx（可选）" />
@@ -392,6 +392,147 @@ function VoiceSection({ form, update }) {
                   { value: 'auto', desc: '自动检测', hint: '让模型自行判断语种' },
                 ]} />
               </Field>
+
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </div>
+  )
+}
+
+// ── Image Gen Section (生图模型配置) ───────────────────────────────
+// 触发规则：群聊中 @机器人 且消息命中生图关键词（如“画一张”“生图”）
+// 时调用 Images API 生成图片并发送。配置结构与 LLM 模型配置类似：
+// 选择协议 → 填密钥/地址 → 获取模型 → 选择生图模型。
+
+function ImageGenSection({ form, update }) {
+  const [modelOptions, setModelOptions] = useState([])
+  const [modelBusy, setModelBusy] = useState(false)
+  const [modelError, setModelError] = useState('')
+
+  const apiKey = form.image_gen_api_key || ''
+  const baseUrl = form.image_gen_base_url || ''
+  const modelValue = form.image_gen_model || ''
+
+  // 模型下拉项：接口返回的列表 + 当前已配置的模型（避免回显丢失）
+  const modelSelectOptions = (() => {
+    const seen = new Set()
+    const rows = modelOptions.map(m => ({
+      value: m.id,
+      code: m.id,
+      desc: m.label || m.id,
+      hint: m.hint || '',
+    })).filter(opt => {
+      if (!opt.value || seen.has(opt.value)) return false
+      seen.add(opt.value)
+      return true
+    })
+    if (modelValue && !seen.has(modelValue)) {
+      rows.unshift({ value: modelValue, code: modelValue, desc: modelValue, hint: '当前配置' })
+    }
+    if (!modelValue && rows.length) {
+      rows.unshift({ value: '', desc: '请选择模型', hint: '从获取到的列表中选择', showValue: false })
+    }
+    return rows
+  })()
+
+  // 复用 /api/ai/models 端点（openai_compatible 协议会请求 /v1/models）
+  async function fetchModels() {
+    setModelBusy(true)
+    setModelError('')
+    try {
+      const res = await fetch('http://127.0.0.1:7327/api/ai/models', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ai_backend: 'openai_compatible',
+          api_key: apiKey,
+          base_url: baseUrl,
+        }),
+      })
+      const data = await res.json()
+      if (!data.ok) throw new Error(data.error || '获取模型失败')
+      const models = data.models || []
+      setModelOptions(models)
+      if (!models.length) setModelError('接口没有返回可用模型')
+    } catch (e) {
+      setModelOptions([])
+      setModelError(e.message || '获取模型失败')
+    } finally {
+      setModelBusy(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="space-y-5">
+        {/* ── 总开关 ───────────────────────────────── */}
+        <div className="flex items-center justify-between">
+          <div className="flex-1 mr-8">
+            <p className="text-[15px] text-text-main font-medium">启用文生图</p>
+            <p className="text-sm text-text-muted mt-1.5">
+              开启后，群聊中 @机器人 且消息带生图意图（如“画一张猫咪”）时，自动调用图片模型生成图片并发送
+            </p>
+          </div>
+          <Toggle enabled={form.image_gen_enabled} onChange={v => update('image_gen_enabled', v)} />
+        </div>
+
+        <AnimatePresence>
+          {form.image_gen_enabled && (
+            <motion.div variants={paramPanel} initial="initial" animate="animate" exit="exit"
+              className="p-5 bg-bg-raised rounded-xl space-y-5">
+
+              {/* ── 协议 ─────────────────────────────────── */}
+              <Field label="生图协议" hint="按接口协议选择；具体模型由请求地址和 Key 动态获取">
+                <Select value="openai_images" onChange={() => {}} options={[
+                  { value: 'openai_images', desc: 'Images', hint: '/v1/images/generations · /v1/models' },
+                ]} />
+              </Field>
+
+              {/* ── 密钥与地址 ──────────────────────────── */}
+              <Field label="API Key" hint="云端接口通常需要；本地无鉴权服务可留空">
+                <Input type="password" value={apiKey} onChange={v => update('image_gen_api_key', v)} placeholder="sk-xxxxxxxxxxxxxxxx（可选）" />
+              </Field>
+              <Field label="请求地址" hint="可填 base URL，也可直接粘完整 /v1/images/generations 或 /v1/models；保存时会自动纠正">
+                <Input value={baseUrl} onChange={v => update('image_gen_base_url', v)} placeholder="https://example.com/v1" />
+              </Field>
+
+              {/* ── 模型 ─────────────────────────────────── */}
+              <Field label="生图模型" hint={modelOptions.length ? `已获取 ${modelOptions.length} 个模型` : '填写请求地址和 Key 后获取模型列表'} error={modelError || null}>
+                <div className="flex gap-2">
+                  <div className="flex-1 min-w-0">
+                    {modelSelectOptions.length ? (
+                      <Select value={modelValue} onChange={v => update('image_gen_model', v)} options={modelSelectOptions} />
+                    ) : (
+                      <Input value={modelValue} onChange={v => update('image_gen_model', v)} placeholder="先获取模型，或手动填写模型 ID" />
+                    )}
+                  </div>
+                  <button type="button" onClick={fetchModels} disabled={modelBusy}
+                    className="shrink-0 px-5 py-2.5 rounded-full bg-brand-green text-[#0d0d0d] text-[14px] font-semibold hover:opacity-90 disabled:opacity-45 transition-opacity cursor-pointer">
+                    {modelBusy ? '获取中' : '获取模型'}
+                  </button>
+                </div>
+              </Field>
+
+              {/* ── 图片尺寸 ─────────────────────────────── */}
+              <Field label="图片尺寸" hint="可选；留空由模型自行决定，部分模型不支持固定尺寸">
+                <Select value={form.image_gen_size || ''} onChange={v => update('image_gen_size', v)} options={[
+                  { value: '', desc: '模型默认', hint: '不传 size 参数', showValue: false },
+                  { value: '1024x1024', desc: '正方形', hint: '1024 × 1024' },
+                  { value: '1024x1792', desc: '竖版', hint: '1024 × 1792' },
+                  { value: '1792x1024', desc: '横版', hint: '1792 × 1024' },
+                ]} />
+              </Field>
+
+              {/* ── 触发方式说明 ─────────────────────────── */}
+              <div className="bg-bg-main/60 border border-border-main/70 rounded-xl p-4">
+                <p className="text-[13px] text-text-main font-medium mb-1">触发方式</p>
+                <p className="text-xs text-text-muted leading-relaxed">
+                  需要同时满足两个条件：消息中 @机器人，且内容命中生图关键词（如“画一张”“画一个”“生成图片”“生图”等）。
+                  关键词之后的内容会作为生图提示词，例如“@机器人 画一张在草地上奔跑的柯基”。
+                </p>
+              </div>
 
             </motion.div>
           )}
@@ -902,8 +1043,8 @@ function FeishuSection({ form, update }) {
 
 // ── Lots Editor (抽签配置编辑器) ─────────────────────────────────────────
 
-const sectionTitles = { ai: 'AI 协议配置', voice: '语音识别配置', identity: '机器人身份', data: '数据路径', sandbox: '提示词沙箱' }
-const sectionAccents = { ai: '#18E299', voice: '#10b981', identity: '#3772cf', data: '#18E299', sandbox: '#8b5cf6' }
+const sectionTitles = { ai: 'LLM模型配置', voice: '语音模型配置', imagegen: '生图模型配置', identity: '机器人身份', data: '数据路径', sandbox: '提示词沙箱' }
+const sectionAccents = { ai: '#18E299', voice: '#10b981', imagegen: '#8b5cf6', identity: '#3772cf', data: '#18E299', sandbox: '#8b5cf6' }
 
 // ── Data Path Section (webot + 微信数据目录配置) ───────────────────────
 
@@ -1972,6 +2113,8 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     webot_data_dir: '', resolved_webot_data_dir: '',
     voice_asr_enabled: false, voice_asr_backend: 'local_whisper', voice_asr_language: 'zh',
     voice_openai_api_key: '', voice_openai_base_url: '', voice_local_model: 'small',
+    image_gen_enabled: false, image_gen_api_key: '', image_gen_base_url: '',
+    image_gen_model: '', image_gen_size: '',
   })
 
   async function handleExportConfig() {
@@ -2116,6 +2259,11 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           voice_openai_api_key: form.voice_openai_api_key,
           voice_openai_base_url: form.voice_openai_base_url,
           voice_local_model: form.voice_local_model,
+          image_gen_enabled: form.image_gen_enabled,
+          image_gen_api_key: form.image_gen_api_key,
+          image_gen_base_url: form.image_gen_base_url,
+          image_gen_model: form.image_gen_model,
+          image_gen_size: form.image_gen_size,
         }),
       })
       const data = await res.json()
@@ -2185,6 +2333,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
               <div className="p-7">
                 {activeSection === 'ai' && <AiSection form={form} update={update} />}
                 {activeSection === 'voice' && <VoiceSection form={form} update={update} />}
+                {activeSection === 'imagegen' && <ImageGenSection form={form} update={update} />}
                 {activeSection === 'identity' && <IdentitySection form={form} update={update} />}
                 {activeSection === 'data' && <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />}
                 {activeSection === 'sandbox' && <SandboxSection form={form} />}

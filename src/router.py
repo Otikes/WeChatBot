@@ -1,10 +1,11 @@
 """Message router — receives standardized messages and dispatches to handlers.
 
-Routes messages to four response modes:
+Routes messages to five response modes:
 1. Admin commands: @bot mention + admin wxid → AdminCommandHandler
-2. Summary requests: keyword trigger → summarizer.summarize()
-3. AI chat: @bot mention (non-summary) → summarizer.chat()
-4. Proactive chat: ambient participation via rate-based gating → summarizer.proactive_chat()
+2. Image generation: @bot + 生图意图关键词 → ImageGenerator (returns ImageReply)
+3. Summary requests: keyword trigger → summarizer.summarize()
+4. AI chat: @bot mention (non-summary) → summarizer.chat()
+5. Proactive chat: ambient participation via rate-based gating → summarizer.proactive_chat()
 """
 
 import logging
@@ -18,6 +19,12 @@ from .memory.consolidator import MemoryConsolidator
 from .todo.store import TodoStore
 from .todo.handler import TodoHandler, format_todo_reply
 from .config import webot_data_path
+from .imagegen import (
+    ImageReply,
+    create_image_generator,
+    extract_image_prompt,
+    is_image_gen_intent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +94,8 @@ class MessageRouter:
             self._todo_handler = TodoHandler(
                 self._todo_store, config,
             )
+        # Image generation: lazy client — None when disabled or misconfigured
+        self._image_gen = create_image_generator(config)
         # Health monitoring: count unique messages processed (post-dedup)
         self.messages_processed: int = 0
 
@@ -99,10 +108,11 @@ class MessageRouter:
         text = _MD_CODE.sub(r"\1", text)
         return text.strip()
 
-    def handle(self, msg: dict) -> Optional[str]:
+    def handle(self, msg: dict) -> Optional[str | ImageReply]:
         """Process an incoming group chat message.
 
-        Returns reply text if a reply should be sent, or None.
+        Returns reply text if a reply should be sent, an ImageReply when
+        an image was generated, or None.
         """
         # Skip messages from the bot itself (prevent infinite loops).
         # Use a forgiving match — WeChat display names can vary slightly
@@ -280,6 +290,19 @@ class MessageRouter:
                 except Exception:
                     logger.exception("Todo command failed")
 
+            # ── Image generation: @bot + 生图意图关键词 ────────────
+            # 放在总结/普通聊天之前：避免"画一张..."被当成普通
+            # 聊天请求交给 LLM。命中时调用生图模型，返回 ImageReply。
+            if (
+                reply is None
+                and self._config.image_gen_enabled
+                and self._image_gen is not None
+                and is_image_gen_intent(
+                    clean_content, self._config.image_gen_keywords,
+                )
+            ):
+                reply = self._handle_image_gen(msg, clean_content)
+
             if reply is None and self._detector.is_trigger(
                 content=clean_content,
                 is_at_mentioned=False,
@@ -322,6 +345,10 @@ class MessageRouter:
                     reply = self._handle_proactive_chat(msg, mode)
                 else:
                     return None
+
+        # 图片回复不需要 markdown 清理 — 直接返回，由后端走图片发送通道
+        if isinstance(reply, ImageReply):
+            return reply
 
         # ── Strip markdown — WeChat can't render it ──────────────
         return self._strip_markdown(reply) if reply else None
@@ -543,6 +570,36 @@ class MessageRouter:
         except Exception as e:
             logger.error("AI chat failed: %s", e)
             return f"@{display_name} 大脑短路了，稍等再试～"
+
+    # ── Image generation handler ────────────────────────────────
+
+    def _handle_image_gen(self, msg: dict,
+                          clean_content: str) -> str | ImageReply | None:
+        """处理 @机器人 + 生图意图的消息。
+
+        流程: 提取提示词 → 调用生图模型 → 返回 ImageReply（本地图片路径），
+        由后端通过剪贴板粘贴方式发送到群里。失败时回退为文本回复。
+        """
+        display_name = self._nicks.resolve_name(msg["sender_id"])
+        if display_name == msg["sender_id"]:
+            display_name = msg["sender_name"]
+
+        prompt = extract_image_prompt(
+            clean_content, self._config.image_gen_keywords,
+        )
+        logger.info(
+            "Image gen: '%s' in %s → prompt=%r",
+            display_name, msg.get("group_name", msg["chat_id"][:20]),
+            prompt[:60],
+        )
+
+        try:
+            image_path = self._image_gen.generate(prompt)
+        except Exception as e:
+            logger.error("Image generation failed: %s", e)
+            return f"@{display_name} 画图失败了，稍后再试一次～"
+
+        return ImageReply(image_path=str(image_path))
 
     # ── Welcome handler ─────────────────────────────────────────
 

@@ -352,6 +352,25 @@ class BotConfig:
     # Convert traditional Chinese → simplified (opencc t2s)
     voice_asr_to_simplified: bool = True
 
+    # === Image Generation (文生图) ===
+    # Master switch (default off — user must opt in).
+    # When enabled, @bot + an image-generation intent keyword triggers
+    # the configured Images API and the result is pasted into the chat.
+    image_gen_enabled: bool = False
+    # OpenAI-compatible Images API credentials (/v1/images/generations)
+    image_gen_api_key: str = ""
+    image_gen_base_url: str = ""
+    # Selected image model id (from the "获取模型" list)
+    image_gen_model: str = ""
+    # Optional image size like "1024x1024"; empty = provider default
+    image_gen_size: str = ""
+    # Intent keywords — an @mention whose text contains any of these
+    # is treated as an image-generation request.
+    image_gen_keywords: list[str] = field(default_factory=lambda: [
+        "画一张", "画一个", "画一幅", "画一只", "画个", "帮我画",
+        "生成一张", "生成一幅", "生成图片", "生图", "来一张图", "画出来",
+    ])
+
 
 def _validate_config(kwargs: dict) -> None:
     """Validate numeric config values.  Prints clear errors and exits on bad values."""
@@ -534,6 +553,11 @@ def load_config() -> BotConfig:
         [kw.strip() for kw in todo_delete_kw_str.split(",") if kw.strip()]
         if todo_delete_kw_str else None
     )
+    image_gen_kw_str = os.getenv("IMAGE_GEN_KEYWORDS", "").strip()
+    image_gen_keywords = (
+        [kw.strip() for kw in image_gen_kw_str.split(",") if kw.strip()]
+        if image_gen_kw_str else None
+    )
 
     kwargs: dict = {
         "ai_backend": ai_backend,
@@ -608,6 +632,12 @@ def load_config() -> BotConfig:
         "voice_openai_base_url": os.getenv("VOICE_OPENAI_BASE_URL", "").strip(),
         "voice_local_model": os.getenv("VOICE_LOCAL_MODEL", "small").strip(),
         "voice_asr_to_simplified": os.getenv("VOICE_ASR_TO_SIMPLIFIED", "true").strip().lower() == "true",
+        # Image generation (文生图)
+        "image_gen_enabled": os.getenv("IMAGE_GEN_ENABLED", "false").strip().lower() == "true",
+        "image_gen_api_key": os.getenv("IMAGE_GEN_API_KEY", "").strip(),
+        "image_gen_base_url": os.getenv("IMAGE_GEN_BASE_URL", "").strip(),
+        "image_gen_model": os.getenv("IMAGE_GEN_MODEL", "").strip(),
+        "image_gen_size": os.getenv("IMAGE_GEN_SIZE", "").strip(),
     }
 
     deepseek_model = os.getenv("DEEPSEEK_MODEL")
@@ -632,6 +662,8 @@ def load_config() -> BotConfig:
         kwargs["todo_complete_keywords"] = todo_complete_keywords
     if todo_delete_keywords is not None:
         kwargs["todo_delete_keywords"] = todo_delete_keywords
+    if image_gen_keywords is not None:
+        kwargs["image_gen_keywords"] = image_gen_keywords
 
     _validate_config(kwargs)
 

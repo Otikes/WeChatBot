@@ -184,6 +184,8 @@ class WeChatWindowController:
     CLIPBOARD_DELAY: float = 0.03          # after set clipboard (pre-paste)
     ENTER_SEND_DELAY: float = 0.1          # after Enter to send
     PASTE_SEND_DELAY: float = 0.15         # after Ctrl+V paste in send
+    # 图片粘贴后微信需要生成预览，比文本粘贴更慢，回车前需多等一会
+    IMAGE_PASTE_SEND_DELAY: float = 0.5    # after Ctrl+V image paste
     TAB_SWITCH_DELAY: float = 0.25         # after switching tabs (e.g. Chat→Contacts)
 
     def __init__(self):
@@ -786,13 +788,85 @@ class WeChatWindowController:
         logger.info("Message send action completed: %d chars", len(text))
         return True
 
+    def send_image_message(self, hwnd: int, image_path) -> bool:
+        """Send an image via clipboard: 写入 CF_DIB → Ctrl+V → Enter.
+
+        与 send_message 同样的前置校验（HWND 有效性 + 前台焦点），
+        区别只在剪贴板内容是图片而非文本，且粘贴后等待更久
+        以便微信生成图片预览。
+
+        The caller MUST have already navigated to the correct chat.
+        """
+        image_path = Path(image_path)
+        if not image_path.exists():
+            logger.warning("send_image_message: missing image %s", image_path)
+            return False
+
+        if not self._validate_hwnd(hwnd):
+            logger.error(f"send_image_message: invalid HWND={hwnd}")
+            return False
+
+        if not self._foreground_matches(hwnd):
+            logger.warning(
+                "send_image_message: WeChat not foreground before send. "
+                "Attempting re-activation. %s",
+                self.get_foreground_info(),
+            )
+            if not self.activate(hwnd):
+                logger.error(
+                    "send_image_message: re-activation failed. %s",
+                    self.get_foreground_info(),
+                )
+                return False
+            active = self._current_wechat_foreground_hwnd()
+            if active:
+                hwnd = self._adopt_foreground_hwnd(hwnd, "after image re-activation")
+
+        logger.info(
+            "Sending image: %s to HWND=%s (clipboard paste)",
+            image_path.name, hwnd,
+        )
+
+        # 将图片以 CF_DIB 格式写入剪贴板
+        if not self._set_clipboard_image(image_path):
+            logger.error("send_image_message: failed to set clipboard image")
+            return False
+        time.sleep(self.PASTE_DELAY)
+
+        send_combo(0x11, 0x56)  # Ctrl+V
+        time.sleep(self.IMAGE_PASTE_SEND_DELAY)
+
+        hwnd = self._adopt_foreground_hwnd(hwnd, "after image paste")
+        if not self._foreground_matches(hwnd):
+            logger.warning(
+                "send_image_message: foreground changed before Enter; "
+                "re-activating. %s",
+                self.get_foreground_info(),
+            )
+            if not self.activate(hwnd):
+                logger.error(
+                    "send_image_message: re-activation before Enter failed. %s",
+                    self.get_foreground_info(),
+                )
+                return False
+            active = self._current_wechat_foreground_hwnd()
+            if active:
+                hwnd = self._adopt_foreground_hwnd(hwnd, "after image enter re-activation")
+
+        # Press Enter to send
+        press_key(0x0D)  # Enter
+        time.sleep(self.ENTER_SEND_DELAY)
+
+        logger.info("Image send action completed: %s", image_path.name)
+        return True
+
     # ── Full send pipeline ────────────────────────────────────────
 
     def send_to_chat(self, group_name: str, text: str,
                      max_retries: int = 2) -> bool:
-        """Complete send pipeline: find → activate → navigate → send.
+        """Complete text send pipeline: find → activate → navigate → send.
 
-        This is the main entry point for sending a message.
+        This is the main entry point for sending a text message.
         Every step is verified; failures are logged.
 
         Args:
@@ -807,6 +881,51 @@ class WeChatWindowController:
             logger.error("send_to_chat: empty group_name or text")
             return False
 
+        return self._run_send_pipeline(
+            group_name=group_name,
+            describe=f"{len(text)} chars text",
+            payload=text,
+            send_fn=self.send_message,
+            max_retries=max_retries,
+        )
+
+    def send_image_to_chat(self, group_name: str, image_path,
+                           max_retries: int = 2) -> bool:
+        """Complete image send pipeline: find → activate → navigate → paste.
+
+        图片发送通道: 将图片写入剪贴板（CF_DIB），导航到目标群聊后
+        Ctrl+V 粘贴 + Enter 发送，与手工发图行为一致。
+
+        Args:
+            group_name: Target group chat name.
+            image_path: 本地图片文件路径。
+            max_retries: Max retry attempts on failure.
+
+        Returns:
+            True if successfully sent.
+        """
+        image_path = Path(image_path)
+        if not group_name or not image_path.exists():
+            logger.error(
+                "send_image_to_chat: empty group_name or missing image %s",
+                image_path,
+            )
+            return False
+
+        return self._run_send_pipeline(
+            group_name=group_name,
+            describe=f"image {image_path.name}",
+            payload=image_path,
+            send_fn=self.send_image_message,
+            max_retries=max_retries,
+        )
+
+    def _run_send_pipeline(self, group_name: str, describe: str,
+                           payload, send_fn, max_retries: int) -> bool:
+        """Shared send pipeline for text and image payloads.
+
+        find → activate → blank-check → navigate → send_fn(hwnd, payload).
+        """
         for attempt in range(max_retries):
             if attempt > 0:
                 logger.info(f"Retry attempt {attempt + 1}/{max_retries}")
@@ -815,16 +934,16 @@ class WeChatWindowController:
 
             hwnd = self.find_hwnd(force=(attempt > 0))
             if not hwnd:
-                self._log_failure(group_name, text, "no WeChat window found")
+                self._log_failure(group_name, payload, "no WeChat window found")
                 continue
 
             if not self.activate(hwnd):
-                self._log_failure(group_name, text, "window activation failed",
+                self._log_failure(group_name, payload, "window activation failed",
                                   hwnd)
                 continue
 
             if self._looks_like_blank_window(hwnd):
-                self._log_failure(group_name, text, "WeChat window is blank/white", hwnd)
+                self._log_failure(group_name, payload, "WeChat window is blank/white", hwnd)
                 logger.error(
                     "WeChat window appears blank/white; refusing to send. "
                     "Restart WeChat before retrying."
@@ -833,26 +952,26 @@ class WeChatWindowController:
 
             nav_result = self.navigate_to_chat(hwnd, group_name)
             if not nav_result:
-                self._log_failure(group_name, text, "navigation failed", hwnd)
+                self._log_failure(group_name, payload, "navigation failed", hwnd)
                 continue
             if type(nav_result) is int:
                 hwnd = nav_result
             else:
                 hwnd = self._adopt_foreground_hwnd(hwnd, "after navigation")
 
-            if not self.send_message(hwnd, text):
-                self._log_failure(group_name, text, "send failed", hwnd)
+            if not send_fn(hwnd, payload):
+                self._log_failure(group_name, payload, "send failed", hwnd)
                 continue
 
             logger.info(
-                f"send_to_chat SUCCESS: group='{group_name}' "
-                f"({len(text)} chars) HWND={hwnd}"
+                f"send pipeline SUCCESS: group='{group_name}' "
+                f"({describe}) HWND={hwnd}"
             )
             return True
 
         logger.error(
-            f"send_to_chat FAILED after {max_retries} attempts: "
-            f"group='{group_name}'"
+            f"send pipeline FAILED after {max_retries} attempts: "
+            f"group='{group_name}' ({describe})"
         )
         return False
 
@@ -985,6 +1104,51 @@ class WeChatWindowController:
                     win32clipboard.CloseClipboard()
                 except Exception:
                     pass
+
+    @staticmethod
+    def _set_clipboard_image(image_path) -> bool:
+        """将图片文件以 CF_DIB 格式写入剪贴板。
+
+        实现方式: PIL 读出图片 → 编码为 BMP → 去掉 14 字节的
+        BITMAPFILEHEADER 即得 CF_DIB（BITMAPINFOHEADER + 像素数据），
+        这是微信输入框可识别粘贴的标准格式。带重试以应对剪贴板
+        被其它进程短暂占用的情况。
+        """
+        try:
+            import io
+            from PIL import Image
+        except ImportError:
+            logger.error("_set_clipboard_image: PIL not available")
+            return False
+
+        # 先读出 DIB 字节，再操作剪贴板，缩短剪贴板占用时间
+        try:
+            with Image.open(image_path) as img:
+                # 统一转 RGB：去掉 alpha 通道，兼容 BMP/DIB 格式
+                rgb = img.convert("RGB")
+                buf = io.BytesIO()
+                rgb.save(buf, "BMP")
+                dib_bytes = buf.getvalue()[14:]  # strip BITMAPFILEHEADER
+        except Exception as e:
+            logger.error("_set_clipboard_image: failed to encode image: %s", e)
+            return False
+
+        for _ in range(3):
+            try:
+                win32clipboard.OpenClipboard()
+                win32clipboard.EmptyClipboard()
+                win32clipboard.SetClipboardData(
+                    win32clipboard.CF_DIB, dib_bytes,
+                )
+                win32clipboard.CloseClipboard()
+                return True
+            except Exception:
+                time.sleep(0.1)
+                try:
+                    win32clipboard.CloseClipboard()
+                except Exception:
+                    pass
+        return False
 
     @staticmethod
     def _log_failure(group: str, text: str, reason: str,

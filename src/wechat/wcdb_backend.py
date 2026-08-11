@@ -23,6 +23,7 @@ from .wcdb_client import WcdbNativeClient
 from .window_controller import WeChatWindowController
 from .helpers import DedupSet, format_nontext_content, normalize_msg_type
 from src.config import webot_data_path
+from src.imagegen import ImageReply
 
 logger = logging.getLogger(__name__)
 
@@ -702,6 +703,28 @@ class WcdbBackend(AbstractWeChatBackend):
                 )
 
             if reply:
+                if isinstance(reply, ImageReply):
+                    # 生图回复 — 走剪贴板图片发送通道
+                    logger.info(
+                        "Image reply ready: group='%s' sender='%s' file=%s",
+                        group_name, standardized["sender_name"],
+                        reply.image_path,
+                    )
+                    with self._client_lock:
+                        success = self._send_image_and_confirm(
+                            group_name, talker, reply.image_path,
+                        )
+                    if success:
+                        logger.info(
+                            "Image reply sent: group='%s'", group_name,
+                        )
+                    else:
+                        logger.error(
+                            "Image reply FAILED: group='%s' — check WeChat window",
+                            group_name,
+                        )
+                    return
+
                 logger.info(
                     "Reply ready: group='%s' sender='%s' len=%d",
                     group_name, standardized["sender_name"], len(reply),
@@ -936,4 +959,17 @@ class WcdbBackend(AbstractWeChatBackend):
         success = self._window.send_to_chat(group_name, content)
         if success:
             self._recent_sends.append((talker, content, time.time()))
+        return success
+
+    def _send_image_and_confirm(self, group_name: str, talker: str,
+                                image_path: str) -> bool:
+        """通过剪贴板粘贴发送图片（fire-and-forget）。
+
+        与 _send_and_confirm 同构；发送成功后把占位内容 "[图片]"
+        记入 _recent_sends，配合发送者名检查避免机器人对自己发出的
+        图片消息二次响应。
+        """
+        success = self._window.send_image_to_chat(group_name, image_path)
+        if success:
+            self._recent_sends.append((talker, "[图片]", time.time()))
         return success

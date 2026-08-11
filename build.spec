@@ -65,6 +65,8 @@ a = Analysis(
         'src.proactive', 'src.proactive.gate', 'src.proactive.modes',
         'src.proactive.rate_tracker', 'src.proactive.sticky',
         'src.memory', 'src.memory.consolidator',
+        'src.imagegen', 'src.imagegen.generator', 'src.imagegen.intent',
+        'src.imagegen.reply',
         'src.integrations', 'src.integrations.feishu',
         'src.integrations.feishu.client', 'src.integrations.feishu.exporter',
         'src.integrations.feishu.knowledge',

@@ -8,6 +8,7 @@ OPENAI_COMPATIBLE_LOCAL_API_KEY = "webot-local-compatible"
 
 _OPENAI_ENDPOINT_SUFFIXES = (
     "/chat/completions",
+    "/images/generations",
     "/responses",
     "/models",
 )

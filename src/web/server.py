@@ -231,6 +231,53 @@ def _ai_updates_from_config(config: dict) -> dict[str, str | None]:
     return updates
 
 
+def _secret_update(new_value, old_value: str) -> str | None:
+    """密钥字段的安全更新。
+
+    配置读取时密钥会被 _mask_key 掩码后返回给前端；如果用户没有
+    修改密钥，保存时回传的就是掩码值（包含 "***"）——此时必须保留
+    原值，否则真实密钥会被掩码字符串覆盖。
+    """
+    if new_value is None:
+        return None
+    new_value = str(new_value)
+    if "***" in new_value:
+        return old_value or ""
+    return new_value
+
+
+def _image_gen_config_from_raw(raw: dict[str, str]) -> dict:
+    """Return UI-facing image generation config from env key/value pairs."""
+    return {
+        "image_gen_enabled": raw.get("IMAGE_GEN_ENABLED", "false").lower() == "true",
+        "image_gen_api_key": _mask_key(raw.get("IMAGE_GEN_API_KEY", "")),
+        "image_gen_base_url": raw.get("IMAGE_GEN_BASE_URL", ""),
+        "image_gen_model": raw.get("IMAGE_GEN_MODEL", ""),
+        "image_gen_size": raw.get("IMAGE_GEN_SIZE", ""),
+    }
+
+
+def _image_gen_updates_from_config(config: dict,
+                                   old_raw: dict[str, str]) -> dict[str, str | None]:
+    """Return env updates for image generation config from UI payload."""
+    base_url = config.get("image_gen_base_url")
+    return {
+        "IMAGE_GEN_ENABLED": (
+            str(bool(config.get("image_gen_enabled", False))).lower()
+            if "image_gen_enabled" in config else None
+        ),
+        "IMAGE_GEN_API_KEY": _secret_update(
+            config.get("image_gen_api_key"),
+            old_raw.get("IMAGE_GEN_API_KEY", ""),
+        ),
+        "IMAGE_GEN_BASE_URL": (
+            normalize_openai_base_url(base_url) if base_url else base_url
+        ),
+        "IMAGE_GEN_MODEL": config.get("image_gen_model"),
+        "IMAGE_GEN_SIZE": config.get("image_gen_size"),
+    }
+
+
 def _normalize_anthropic_base_url(raw: str) -> str:
     """Normalize an Anthropic Messages base URL for models/messages calls."""
     value = (raw or "").strip() or "https://api.anthropic.com"
@@ -775,6 +822,11 @@ _FIRST_RUN_ENV_DEFAULTS = {
     "VOICE_OPENAI_BASE_URL": "",
     "VOICE_LOCAL_MODEL": "small",
     "VOICE_ASR_TO_SIMPLIFIED": "true",
+    "IMAGE_GEN_ENABLED": "false",
+    "IMAGE_GEN_API_KEY": "",
+    "IMAGE_GEN_BASE_URL": "",
+    "IMAGE_GEN_MODEL": "",
+    "IMAGE_GEN_SIZE": "",
     "MAC_WEFLOW_DATA_DIR": "",
     "MAC_WECHAT_SEND_SHORTCUT": "enter",
     "ONBOARDING_DONE": "false",
@@ -1872,6 +1924,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             }
             config_data.update(_feishu_config_from_raw(raw))
             config_data.update(_todo_config_from_raw(raw))
+            config_data.update(_image_gen_config_from_raw(raw))
             self.send_json({
                 "ok": True,
                 "config": config_data,
@@ -1918,6 +1971,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "resolved_webot_data_dir": str(resolve_webot_data_dir(raw.get("WEBOT_DATA_DIR", ""))),
                 }
                 export_data.update(_feishu_config_from_raw(raw))
+                export_data.update(_image_gen_config_from_raw(raw))
                 filename = f"webot-config-{_dt_date.today().isoformat()}.json"
                 body = json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8")
                 self.send_response(200)
@@ -1972,12 +2026,16 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "VOICE_ASR_ENABLED": str(config.get("voice_asr_enabled", False)).lower(),
                     "VOICE_ASR_BACKEND": config.get("voice_asr_backend", "local_whisper"),
                     "VOICE_ASR_LANGUAGE": config.get("voice_asr_language", "zh"),
-                    "VOICE_OPENAI_API_KEY": config.get("voice_openai_api_key", ""),
+                    "VOICE_OPENAI_API_KEY": _secret_update(
+                        config.get("voice_openai_api_key", ""),
+                        old_raw.get("VOICE_OPENAI_API_KEY", ""),
+                    ),
                     "VOICE_OPENAI_BASE_URL": config.get("voice_openai_base_url", ""),
                     "VOICE_LOCAL_MODEL": config.get("voice_local_model", "small"),
                 }
                 updates.update(_feishu_updates_from_config(config))
                 updates.update(_todo_updates_from_config(config))
+                updates.update(_image_gen_updates_from_config(config, old_raw))
                 seen = set()
                 for line in lines:
                     stripped = line.strip()
@@ -2065,11 +2123,15 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "VOICE_ASR_ENABLED": str(config.get("voice_asr_enabled", False)).lower(),
                     "VOICE_ASR_BACKEND": config.get("voice_asr_backend", "local_whisper"),
                     "VOICE_ASR_LANGUAGE": config.get("voice_asr_language", "zh"),
-                    "VOICE_OPENAI_API_KEY": config.get("voice_openai_api_key", ""),
+                    "VOICE_OPENAI_API_KEY": _secret_update(
+                        config.get("voice_openai_api_key", ""),
+                        old_raw.get("VOICE_OPENAI_API_KEY", ""),
+                    ),
                     "VOICE_OPENAI_BASE_URL": config.get("voice_openai_base_url", ""),
                     "VOICE_LOCAL_MODEL": config.get("voice_local_model", "small"),
                 }
                 updates.update(_feishu_updates_from_config(config))
+                updates.update(_image_gen_updates_from_config(config, old_raw))
                 new_lines = []
                 seen = set()
                 for line in lines:

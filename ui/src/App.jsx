@@ -18,8 +18,9 @@ const TABS = [
   {
     id: 'config', label: '系统配置', icon: Gear,
     subs: [
-      { id: 'ai', label: 'AI 协议配置' },
-      { id: 'voice', label: '语音识别配置' },
+      { id: 'ai', label: 'LLM模型配置' },
+      { id: 'voice', label: '语音模型配置' },
+      { id: 'imagegen', label: '生图模型配置' },
       { id: 'identity', label: '机器人身份' },
       { id: 'data', label: '数据路径' },
       { id: 'sandbox', label: '提示词沙箱' },

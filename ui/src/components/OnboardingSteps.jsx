@@ -661,7 +661,7 @@ export function Step3AIConfig({ data, updateData, onDone }) {
     <div>
       <div className="flex items-center gap-2 mb-6">
         <div className="w-1.5 h-4.5 rounded-full bg-[#3772cf]" />
-        <h3 className="text-base font-semibold tracking-tight text-text-main">AI 协议配置</h3>
+        <h3 className="text-base font-semibold tracking-tight text-text-main">LLM模型配置</h3>
       </div>
 
       <div className="space-y-6 mt-4">

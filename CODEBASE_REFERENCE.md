@@ -73,6 +73,7 @@ grep "文件名" CODEBASE_REFERENCE.md
    - [功能I: 语音识别](#功能i-语音识别)
    - [功能J: 聊天记忆](#功能j-聊天记忆)
    - [功能K: macOS适配](#功能k-macos适配)
+   - [功能L: 文生图](#功能l-文生图)
 5. [配置文件和环境变量](#5-配置文件和环境变量)
 
 ---
@@ -136,6 +137,12 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `VOICE_OPENAI_BASE_URL` | `str` | `""` | `src/config.py` | `src/voice/asr.py:OpenAiWhisperASR.__init__()` |
 | `VOICE_LOCAL_MODEL` | `str` | `"small"` | `src/config.py` | `src/voice/asr.py:LocalWhisperASR.__init__()` |
 | `VOICE_ASR_TO_SIMPLIFIED` | `bool` | `True` | `src/config.py` | `src/voice/asr.py` (各ASR后端) |
+| `IMAGE_GEN_ENABLED` | `bool` | `False` | `src/config.py` | `src/router.py:handle()` (生图分支), `src/imagegen/generator.py:create_image_generator()` |
+| `IMAGE_GEN_API_KEY` | `str` | `""` (本地兼容服务可空) | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
+| `IMAGE_GEN_BASE_URL` | `str` | `""` | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
+| `IMAGE_GEN_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
+| `IMAGE_GEN_SIZE` | `str` | `""` (留空由模型默认) | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.generate()` |
+| `IMAGE_GEN_KEYWORDS` | `list[str]` | 见下方默认值 | `src/config.py` | `src/router.py:_handle_image_gen()` → `src/imagegen/intent.py` |
 | `FEISHU_EXPORT_ENABLED` | `bool` | `False` | `src/config.py` | `src/integrations/feishu/exporter.py` |
 | `FEISHU_APP_ID` | `str` | `""` | `src/config.py` | `src/integrations/feishu/client.py:FeishuClient.__init__()` |
 | `FEISHU_APP_SECRET` | `str` | `""` | `src/config.py` | `src/integrations/feishu/client.py` |
@@ -182,6 +189,10 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `_FIRST_RUN_ENV_DEFAULTS` | `dict[str, str]` | 见代码 | `src/web/server.py` | 重置为首次运行时需要从进程环境清除的 webot 配置键集合 |
 | `_CACHE_MAX_ENTRIES` | `int` | `10000` | `src/voice/pipeline.py` | 语音缓存最大条目 |
 | `_CACHE_TTL_SEC` | `int` | `604800` (7天) | `src/voice/pipeline.py` | 语音缓存过期时间 |
+| `GENERATE_TIMEOUT_SEC` | `int` | `180` | `src/imagegen/generator.py` | 生图 API 请求超时 |
+| `DOWNLOAD_TIMEOUT_SEC` | `int` | `120` | `src/imagegen/generator.py` | 外链图片下载超时 |
+| `MAX_IMAGE_BYTES` | `int` | `20MB` | `src/imagegen/generator.py` | 单张生成图片最大体积 |
+| `IMAGE_PASTE_SEND_DELAY` | `float` | `0.5` | `src/wechat/window_controller.py` | 图片粘贴后等待微信生成预览的延时(秒) |
 
 ### 1.3 触发关键词默认值
 
@@ -208,6 +219,11 @@ todo_complete_keywords: list[str] = [
 
 todo_delete_keywords: list[str] = [
     "删掉", "删除", "取消", "不要了",
+]
+
+image_gen_keywords: list[str] = [
+    "画一张", "画一个", "画一幅", "画一只", "画个", "帮我画",
+    "生成一张", "生成一幅", "生成图片", "生图", "来一张图", "画出来",
 ]
 ```
 
@@ -256,12 +272,13 @@ todo_delete_keywords: list[str] = [
 |---|---|---|---|---|
 | `MessageRouter.__init__()` | ~45 | 初始化消息路由器 | `store, detector, summarizer, admin_handler, nickname_service, config, feishu_export_service=None` | `None` |
 | `MessageRouter._strip_markdown(text)` | ~65 | 去除 Markdown 格式(静态方法) | `text: str` | `str` |
-| `MessageRouter.handle(msg)` | ~70 | 处理传入群聊消息的主入口 | `msg: dict` | `str \| None` (回复文本) |
+| `MessageRouter.handle(msg)` | ~70 | 处理传入群聊消息的主入口；返回 `ImageReply` 时由后端走图片发送通道 | `msg: dict` | `str \| ImageReply \| None` (回复文本或图片) |
 | `MessageRouter._load_group_names()` | ~115 | 加载 chat_id → 群名映射(懒加载) | 无 | `dict[str, str]` |
 | `MessageRouter._is_todo_group(chat_id)` | ~125 | 判断群聊是否启用待办功能 | `chat_id: str` | `bool` |
 | `MessageRouter._get_group_memory(chat_id)` | ~140 | 获取群聊记忆文本 | `chat_id: str` | `str` |
 | `MessageRouter._handle_summary(msg)` | ~145 | 生成聊天总结 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_chat(msg, clean_content)` | ~230 | 处理 @bot AI 对话 | `msg: dict, clean_content: str` | `str \| None` |
+| `MessageRouter._handle_image_gen(msg, clean_content)` | — | 处理 @bot 生图请求：提取提示词 → 调用 Images API → 返回 `ImageReply`，失败回文本错误 | `msg: dict, clean_content: str` | `ImageReply \| str` |
 | `MessageRouter._handle_welcome(msg)` | ~280 | 发送新成员欢迎消息 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_proactive_chat(msg, mode)` | ~305 | 处理主动发言 | `msg: dict, mode: ProactiveMode` | `str \| None` |
 
@@ -350,11 +367,12 @@ todo_delete_keywords: list[str] = [
 | `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期 | `callback: MessageCallback` | `None` |
 | `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；用 `_raw_message_key()` 去重、自发内容按群排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback` | `None` |
-| `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池) | `group_name, talker, standardized, callback` | `None` |
+| `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池)；回复为 `ImageReply` 时走 `_send_image_and_confirm()` 图片通道 | `group_name, talker, standardized, callback` | `None` |
 | `_stable_id_text(value)` | 过滤 WCDB 空值/`0` 占位 ID，避免把所有 `server_id=0` 消息视为同一条 | `value` | `str` |
 | `_raw_message_key(msg, talker)` | 生成轮询去重和消息 ID 使用的稳定群内原始键；优先非零 server/local ID，否则用发送人+内容+时间+类型 | `msg: dict, talker: str` | `str` |
 | `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；图片/表情/文件转干净摘要占位；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
 | `_send_and_confirm(group_name, talker, content)` | 通过键盘发送；成功后按 `(talker, content, timestamp)` 写入 `_recent_sends` 供同群自发自排除 | `group_name, talker, content` | `bool` |
+| `_send_image_and_confirm(group_name, talker, image_path)` | 通过剪贴板粘贴发送生成图片；成功后按 `(talker, "[图片]", timestamp)` 写入 `_recent_sends` 防自触发 | `group_name, talker, image_path` | `bool` |
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
 | `_try_voice(msg)` | 尝试语音识别 | `msg: dict` | `str \| None` |
 
@@ -399,7 +417,11 @@ todo_delete_keywords: list[str] = [
 | `activate(hwnd)` | 激活微信窗口(4层策略) | `hwnd: int` | `bool` |
 | `navigate_to_chat(hwnd, group_name)` | 键盘导航到指定群聊 | `hwnd: int, group_name: str` | `bool` |
 | `send_message(hwnd, text)` | 键盘发送消息(Ctrl+V→Enter) | `hwnd: int, text: str` | `bool` |
-| `send_to_chat(group_name, text, max_retries=2)` | 完整发送管道(主入口) | `group_name: str, text: str, max_retries: int` | `bool` |
+| `send_image_message(hwnd, image_path)` | 键盘发送图片：剪贴板写入 CF_DIB → Ctrl+V 粘贴 → 等待预览生成 → Enter 发送 | `hwnd: int, image_path: Path` | `bool` |
+| `_set_clipboard_image(image_path)` | 将图片以 CF_DIB 格式写入剪贴板(PIL 转 BMP 后去掉 14 字节文件头)，失败重试 3 次 | `image_path: Path` | `bool` |
+| `send_to_chat(group_name, text, max_retries=2)` | 完整文本发送管道(主入口) | `group_name: str, text: str, max_retries: int` | `bool` |
+| `send_image_to_chat(group_name, image_path, max_retries=2)` | 完整图片发送管道：find → activate → navigate → 粘贴发送 | `group_name: str, image_path, max_retries: int` | `bool` |
+| `_run_send_pipeline(group_name, describe, payload, send_fn, max_retries)` | 文本/图片共用的发送管道；`describe` 用于成功/失败日志，失败详情日志记录实际 `payload` | `group_name, describe: str, payload, send_fn, max_retries` | `bool` |
 | `_score_window(hwnd)` | 给窗口打分(模块级)；最小化窗口用 `GetWindowPlacement` 正常位置矩形代替 -16000 占位 | `hwnd: int` | `WindowCandidate` |
 | `_get_process_name(pid)` | 获取进程名(模块级) | `pid: int` | `str` |
 | `get_foreground_info()` | 获取前台窗口诊断信息 | 无 | `str` |
@@ -644,7 +666,7 @@ todo_delete_keywords: list[str] = [
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `normalize_ai_backend(raw)` | 将 `chat-completions` / openai / new-api / one-api / litellm / openrouter 等别名归一化为 `openai_compatible`，将 `messages` / anthropic 等别名归一化为 `claude` | `raw: str` | `str` |
-| `normalize_openai_base_url(raw, default)` | 规范化 Chat Completions 兼容 Base URL，自动补协议并剥离 `/chat/completions` / `/responses` / `/models` 端点后缀 | `raw: str, default: str` | `str` |
+| `normalize_openai_base_url(raw, default)` | 规范化 Chat Completions 兼容 Base URL，自动补协议并剥离 `/chat/completions` / `/images/generations` / `/responses` / `/models` 端点后缀 | `raw: str, default: str` | `str` |
 | `openai_api_key_for_client(raw)` | 为 OpenAI SDK 返回可用 key；空值转为本地兼容服务占位 key | `raw: str` | `str` |
 
 ### 2.34 `src/utils/logging_config.py`
@@ -673,6 +695,9 @@ todo_delete_keywords: list[str] = [
 | `_find_or_create_env()` | 查找或创建 .env 文件 | 无 | `Path` |
 | `_ai_config_from_raw(raw)` | 从 `.env` 键值生成 UI AI 协议配置；legacy `deepseek` 映射为 Chat Completions | `raw: dict[str, str]` | `dict` |
 | `_ai_updates_from_config(config)` | 从 UI payload 生成 AI 相关 `.env` 更新；缺失字段返回 `None` 以保留现值 | `config: dict` | `dict[str, str \| None]` |
+| `_secret_update(new_value, old_value)` | 密钥字段安全更新；回传值含 `***`（掩码）时保留原密钥，避免掩码覆盖真实值 | `new_value, old_value: str` | `str \| None` |
+| `_image_gen_config_from_raw(raw)` | 从 `.env` 键值生成 UI 生图配置；API Key 经 `_mask_key()` 掩码返回 | `raw: dict[str, str]` | `dict` |
+| `_image_gen_updates_from_config(config, old_raw)` | 从 UI payload 生成生图相关 `.env` 更新；密钥经 `_secret_update()` 保护，base_url 经 `normalize_openai_base_url()` 归一化 | `config: dict, old_raw: dict[str, str]` | `dict[str, str \| None]` |
 | `_normalize_anthropic_base_url(raw)` | 规范化 Messages 协议 Base URL，剥离 `/v1/messages` / `/v1/models` | `raw: str` | `str` |
 | `_extract_model_items(payload)` | 从常见模型列表响应中提取、去重并排序模型项 | `payload: dict \| list` | `list[dict[str, str]]` |
 | `_request_json(url, headers)` | 发起 JSON GET 请求 | `url: str, headers: dict[str, str]` | `dict \| list` |
@@ -712,15 +737,32 @@ todo_delete_keywords: list[str] = [
 | 文件 | 组件名 | 描述 |
 |---|---|---|
 | `Onboarding.jsx` | `Onboarding` | 4步引导流程主容器(侧边栏+步骤内容)，启动时从 `/api/onboarding/status` 回填草稿和步骤状态 |
-| `OnboardingSteps.jsx` | `Step3AIConfig` | AI 协议配置步骤；按请求地址和 Key 动态获取模型列表 |
+| `OnboardingSteps.jsx` | `Step3AIConfig` | LLM模型配置步骤；按请求地址和 Key 动态获取模型列表 |
 | `Dashboard.jsx` | `Dashboard` | 主仪表板(指标卡片+系统状态+控制栏+数据重置入口；重置成功后回到首次启动引导) |
 | `Dashboard.jsx` | `MetricCard` | 指标卡片组件(图标/标签/数值/副标题/迷你SVG图表) |
 | `Dashboard.jsx` | `LiveIndicator` | 实时状态指示灯(脉冲动画) |
 | `Dashboard.jsx` | `KeyExtractionBanner` | 内联密钥提取横幅(单文件内组件) |
 | `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮/清空日志文件) |
-| `ConfigPanel.jsx` | `AiSection` | 系统配置里的 AI 协议配置；支持模型获取和选择 |
+| `ConfigPanel.jsx` | `AiSection` | 系统配置里的 LLM模型配置；支持模型获取和选择 |
+| `ConfigPanel.jsx` | `VoiceSection` | 系统配置里的语音模型配置；本地/云端识别后端切换与模型下载 |
+| `ConfigPanel.jsx` | `ImageGenSection` | 系统配置里的生图模型配置；总开关 + 协议/密钥/地址 + 获取模型 + 生图模型/尺寸选择，复用 `/api/ai/models` 获取模型列表 |
 | `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 webot 数据目录与微信数据目录配置；webot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
+
+### 2.37 `src/imagegen/` (文生图)
+
+| 函数 | 所在文件 | 描述 | 参数 | 返回值 |
+|---|---|---|---|---|
+| `ImageReply` | `reply.py` | 路由返回的图片回复数据类 | `image_path: str, caption: str = ""` | dataclass |
+| `match_image_gen_keyword(text, keywords)` | `intent.py` | 返回命中的第一个生图关键词(长词优先)；未命中返回空串 | `text: str, keywords: list[str]` | `str` |
+| `is_image_gen_intent(text, keywords)` | `intent.py` | 判断文本是否带生图意图 | `text: str, keywords: list[str]` | `bool` |
+| `extract_image_prompt(text, keywords)` | `intent.py` | 提取生图提示词：移除首次命中的关键词，仅清理首尾标点空白；结果为空时回退完整文本 | `text: str, keywords: list[str]` | `str` |
+| `ImageGenerator.__init__(api_key, base_url, model, size, timeout)` | `generator.py` | 初始化生图客户端；`model` 为空时抛 `ValueError`，base_url 经归一化 | API配置 | `None` |
+| `ImageGenerator.generate(prompt)` | `generator.py` | 调用 `/images/generations` 生成图片并落盘到 `<WEBOT_DATA_DIR>/images/` | `prompt: str` | `Path` |
+| `ImageGenerator._extract_image_bytes(body)` | `generator.py` | 从响应提取图片二进制；兼容 `b64_json` 内联与 `url` 外链 | `body: dict` | `bytes` |
+| `ImageGenerator._download(image_url)` | `generator.py` | 下载外链图片，限 20MB(静态) | `image_url: str` | `bytes` |
+| `ImageGenerator._save_image(image_bytes)` | `generator.py` | 按魔数推断扩展名(png/jpg/webp)写入 images 目录(静态) | `image_bytes: bytes` | `Path` |
+| `create_image_generator(config)` | `generator.py` | 工厂：未启用或缺 model/base_url 时返回 `None` | `config: BotConfig` | `ImageGenerator \| None` |
 
 ---
 
@@ -800,7 +842,8 @@ Bot.run()
   │     ├── StickyMentionTracker()       [src/proactive/sticky.py]
   │     ├── MemoryConsolidator()         [src/memory/consolidator.py]
   │     ├── TodoStore()                  [src/todo/store.py]
-  │     └── TodoHandler()                [src/todo/handler.py]
+  │     ├── TodoHandler()                [src/todo/handler.py]
+  │     └── create_image_generator()     [src/imagegen/generator.py]
   ├── HealthMonitor()                    [src/bot.py]
   └── WcdbBackend / MacUIBackend / MacHybridBackend  [src/wechat/]
 ```
@@ -1699,6 +1742,59 @@ MacHybridBackend
 - excludes 排除 Windows 专用模块 (`uiautomation`, `win32api`, `comtypes` 等)
 - 权限声明: `NSAppleEventsUsageDescription` + `NSScreenCaptureUsageDescription`
 
+### 功能L: 文生图
+
+@机器人 且消息带生图意图时，调用 OpenAI 兼容 Images API 生成图片，通过剪贴板粘贴发送到群聊。
+
+#### 触发条件（两者同时满足）
+
+1. 消息 @机器人（含粘性提及）
+2. 消息文本命中任一生图关键词（`IMAGE_GEN_KEYWORDS`，长词优先匹配）
+
+关键词之后的内容作为生图提示词，例如“@机器人 画一张赛博朋克风格的猫” → 提示词“赛博朋克风格的猫”。
+
+#### 调用链
+
+```
+WcdbBackend._poll_group() → _handle_message() [线程池]
+  └── router.handle(msg)                                   [src/router.py]
+        ├── @mention 路径: todo → 生图分支 → 总结/聊天
+        ├── is_image_gen_intent(clean_content, keywords)   [src/imagegen/intent.py]
+        └── _handle_image_gen(msg, clean_content)
+              ├── extract_image_prompt()                   [src/imagegen/intent.py]
+              ├── ImageGenerator.generate(prompt)          [src/imagegen/generator.py]
+              │     ├── POST {base}/images/generations (urllib, 180s 超时)
+              │     ├── _extract_image_bytes() — b64_json 内联 / url 外链下载(限 20MB)
+              │     └── _save_image() → <WEBOT_DATA_DIR>/images/imggen_<ts>_<rand>.<ext>
+              └── 返回 ImageReply(image_path) / 失败回文本错误
+WcdbBackend._handle_message()
+  └── isinstance(reply, ImageReply)
+        └── _send_image_and_confirm(group_name, talker, image_path)
+              ├── WeChatWindowController.send_image_to_chat()  [src/wechat/window_controller.py]
+              │     └── _run_send_pipeline(send_fn=send_image_message)
+              │           ├── find → activate → 空白窗口检查 → navigate_to_chat
+              │           ├── _set_clipboard_image() — PIL 转 BMP → 去 14 字节文件头 → CF_DIB 剪贴板
+              │           ├── Ctrl+V 粘贴 → 等待 IMAGE_PASTE_SEND_DELAY(0.5s) 预览生成 → Enter 发送
+              └── 成功后 _recent_sends 记入 (talker, "[图片]", ts) 防自触发
+```
+
+#### 配置项
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `IMAGE_GEN_ENABLED` | `false` | 总开关 |
+| `IMAGE_GEN_API_KEY` | 空 | Images API 密钥；UI 读取时掩码，保存时掩码回传不覆盖原值 |
+| `IMAGE_GEN_BASE_URL` | 空 | API 地址；保存时自动剥离 `/images/generations` `/models` 等后缀 |
+| `IMAGE_GEN_MODEL` | 空 | 生图模型 ID；UI 复用 `POST /api/ai/models` 获取列表 |
+| `IMAGE_GEN_SIZE` | 空 | 可选尺寸（如 1024x1024）；留空不传 size 参数 |
+| `IMAGE_GEN_KEYWORDS` | 见 §1.3 | 生图意图关键词，逗号分隔 |
+
+#### 注意事项
+
+- 未启用或缺 `IMAGE_GEN_MODEL` / `IMAGE_GEN_BASE_URL` 时，`create_image_generator()` 返回 `None`，生图分支自动跳过并回退普通 AI 对话
+- 生图失败（网络/服务端错误）时回文本提示，不阻断其他路由分支
+- 仅 Windows WCDB 后端支持图片发送；macOS 后端不在本功能范围内
+
 ---
 
 ## 5. 配置文件和环境变量
@@ -1785,6 +1881,14 @@ VOICE_ASR_BACKEND=local_whisper
 VOICE_ASR_LANGUAGE=zh
 VOICE_LOCAL_MODEL=small
 VOICE_ASR_TO_SIMPLIFIED=true
+
+# === 文生图 ===
+IMAGE_GEN_ENABLED=false                        # 总开关：@机器人 + 生图意图关键词时触发
+IMAGE_GEN_API_KEY=                             # Images API 密钥；本地无鉴权服务可空
+IMAGE_GEN_BASE_URL=                            # API 地址；可填 .../v1 或完整 .../v1/images/generations
+IMAGE_GEN_MODEL=                               # 通过 UI 生图模型配置获取模型后选择
+IMAGE_GEN_SIZE=                                # 可选尺寸(如 1024x1024)；留空由模型默认
+IMAGE_GEN_KEYWORDS=画一张,画一个,画一幅,画一只,画个,帮我画,生成一张,生成一幅,生成图片,生图,来一张图,画出来
 
 # === 飞书导出 ===
 FEISHU_EXPORT_ENABLED=false

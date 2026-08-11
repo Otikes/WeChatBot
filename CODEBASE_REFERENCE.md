@@ -327,7 +327,17 @@ todo_delete_keywords: list[str] = [
 | `send_text(chat_id, content)` | 发送文本消息 | `chat_id: str, content: str` | `bool` |
 | `stop()` | 停止监听 | 无 | `None` |
 | `_reinitialize()` | 关闭并重开 WCDB(故障恢复) | 无 | `None` |
-| `_resolve_groups()` | 解析群组名称到 talker ID | 无 | `None` |
+| `_record_text(record, *keys)` | 从 WCDB JSON 记录中取第一个非空文本字段 | `record: dict, *keys: str` | `str` |
+| `_record_username(record)` | 兼容多种字段名提取 chat/contact username | `record: dict` | `str` |
+| `_record_display_name(record, username)` | 从 session/contact 记录提取群显示名 | `record: dict, username: str` | `str` |
+| `_records_from_payload(payload, *list_keys)` | 将 list/dict WCDB payload 规整为记录列表 | `payload, *list_keys: str` | `list[dict]` |
+| `_safe_int(value, default=0)` | 安全解析缓存中的数字元数据 | `value, default: int = 0` | `int` |
+| `_merge_chatrooms(target, source)` | 合并群聊元数据，优先保留真实群名 | `target: dict, source: dict` | `int` |
+| `_chatrooms_from_records(records)` | 从 session/contact 记录收集 `@chatroom` 群聊元数据 | `records` | `dict[str, dict]` |
+| `_chatrooms_from_contacts()` | 从联系人列表加载群聊，作为 session 缺失时的兜底 | 无 | `dict[str, dict]` |
+| `_load_cached_group_names()` | 读取 `data/group_names.json` 中的持久化群名映射 | 无 | `dict[str, dict]` |
+| `_add_configured_chatroom_ids(chatrooms)` | 接受 `WECHAT_GROUPS` 中直接配置的 `@chatroom` ID | `chatrooms: dict` | `int` |
+| `_resolve_groups()` | 按 session → contacts → 缓存 → 直接 ID 解析群组名称到 talker ID | 无 | `None` |
 | `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
 | `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期 | `callback: MessageCallback` | `None` |
@@ -925,7 +935,10 @@ WcdbBackend.start(callback)
   │     └── _call_json() → DLL JSON 指针读取(捕获 access violation 并降级)
   │
   ├── _resolve_groups()
-  │     ├── get_sessions() → 获取所有 @chatroom 会话
+  │     ├── get_sessions() → 从最近会话收集 @chatroom
+  │     ├── get_contacts() → session 无群/缺群时从联系人收集 @chatroom
+  │     ├── _load_cached_group_names() → 读取 data/group_names.json 兜底
+  │     ├── _add_configured_chatroom_ids() → 接受 WECHAT_GROUPS 中的直接 @chatroom ID
   │     ├── get_group_members() → 解析群成员
   │     ├── get_display_names() → 批量解析昵称
   │     └── _save_group_names() → 持久化到 data/group_names.json

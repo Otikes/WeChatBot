@@ -221,39 +221,119 @@ class WcdbBackend(AbstractWeChatBackend):
 
     # ── Group resolution ────────────────────────────────────────────
 
-    def _resolve_groups(self) -> None:
-        """Map configured group names to talker IDs from WCDB sessions.
+    @staticmethod
+    def _record_text(record: dict, *keys: str) -> str:
+        """Return the first non-empty text field from a WCDB record."""
+        for key in keys:
+            value = record.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return ""
 
-        WCDB session records only contain usernames (e.g. 20968749111@chatroom).
-        Display names must be resolved via the DLL's get_display_names() or
-        the local nickname cache (WeChat contacts / manual overrides).
-        """
-        sessions = self._client.get_sessions()
+    @classmethod
+    def _record_username(cls, record: dict) -> str:
+        """Extract a chat/contact username from varied WCDB JSON shapes."""
+        return cls._record_text(
+            record,
+            "username",
+            "userName",
+            "UserName",
+            "user_name",
+            "name",
+        )
 
-        # Build a map of all @chatroom entries: username -> {name, member_count}
-        all_chatrooms: dict[str, dict] = {}
-        for s in sessions:
-            username = str(s.get("username", "") or "")
+    @classmethod
+    def _record_display_name(cls, record: dict, username: str) -> str:
+        """Extract a human-readable chat title from a session/contact row."""
+        display = cls._record_text(
+            record,
+            "displayName",
+            "displayname",
+            "display_name",
+            "display",
+            "chat",
+            "nickname",
+            "nickName",
+            "nick_name",
+            "remark",
+            "Remark",
+            "conRemark",
+            "last_sender_display_name",
+            "lastSenderDisplayName",
+        )
+        return display if display and display != username else ""
+
+    @staticmethod
+    def _records_from_payload(payload, *list_keys: str) -> list[dict]:
+        """Normalize list/dict WCDB payloads to a list of dict records."""
+        if isinstance(payload, list):
+            records = payload
+        elif isinstance(payload, dict):
+            records = []
+            for key in list_keys:
+                value = payload.get(key)
+                if isinstance(value, list):
+                    records = value
+                    break
+        else:
+            records = []
+        return [item for item in records if isinstance(item, dict)]
+
+    @staticmethod
+    def _safe_int(value, default: int = 0) -> int:
+        """Convert cached numeric metadata without trusting file contents."""
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _merge_chatrooms(target: dict[str, dict], source: dict[str, dict]) -> int:
+        """Merge chatroom metadata, preferring real names over raw IDs."""
+        added = 0
+        for username, info in source.items():
+            if not username.endswith("@chatroom"):
+                continue
+            current = target.get(username)
+            if current is None:
+                target[username] = {
+                    "name": str(info.get("name") or username).strip() or username,
+                    "member_count": WcdbBackend._safe_int(info.get("member_count")),
+                }
+                added += 1
+                continue
+
+            new_name = str(info.get("name") or "").strip()
+            if new_name and current.get("name") in ("", username):
+                current["name"] = new_name
+            current["member_count"] = max(
+                WcdbBackend._safe_int(current.get("member_count")),
+                WcdbBackend._safe_int(info.get("member_count")),
+            )
+        return added
+
+    def _chatrooms_from_records(self, records) -> dict[str, dict]:
+        """Build chatroom metadata from session/contact records."""
+        chatrooms: dict[str, dict] = {}
+        for record in self._records_from_payload(
+            records, "sessions", "contacts", "chatrooms", "data",
+        ):
+            username = self._record_username(record)
             if not username.endswith("@chatroom"):
                 continue
 
-            # Try session-level display name fields (rarely populated)
-            display = str(
-                s.get("displayName") or s.get("displayname")
-                or s.get("nickname") or s.get("display_name")
-                or ""
-            ).strip()
+            display = self._record_display_name(record, username)
             if not display:
-                # Fall back to DLL lookup (resolves via contacts DB + nicknames)
-                display = self._client.resolve_nickname(username)
+                try:
+                    display = self._client.resolve_nickname(username)
+                except Exception:
+                    display = ""
             if not display or display == username:
-                # Last resort: try last_sender_display_name from session,
-                # or use the numeric prefix of username as label
-                display = str(s.get("last_sender_display_name", "") or "").strip()
-                if not display or display == username:
-                    display = username  # fallback
+                display = username
 
-            # Get real member count from group member list
             member_count = 0
             try:
                 members = self._client.get_group_members(username)
@@ -262,15 +342,124 @@ class WcdbBackend(AbstractWeChatBackend):
             except Exception:
                 pass
 
-            all_chatrooms[username] = {
+            chatrooms[username] = {
                 "name": display,
                 "member_count": member_count,
             }
+        return chatrooms
+
+    def _chatrooms_from_contacts(self) -> dict[str, dict]:
+        """Load group chats from contact records as a fallback to sessions."""
+        get_contacts = getattr(self._client, "get_contacts", None)
+        if not callable(get_contacts):
+            return {}
+        try:
+            return self._chatrooms_from_records(get_contacts())
+        except Exception as exc:
+            logger.warning("Failed to load chatrooms from contacts: %s", exc)
+            return {}
+
+    @staticmethod
+    def _load_cached_group_names() -> dict[str, dict]:
+        """Load persisted chatroom metadata from data/group_names.json."""
+        path = Path("data/group_names.json")
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to load cached group names from %s: %s", path, exc)
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+
+        chatrooms: dict[str, dict] = {}
+        for username, info in raw.items():
+            username = str(username or "").strip()
+            if not username.endswith("@chatroom"):
+                continue
+            if isinstance(info, dict):
+                display = str(info.get("name") or info.get("display") or username).strip()
+                member_count = WcdbBackend._safe_int(info.get("member_count"))
+            else:
+                display = str(info or username).strip()
+                member_count = 0
+            chatrooms[username] = {
+                "name": display or username,
+                "member_count": member_count,
+            }
+        if chatrooms:
+            logger.info("Loaded %d cached group-name mappings from %s", len(chatrooms), path)
+        return chatrooms
+
+    def _add_configured_chatroom_ids(self, chatrooms: dict[str, dict]) -> int:
+        """Accept explicit WECHAT_GROUPS entries like 123456@chatroom."""
+        added = 0
+        for group_name in self._groups:
+            username = str(group_name or "").strip()
+            if not username.endswith("@chatroom") or username in chatrooms:
+                continue
+            try:
+                display = self._client.resolve_nickname(username)
+            except Exception:
+                display = ""
+            if not display or display == username:
+                display = username
+            chatrooms[username] = {
+                "name": display,
+                "member_count": 0,
+            }
+            added += 1
+        return added
+
+    def _resolve_groups(self) -> None:
+        """Map configured group names to talker IDs from WCDB data.
+
+        Session rows only contain recent chats, so groups may be absent when
+        they are not pinned/recent.  Fall back to contacts, persisted group
+        names, and explicit @chatroom IDs before treating resolution as failed.
+        """
+        self._talker_ids.clear()
+        sessions = self._client.get_sessions()
+
+        # Build a map of all known @chatroom entries:
+        # username -> {name, member_count}.
+        all_chatrooms = self._chatrooms_from_records(sessions)
+        if all_chatrooms:
+            logger.info("Found %d group chats in WCDB sessions", len(all_chatrooms))
+        else:
+            logger.warning(
+                "No @chatroom sessions found in WCDB (total sessions: %d); "
+                "trying contacts and cached group mappings.",
+                len(sessions),
+            )
+
+        contact_chatrooms = self._chatrooms_from_contacts()
+        if contact_chatrooms:
+            added = self._merge_chatrooms(all_chatrooms, contact_chatrooms)
+            logger.info(
+                "Loaded %d group chats from contacts (%d new)",
+                len(contact_chatrooms), added,
+            )
+
+        cached_chatrooms = self._load_cached_group_names()
+        if cached_chatrooms:
+            added = self._merge_chatrooms(all_chatrooms, cached_chatrooms)
+            logger.info(
+                "Loaded %d group chats from cache (%d new)",
+                len(cached_chatrooms), added,
+            )
+
+        direct_count = self._add_configured_chatroom_ids(all_chatrooms)
+        if direct_count:
+            logger.info("Accepted %d configured direct @chatroom IDs", direct_count)
 
         if not all_chatrooms:
             logger.error(
-                "No @chatroom sessions found in WCDB (total sessions: %d). "
-                "Make sure WeChat is logged in and session.db is accessible.",
+                "No @chatroom groups found in WCDB sessions, contacts, cache, "
+                "or WECHAT_GROUPS direct IDs (total sessions: %d). Open the "
+                "target group once or set WECHAT_GROUPS to a known "
+                "123456@chatroom ID.",
                 len(sessions),
             )
             return
@@ -293,24 +482,32 @@ class WcdbBackend(AbstractWeChatBackend):
             # Manual mode: match configured names against resolved display names
             for group_name in self._groups:
                 found = None
-                for username, info in all_chatrooms.items():
-                    display = info["name"]
-                    if group_name.lower() in display.lower() or display.lower() in group_name.lower():
-                        found = username
-                        break
+                # Direct lookup: maybe group_name IS a username like 20968749111@chatroom
+                if group_name in all_chatrooms:
+                    found = group_name
+                if not found:
+                    for username, info in all_chatrooms.items():
+                        display = info["name"]
+                        if group_name.lower() == display.lower():
+                            found = username
+                            break
+                if not found:
+                    for username, info in all_chatrooms.items():
+                        display = info["name"]
+                        if group_name.lower() in display.lower() or display.lower() in group_name.lower():
+                            found = username
+                            break
                 if found:
                     self._talker_ids[group_name] = found
                     logger.info("Resolved '%s' -> %s (display='%s')", group_name, found, all_chatrooms[found]["name"])
                 else:
-                    # Direct lookup: maybe group_name IS a username like 20968749111@chatroom
-                    if group_name in all_chatrooms:
-                        self._talker_ids[group_name] = group_name
-                        logger.info("Resolved '%s' as direct username", group_name)
-                    else:
-                        logger.warning(
-                            "Could not resolve group '%s'. Available: %s",
-                            group_name, list(all_chatrooms.keys()),
-                        )
+                    logger.warning(
+                        "Could not resolve group '%s'. Available: %s",
+                        group_name, [
+                            f"{info['name']} ({username})"
+                            for username, info in all_chatrooms.items()
+                        ],
+                    )
 
         # Persist chat_id -> display_name so the web UI can show
         # human-readable group names in the nickname dropdown.

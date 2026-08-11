@@ -97,7 +97,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `OPENAI_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
-| `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
+| `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
 | `BOT_DISPLAY_NAME` | `str` | `"群聊小助手"` | `src/config.py` (经 `_sanitize_display_name` 清洗) | `src/router.py:handle()` (多处), `src/bot.py:_log_banner()` |
 | `ADMIN_WXID` | `str` | `""` | `src/config.py` | `src/router.py:handle()` (管理员命令判断) |
 | `TRIGGER_KEYWORDS` | `list[str]` | 见下方默认值 | `src/config.py` | `src/trigger/detector.py:TriggerDetector.__init__()` |
@@ -338,13 +338,29 @@ todo_delete_keywords: list[str] = [
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
 | `_try_voice(msg)` | 尝试语音识别 | `msg: dict` | `str \| None` |
 
+### 2.8.1 `src/wechat/data_dir.py`
+
+| 函数 | 描述 | 参数 | 返回值 |
+|---|---|---|---|
+| `_extract_paths_from_command_line(command_line)` | 从微信子进程命令行提取 `--wechat-files-path` | `command_line: str` | `list[str]` |
+| `_extract_paths_from_args(args)` | 从进程 argv 提取 `--wechat-files-path` | `args: Sequence[str]` | `list[str]` |
+| `_wechat_files_paths_from_processes()` | 通过 `psutil` 扫描运行中的 WeChat/Weixin 进程，提取微信 4.x 数据目录 | 无 | `list[str]` |
+| `_default_candidate_dirs()` | 返回 Documents/AppData/OneDrive 下的常见微信数据根目录候选 | 无 | `list[Path]` |
+| `normalize_wechat_data_dir(path)` | 将用户输入/进程参数规范化为包含 `wxid_*` 的父目录 | `path: str \| Path` | `Path \| None` |
+| `list_accounts_in_data_dir(path)` | 列出指定数据目录下带 `session.db` 的微信账号 | `path: str \| Path` | `list[WeChatAccountPath]` |
+| `find_wxid_and_dbpath(custom_base_dir)` | 按自定义路径、微信进程参数、默认目录顺序检测账号和数据根目录 | `custom_base_dir: str = ""` | `tuple[str, str]` |
+| `detect_default_data_dir()` | 返回自动检测到的微信数据根目录，失败返回空字符串 | 无 | `str` |
+
 ### 2.9 `src/wechat/wcdb_client.py` (WcdbNativeClient)
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
 | `__init__(dll_dir)` | 初始化 WCDB 客户端 | `dll_dir: str` | `None` |
+| `_find_wxid_and_dbpath(custom_base_dir)` | 兼容包装，委托 `src/wechat/data_dir.py:find_wxid_and_dbpath()` 自动检测微信数据目录 | `custom_base_dir: str = ""` | `tuple[str, str]` |
 | `init()` | 初始化 wcdb_api.dll | 无 | `bool` |
 | `open()` | 打开加密数据库 | 无 | `bool` |
+| `_call_json(func, *args)` | 调用返回 JSON 字符串指针的 DLL 函数；捕获 ctypes access violation 并返回空结果 | `func, *args` | `dict \| list \| None` |
+| `_load_nickname_cache()` | 预加载会话/联系人昵称缓存；失败时仅降级，不阻断启动 | 无 | `None` |
 | `close()` | 关闭数据库连接 | 无 | `None` |
 | `get_sessions()` | 获取所有会话列表 | 无 | `list[dict]` |
 | `get_messages(talker, limit)` | 获取指定 talker 的消息 | `talker: str, limit: int` | `list[dict]` |
@@ -620,9 +636,9 @@ todo_delete_keywords: list[str] = [
 | `_extract_model_items(payload)` | 从常见模型列表响应中提取、去重并排序模型项 | `payload: dict \| list` | `list[dict[str, str]]` |
 | `_request_json(url, headers)` | 发起 JSON GET 请求 | `url: str, headers: dict[str, str]` | `dict \| list` |
 | `_fetch_ai_models(protocol, api_key, base_url)` | 按协议动态请求模型列表；Chat Completions 调 `/models`，Messages 调 `/v1/models` | `protocol: str, api_key: str, base_url: str` | `dict` |
-| `_detect_wxid_and_db_path()` | 自动检测微信 wxid 和数据库路径 | 无 | `tuple[str \| None, str \| None]` |
+| `_detect_wxid_and_db_path()` | 通过共享数据目录探测器检测微信 wxid 和 `session.db` 路径 | 无 | `tuple[str \| None, str \| None]` |
 | `_set_env_key(env_path, key, value)` | 原子设置 .env 键值 | `env_path: Path, key: str, value: str` | `None` |
-| `_detect_default_data_dir()` | 检测默认微信数据目录 | 无 | `str` |
+| `_detect_default_data_dir()` | 检测默认微信数据目录，包含微信 4.x 进程 `--wechat-files-path` | 无 | `str` |
 | `_platform_dependency_report(...)` | 平台依赖诊断 | 可选参数 | `dict` |
 | `_platform_wechat_report(...)` | 微信进程状态诊断 | 可选参数 | `dict` |
 | `_macos_wechat_diagnostics(...)` | macOS 微信权限诊断 | 可选参数 | `dict` |
@@ -642,6 +658,7 @@ todo_delete_keywords: list[str] = [
 | `Dashboard.jsx` | `KeyExtractionBanner` | 内联密钥提取横幅(单文件内组件) |
 | `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮) |
 | `ConfigPanel.jsx` | `AiSection` | 系统配置里的 AI 协议配置；支持模型获取和选择 |
+| `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的微信数据目录配置；支持浏览、检测和手输路径 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
 
 ---
@@ -750,6 +767,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/logs           → _read_recent_logs()
   ├── /api/status         → _status.snapshot()
   ├── /api/browse         → _list_dir_entries()
+  ├── /api/wechat-data-dir/detect → data_dir.list_accounts_in_data_dir()
   └── /ws                 → WebSocket 升级 → _status 广播
 ```
 
@@ -760,6 +778,7 @@ AbstractWeChatBackend (base.py)
     │
     ├── WcdbBackend (wcdb_backend.py) — Windows 原生
     │     ├── WcdbNativeClient (wcdb_client.py) — ctypes DLL 封装
+    │     ├── data_dir.py — 微信数据目录自动探测(WECHAT_DATA_DIR / 进程参数 / 默认目录)
     │     ├── WeChatWindowController (window_controller.py) — 键盘操控发送
     │     │     └── keyboard.py — keybd_event 底层模拟
     │     └── helpers.py — DedupSet / 消息类型映射
@@ -876,6 +895,7 @@ AbstractSummarizer (base.py)
 |---|---|---|
 | `wcdb_backend.py` | `src/wechat/wcdb_backend.py` | 后端主控, 消息轮询与标准化 |
 | `wcdb_client.py` | `src/wechat/wcdb_client.py` | 底层 DLL 封装, 加密数据库读写 |
+| `data_dir.py` | `src/wechat/data_dir.py` | 微信数据目录自动检测，支持自定义路径、微信 4.x 进程参数和常见目录 |
 | `extract_key.py` | `src/wechat/extract_key.py` | 密钥提取 (wx_key.dll Hook) |
 | `base.py` | `src/wechat/base.py` | 抽象基类 (接口定义) |
 | `helpers.py` | `src/wechat/helpers.py` | 去重集合 (DedupSet) |
@@ -889,7 +909,9 @@ WcdbBackend.start(callback)
   │     └── ctypes 加载 wcdb_api.dll
   │
   ├── WcdbNativeClient.open()
-  │     └── 应用 1-byte DRM patch + 打开 session.db
+  │     ├── data_dir.find_wxid_and_dbpath() → 检测 wxid_* 数据根目录
+  │     ├── 应用 1-byte DRM patch + 打开 session.db
+  │     └── _call_json() → DLL JSON 指针读取(捕获 access violation 并降级)
   │
   ├── _resolve_groups()
   │     ├── get_sessions() → 获取所有 @chatroom 会话
@@ -1582,7 +1604,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com     # 旧预设 API 地址
 # === 微信后端 ===
 WECHAT_BACKEND=wcdb                            # "wcdb" / "mac_hybrid" / "mac_ui"
 WECHAT_GROUPS=*                                # 群名(逗号分隔, URL编码, "*"=全部)
-WECHAT_DATA_DIR=                               # 微信数据目录(留空自动检测)
+WECHAT_DATA_DIR=                               # 微信数据目录(留空自动从微信进程参数/默认目录检测)
 
 # === 机器人身份 ===
 BOT_DISPLAY_NAME=群聊小助手                     # 机器人显示名

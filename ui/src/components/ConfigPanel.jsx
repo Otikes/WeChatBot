@@ -1023,7 +1023,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
             <input
               type="text"
               value={form.wechat_data_dir || ''}
-              onChange={v => { update('wechat_data_dir', v); setDetectResult(null) }}
+              onChange={e => { update('wechat_data_dir', e.target.value); setDetectResult(null) }}
               placeholder={detectedDataDir || '自动检测中...'}
               className="w-full bg-bg-raised border border-border-main rounded-full pl-5 pr-5 py-2.5 text-[14px] text-text-main
                          placeholder:text-text-muted/65 font-mono tabular-nums

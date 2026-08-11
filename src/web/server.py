@@ -99,23 +99,9 @@ def _detect_default_data_dir() -> str:
     Returns the base directory path string, or empty string if not found.
     Used by the UI to show what auto-detection would use.
     """
-    import os as _os
-    candidates = [
-        Path(_os.environ.get("USERPROFILE", "")) / "Documents" / "xwechat_files",
-        Path(_os.environ.get("USERPROFILE", "")) / "Documents" / "WeChat Files",
-    ]
-    for base in candidates:
-        if not base.exists():
-            continue
-        try:
-            wxid_dirs = [d for d in base.iterdir() if d.is_dir() and d.name.startswith("wxid_")]
-            for wxid_dir in wxid_dirs:
-                session_db = wxid_dir / "db_storage" / "session" / "session.db"
-                if session_db.exists():
-                    return str(base)
-        except PermissionError:
-            continue
-    return ""
+    from src.wechat.data_dir import detect_default_data_dir
+
+    return detect_default_data_dir()
 
 
 _DEFAULT_FEISHU_TRIGGER_KEYWORDS = "同步到飞书,导出到飞书,写到飞书,沉淀到飞书"
@@ -424,39 +410,17 @@ def _detect_wxid_and_db_path():
     Respects WECHAT_DATA_DIR env var as a custom base dir (scanned first).
     """
     import os as _os
+    from src.wechat.data_dir import find_wxid_and_dbpath
 
-    candidates: list[Path] = []
+    try:
+        wxid, base_dir = find_wxid_and_dbpath(_os.environ.get("WECHAT_DATA_DIR", "").strip())
+    except FileNotFoundError:
+        return None, None
 
-    # 1. Custom path from env (highest priority)
-    custom_dir = _os.environ.get("WECHAT_DATA_DIR", "").strip()
-    if custom_dir:
-        custom = Path(custom_dir)
-        if custom.exists() and custom.is_dir():
-            candidates.append(custom)
-
-    # 2. Default locations
-    candidates += [
-        Path(_os.environ.get("USERPROFILE", "")) / "Documents" / "xwechat_files",
-        Path(_os.environ.get("USERPROFILE", "")) / "Documents" / "WeChat Files",
-    ]
-    for base in candidates:
-        if not base.exists():
-            continue
-        wxid_dirs = sorted(
-            [d for d in base.iterdir() if d.is_dir() and d.name.startswith("wxid_")],
-            key=lambda d: d.stat().st_mtime, reverse=True,
-        )
-        for wxid_dir in wxid_dirs:
-            session_db = wxid_dir / "db_storage" / "session" / "session.db"
-            if session_db.exists():
-                return wxid_dir.name, str(session_db)
-            # Older WeChat versions
-            msg_dir = wxid_dir / "Msg"
-            if msg_dir.exists():
-                db_files = sorted(msg_dir.glob("MSG*.db"), key=lambda f: f.stat().st_mtime, reverse=True)
-                if db_files:
-                    return wxid_dir.name, str(db_files[0])
-    return None, None
+    session_db = Path(base_dir) / wxid / "db_storage" / "session" / "session.db"
+    if session_db.exists():
+        return wxid, str(session_db)
+    return wxid, None
 
 
 def _set_env_key(env_path: Path, key: str, value: str) -> None:
@@ -2229,19 +2193,16 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.send_json({"ok": False, "error": f"目录不存在: {dir_path}"})
                     return
 
-                # Scan for wxid_* directories
-                wxid_dirs = sorted(
-                    [d for d in target.iterdir() if d.is_dir() and d.name.startswith("wxid_")],
-                    key=lambda d: d.stat().st_mtime, reverse=True,
-                )
-                accounts = []
-                for wxid_dir in wxid_dirs:
-                    session_db = wxid_dir / "db_storage" / "session" / "session.db"
-                    accounts.append({
-                        "wxid": wxid_dir.name,
-                        "has_session_db": session_db.exists(),
-                        "db_path": str(session_db) if session_db.exists() else "",
-                    })
+                from src.wechat.data_dir import list_accounts_in_data_dir
+
+                accounts = [
+                    {
+                        "wxid": account.wxid,
+                        "has_session_db": account.session_db.exists(),
+                        "db_path": str(account.session_db),
+                    }
+                    for account in list_accounts_in_data_dir(target)
+                ]
 
                 if accounts:
                     self.send_json({

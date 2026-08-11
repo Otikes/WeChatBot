@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 
+from .data_dir import find_wxid_and_dbpath
+
 logger = logging.getLogger(__name__)
 
 PAGE_EXECUTE_READWRITE = 0x40
@@ -157,58 +159,10 @@ def _find_wxid_and_dbpath(custom_base_dir: str = ""):
     """Auto-detect WeChat wxid and database path from the filesystem.
 
     If custom_base_dir is provided, scans that directory first.
-    Otherwise falls back to Documents\\xwechat_files\\ and Documents\\WeChat Files\\.
+    Otherwise uses the shared detector, including WeChat 4.x process args
+    such as --wechat-files-path and common Documents/AppData roots.
     """
-    # Collect candidate base directories to scan
-    candidates: list[Path] = []
-
-    # 1. Custom directory (highest priority)
-    if custom_base_dir:
-        custom = Path(custom_base_dir)
-        if custom.exists() and custom.is_dir():
-            candidates.append(custom)
-            logger.info("Scanning custom WECHAT_DATA_DIR: %s", custom)
-        else:
-            logger.warning(
-                "WECHAT_DATA_DIR=%s does not exist or is not a directory — "
-                "falling back to auto-detection",
-                custom_base_dir,
-            )
-
-    # 2. Default auto-detection paths
-    documents = Path.home() / "Documents"
-    for default_base in (documents / "xwechat_files", documents / "WeChat Files"):
-        if default_base not in candidates:
-            candidates.append(default_base)
-
-    # Scan candidates in order
-    for base in candidates:
-        if not base.exists():
-            continue
-        # Find wxid directories (e.g., wxid_zogepsik3fud12_b6ce)
-        try:
-            wxid_dirs = sorted(
-                [d for d in base.iterdir() if d.is_dir() and d.name.startswith("wxid_")],
-                key=lambda d: d.stat().st_mtime,
-                reverse=True,
-            )
-        except PermissionError:
-            logger.warning("Permission denied reading %s — skipping", base)
-            continue
-
-        for wxid_dir in wxid_dirs:
-            # Verify session.db exists
-            session_db = wxid_dir / "db_storage" / "session" / "session.db"
-            if session_db.exists():
-                wxid = wxid_dir.name
-                source = "custom" if base == candidates[0] and custom_base_dir else "auto"
-                logger.info("%s-detected: wxid=%s db=%s", source, wxid, str(base))
-                return wxid, str(base)
-
-    raise FileNotFoundError(
-        "Cannot find WeChat data directory. Make sure WeChat is installed "
-        "and you have logged in at least once."
-    )
+    return find_wxid_and_dbpath(custom_base_dir)
 
 
 # ── Public API ────────────────────────────────────────────────────────
@@ -408,7 +362,14 @@ class WcdbNativeClient:
                         _os.environ["WCDB_KEY"] = key_candidate
                         self._save_key_to_env(key_candidate)
                         logger.info("Database opened: %s", db_path)
-                        self._load_nickname_cache()
+                        try:
+                            self._load_nickname_cache()
+                        except Exception as exc:
+                            logger.warning(
+                                "Nickname cache preload failed; continuing with "
+                                "lazy/fallback name resolution: %s",
+                                exc,
+                            )
                         return True
 
                     # Key didn't work — close and try next variant
@@ -519,26 +480,37 @@ class WcdbNativeClient:
     def _call_json(self, func, *args):
         """Call a WCDB function that returns a JSON string pointer."""
         out = ct.c_void_p()
-        ret = func(*args, ct.byref(out))
+        func_name = getattr(func, "__name__", repr(func))
+        try:
+            ret = func(*args, ct.byref(out))
+        except (OSError, ValueError) as e:
+            logger.warning("WCDB call %s raised before returning JSON: %s", func_name, e)
+            return None
         if ret != 0:
-            logger.warning("WCDB call %s failed: ret=%d", func.__name__, ret)
+            logger.warning("WCDB call %s failed: ret=%d", func_name, ret)
             return None
         if not out.value:
-            logger.debug("WCDB call %s returned null pointer", func.__name__)
+            logger.debug("WCDB call %s returned null pointer", func_name)
             return {}
         try:
             data = _read_gbk_string(out)
-            self._dll.wcdb_free_string(out)
             return json.loads(data)
         except json.JSONDecodeError as e:
             logger.debug("JSON parse error: %s", e)
-            self._dll.wcdb_free_string(out)
             return {}
+        except (OSError, ValueError) as e:
+            logger.warning("WCDB call %s returned an unreadable JSON pointer: %s", func_name, e)
+            return None
         except Exception as e:
             logger.warning("Unexpected error in _call_json for %s: %s",
-                           func.__name__, e)
-            self._dll.wcdb_free_string(out)
+                           func_name, e)
             return {}
+        finally:
+            if out.value:
+                try:
+                    self._dll.wcdb_free_string(out)
+                except (OSError, ValueError) as e:
+                    logger.warning("WCDB free_string failed for %s: %s", func_name, e)
 
     def get_sessions(self, limit=500):
         """Get all chat sessions with metadata."""

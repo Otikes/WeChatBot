@@ -5,6 +5,8 @@
 Unicode true
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "nsDialogs.nsh"
 
 ; ── Product Info ──────────────────────────────────────────────────────
 !define PRODUCT_NAME "webot"
@@ -22,6 +24,10 @@ RequestExecutionLevel user
 ShowInstDetails show
 SetCompressor /SOLID lzma
 
+; ── Installer State ───────────────────────────────────────────────────
+Var WebotDataDir
+Var WebotDataDirText
+
 ; ── Interface Settings ─────────────────────────────────────────────────
 !define MUI_ABORTWARNING
 !define MUI_ICON "image\logo_assets\logo.ico"
@@ -31,6 +37,7 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_LICENSE "LICENSE"
 !insertmacro MUI_PAGE_DIRECTORY
+Page custom WebotDataDirPageCreate WebotDataDirPageLeave
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 
@@ -38,6 +45,76 @@ SetCompressor /SOLID lzma
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+; ── Data Directory Page ────────────────────────────────────────────────
+Function WebotDataDirPageCreate
+  !insertmacro MUI_HEADER_TEXT "选择数据存储位置" "选择 webot 自身数据的保存文件夹。"
+
+  ${If} "$WebotDataDir" == ""
+    StrCpy $WebotDataDir "$INSTDIR\data"
+  ${EndIf}
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 28u "webot 自身生成的数据会保存在下面的目录，包括 messages.db、bot.log、昵称、欢迎模板、群缓存等。$\r$\n微信自己的聊天记录目录不会被移动或修改。"
+  Pop $0
+
+  ${NSD_CreateGroupBox} 0 44u 100% 52u "webot 数据目录"
+  Pop $0
+
+  ${NSD_CreateText} 12u 64u 68% 13u "$WebotDataDir"
+  Pop $WebotDataDirText
+
+  ${NSD_CreateBrowseButton} 76% 62u 22% 16u "浏览(&B)..."
+  Pop $0
+  ${NSD_OnClick} $0 WebotDataDirBrowse
+
+  ${NSD_CreateLabel} 0 108u 100% 18u "之后也可以在 webot 的「系统配置 → 数据路径」里修改。"
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function WebotDataDirBrowse
+  nsDialogs::SelectFolderDialog "选择 webot 数据存储目录" "$WebotDataDir"
+  Pop $0
+  ${If} $0 != error
+    StrCpy $WebotDataDir "$0"
+    ${NSD_SetText} $WebotDataDirText "$WebotDataDir"
+  ${EndIf}
+FunctionEnd
+
+Function WebotDataDirPageLeave
+  ${NSD_GetText} $WebotDataDirText $WebotDataDir
+  ${If} "$WebotDataDir" == ""
+    MessageBox MB_ICONEXCLAMATION "请选择 webot 数据存储目录。"
+    Abort
+  ${EndIf}
+FunctionEnd
+
+Function WriteWebotDataDirEnv
+  ${If} "$WebotDataDir" == ""
+    StrCpy $WebotDataDir "$INSTDIR\data"
+  ${EndIf}
+
+  CreateDirectory "$WebotDataDir"
+
+  IfFileExists "$INSTDIR\.env" env_ready 0
+    CopyFiles /SILENT "$INSTDIR\.env.example" "$INSTDIR\.env"
+    IfErrors 0 env_ready
+      FileOpen $0 "$INSTDIR\.env" w
+      FileClose $0
+
+  env_ready:
+    FileOpen $0 "$INSTDIR\.env" a
+    FileSeek $0 0 END
+    FileWrite $0 "$\r$\n; webot data dir selected by installer.$\r$\nWEBOT_DATA_DIR=$WebotDataDir$\r$\n"
+    FileClose $0
+FunctionEnd
 
 ; ── Install Section ────────────────────────────────────────────────────
 Section "Install"
@@ -57,8 +134,8 @@ Section "Install"
   File "native\windows\VCRUNTIME140_1.dll"
   SetOutPath "$INSTDIR"
 
-  ; Create data directory placeholder
-  CreateDirectory "$INSTDIR\data"
+  ; Create selected webot data directory and persist it to .env.
+  Call WriteWebotDataDirEnv
 
   ; Start Menu shortcut
   CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"

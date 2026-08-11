@@ -348,10 +348,12 @@ todo_delete_keywords: list[str] = [
 | `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
 | `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期 | `callback: MessageCallback` | `None` |
-| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；去重、自发内容排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback` | `None` |
+| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；用 `_raw_message_key()` 去重、自发内容按群排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback` | `None` |
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池) | `group_name, talker, standardized, callback` | `None` |
+| `_stable_id_text(value)` | 过滤 WCDB 空值/`0` 占位 ID，避免把所有 `server_id=0` 消息视为同一条 | `value` | `str` |
+| `_raw_message_key(msg, talker)` | 生成轮询去重和消息 ID 使用的稳定群内原始键；优先非零 server/local ID，否则用发送人+内容+时间+类型 | `msg: dict, talker: str` | `str` |
 | `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
-| `_send_and_confirm(group_name, talker, content)` | 通过键盘发送；成功后写入 `_recent_sends` 供自发自排除 | `group_name, talker, content` | `bool` |
+| `_send_and_confirm(group_name, talker, content)` | 通过键盘发送；成功后按 `(talker, content, timestamp)` 写入 `_recent_sends` 供同群自发自排除 | `group_name, talker, content` | `bool` |
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
 | `_try_voice(msg)` | 尝试语音识别 | `msg: dict` | `str \| None` |
 
@@ -397,7 +399,7 @@ todo_delete_keywords: list[str] = [
 | `navigate_to_chat(hwnd, group_name)` | 键盘导航到指定群聊 | `hwnd: int, group_name: str` | `bool` |
 | `send_message(hwnd, text)` | 键盘发送消息(Ctrl+V→Enter) | `hwnd: int, text: str` | `bool` |
 | `send_to_chat(group_name, text, max_retries=2)` | 完整发送管道(主入口) | `group_name: str, text: str, max_retries: int` | `bool` |
-| `_score_window(hwnd)` | 给窗口打分(模块级) | `hwnd: int` | `WindowCandidate` |
+| `_score_window(hwnd)` | 给窗口打分(模块级)；最小化窗口用 `GetWindowPlacement` 正常位置矩形代替 -16000 占位 | `hwnd: int` | `WindowCandidate` |
 | `_get_process_name(pid)` | 获取进程名(模块级) | `pid: int` | `str` |
 | `get_foreground_info()` | 获取前台窗口诊断信息 | 无 | `str` |
 
@@ -980,10 +982,10 @@ WcdbBackend.start(callback)
         │     └── for each group:
         │           _poll_group(group_name, talker, callback)
         │             ├── get_messages(talker, limit=50)
-        │             ├── 原始字段轻量去重 (raw_key) → 旧消息不进入 standardize
+        │             ├── _raw_message_key() → 非零 ID/内容组合轻量去重，旧消息不进入 standardize
         │             ├── _standardize() → 统一消息格式
         │             ├── 去重 (_known_ids) → 跳过旧消息
-        │             ├── 自发自排除 (_recent_sends 内容匹配) → 跳过机器人自己的回复
+        │             ├── 自发自排除 (_recent_sends 同群内容匹配) → 跳过机器人自己的回复
         │             ├── 新消息: 记录 "New message" / "Join event detected" 日志
         │             └── _handle_message() → 线程池提交
         │
@@ -1344,6 +1346,9 @@ WeChatWindowController.send_to_chat(group_name, text)  ← 主入口
 | `SELECT_RESULT_DELAY` | `0.15s` | Enter 后等待 |
 | `WHITE_SCREEN_MEAN_THRESHOLD` | `248` | 白屏检测亮度均值阈值 |
 | `WHITE_SCREEN_STDDEV_THRESHOLD` | `3.5` | 白屏检测标准差阈值 |
+
+> 白屏保护 (`_looks_like_blank_window`) 采样 3 次、间隔 0.4s：刚从
+> 最小化/隐藏恢复的窗口会短暂绘白，单次采样会误判；连续 3 次全白才拒绝发送。
 
 ---
 

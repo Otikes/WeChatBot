@@ -98,10 +98,17 @@ def _score_window(hwnd: int) -> WindowCandidate:
     except Exception:
         return c
 
-    # Rect
+    # Rect — minimized windows report a -16000 placeholder from
+    # GetWindowRect, which would fail the size filter; use the placement's
+    # normal (restored) position instead so minimized main windows stay
+    # selectable.
     try:
-        r = win32gui.GetWindowRect(hwnd)
-        c.rect = (r[0], r[1], r[2], r[3])
+        if c.iconic:
+            normal = win32gui.GetWindowPlacement(hwnd)[4]
+            c.rect = (normal[0], normal[1], normal[2], normal[3])
+        else:
+            r = win32gui.GetWindowRect(hwnd)
+            c.rect = (r[0], r[1], r[2], r[3])
     except Exception:
         pass
 
@@ -929,14 +936,23 @@ class WeChatWindowController:
                 right - margin_x,
                 bottom - margin_y,
             )
-            image = ImageGrab.grab(bbox=bbox).convert("L")
-            stat = ImageStat.Stat(image)
-            mean = stat.mean[0]
-            stddev = stat.stddev[0]
-            return (
-                mean >= WHITE_SCREEN_MEAN_THRESHOLD
-                and stddev <= WHITE_SCREEN_STDDEV_THRESHOLD
-            )
+            image_blank = False
+            # Redraw grace: a window just restored from minimized/hidden
+            # state paints white for a moment — sample a few times before
+            # declaring it a broken blank surface.
+            for _ in range(3):
+                image = ImageGrab.grab(bbox=bbox).convert("L")
+                stat = ImageStat.Stat(image)
+                mean = stat.mean[0]
+                stddev = stat.stddev[0]
+                image_blank = (
+                    mean >= WHITE_SCREEN_MEAN_THRESHOLD
+                    and stddev <= WHITE_SCREEN_STDDEV_THRESHOLD
+                )
+                if not image_blank:
+                    return False
+                time.sleep(0.4)
+            return image_blank
         except Exception as e:
             logger.debug("blank window detection failed: %s", e)
             return False

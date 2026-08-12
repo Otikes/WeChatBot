@@ -16,10 +16,12 @@ Unicode true
 !endif
 !define PRODUCT_PUBLISHER "cancelGuMu"
 !define PRODUCT_URL "https://github.com/cancelGuMu/webot"
+!define REG_UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "dist\webot-setup.exe"
 InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
+InstallDirRegKey HKCU "${REG_UNINSTALL_KEY}" "InstallLocation"
 RequestExecutionLevel user
 ShowInstDetails show
 SetCompressor /SOLID lzma
@@ -45,6 +47,80 @@ Page custom WebotDataDirPageCreate WebotDataDirPageLeave
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+; ── Upgrade Defaults ──────────────────────────────────────────────────
+Function .onInit
+  Call RestorePreviousInstallDir
+  Call RestorePreviousWebotDataDir
+FunctionEnd
+
+Function RestorePreviousInstallDir
+  StrCpy $1 ""
+
+  ReadRegStr $0 HKCU "${REG_UNINSTALL_KEY}" "InstallLocation"
+  ${If} "$0" != ""
+    IfFileExists "$0\*.*" 0 +2
+      StrCpy $1 "$0"
+  ${EndIf}
+
+  ; Older installers did not persist InstallLocation. Fall back to the
+  ; registered uninstaller path and use its parent directory.
+  ${If} "$1" == ""
+    ReadRegStr $0 HKCU "${REG_UNINSTALL_KEY}" "UninstallString"
+    ${If} "$0" != ""
+      StrCpy $2 $0 1
+      ${If} "$2" == '"'
+        StrCpy $0 $0 "" 1
+      ${EndIf}
+      ${GetParent} "$0" $1
+    ${EndIf}
+  ${EndIf}
+
+  ${If} "$1" != ""
+    IfFileExists "$1\*.*" 0 +2
+      StrCpy $INSTDIR "$1"
+  ${EndIf}
+FunctionEnd
+
+Function RestorePreviousWebotDataDir
+  ReadRegStr $WebotDataDir HKCU "${REG_UNINSTALL_KEY}" "WebotDataDir"
+  ${If} "$WebotDataDir" == ""
+    Call ReadWebotDataDirFromEnv
+  ${EndIf}
+FunctionEnd
+
+Function ReadWebotDataDirFromEnv
+  IfFileExists "$INSTDIR\.env" 0 done
+
+  ClearErrors
+  FileOpen $0 "$INSTDIR\.env" r
+  IfErrors done
+
+  loop:
+    FileRead $0 $1
+    IfErrors close
+
+    StrCpy $2 $1 15
+    ${If} "$2" == "WEBOT_DATA_DIR="
+      StrCpy $WebotDataDir $1 "" 15
+
+      StrCpy $2 $WebotDataDir 1 -1
+      ${If} "$2" == "$\n"
+        StrCpy $WebotDataDir $WebotDataDir -1
+      ${EndIf}
+
+      StrCpy $2 $WebotDataDir 1 -1
+      ${If} "$2" == "$\r"
+        StrCpy $WebotDataDir $WebotDataDir -1
+      ${EndIf}
+    ${EndIf}
+    Goto loop
+
+  close:
+    FileClose $0
+
+  done:
+FunctionEnd
 
 ; ── Data Directory Page ────────────────────────────────────────────────
 Function WebotDataDirPageCreate
@@ -153,26 +229,32 @@ Section "Install"
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
   ; Registry for Add/Remove Programs
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "DisplayName" "${PRODUCT_NAME} - ${PRODUCT_DESC}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "UninstallString" "$INSTDIR\uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
+    "QuietUninstallString" "$INSTDIR\uninstall.exe /S"
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
+    "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
+    "WebotDataDir" "$WebotDataDir"
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "DisplayIcon" "$INSTDIR\webot.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "DisplayVersion" "${PRODUCT_VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "Publisher" "${PRODUCT_PUBLISHER}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "URLInfoAbout" "${PRODUCT_URL}"
 
   ; Size estimation
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegDWORD HKCU "${REG_UNINSTALL_KEY}" \
     "EstimatedSize" $0
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegDWORD HKCU "${REG_UNINSTALL_KEY}" \
     "NoModify" 1
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
+  WriteRegDWORD HKCU "${REG_UNINSTALL_KEY}" \
     "NoRepair" 1
 SectionEnd
 
@@ -201,7 +283,7 @@ Section "Uninstall"
   Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
 
   ; Remove registry
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
+  DeleteRegKey HKCU "${REG_UNINSTALL_KEY}"
 
   ; Remove install dir if empty (user data may remain)
   RMDir "$INSTDIR"
@@ -211,6 +293,7 @@ SectionEnd
 VIProductVersion "${PRODUCT_VERSION}.0"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${PRODUCT_VERSION}"
+VIAddVersionKey "FileVersion" "${PRODUCT_VERSION}"
 VIAddVersionKey "FileDescription" "${PRODUCT_DESC}"
 VIAddVersionKey "LegalCopyright" "MIT License"
 VIAddVersionKey "CompanyName" "${PRODUCT_PUBLISHER}"

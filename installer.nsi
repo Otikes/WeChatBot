@@ -192,11 +192,50 @@ Function WriteWebotDataDirEnv
     FileClose $0
 FunctionEnd
 
+Function PrepareWebotExeForUpdate
+  IfFileExists "$INSTDIR\webot.exe" 0 done
+
+  ClearErrors
+  Delete "$INSTDIR\webot.exe"
+  IfErrors 0 done
+
+  IfSilent close_running_webot 0
+  MessageBox MB_OKCANCEL|MB_ICONINFORMATION \
+    "检测到 webot 正在运行或 webot.exe 正被占用。安装程序需要先关闭 webot，然后继续更新。$\r$\n$\r$\n点击「确定」自动关闭 webot 并继续安装；点击「取消」停止安装。" \
+    IDOK close_running_webot IDCANCEL cancel_install
+
+  close_running_webot:
+    DetailPrint "正在关闭运行中的 webot..."
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM webot.exe /T /F'
+    Pop $0
+    Pop $1
+    Sleep 1500
+
+  ClearErrors
+  Delete "$INSTDIR\webot.exe"
+  IfErrors still_locked done
+
+  still_locked:
+    IfSilent silent_abort 0
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
+      "仍然无法写入：$\r$\n$INSTDIR\webot.exe$\r$\n$\r$\n请确认 webot 已关闭，然后点击「重试」；或点击「取消」停止安装。" \
+      IDRETRY close_running_webot IDCANCEL cancel_install
+
+  silent_abort:
+    Abort "无法更新 $INSTDIR\webot.exe。请关闭 webot 后重试安装。"
+
+  cancel_install:
+    Abort
+
+  done:
+FunctionEnd
+
 ; ── Install Section ────────────────────────────────────────────────────
 Section "Install"
   SetOutPath "$INSTDIR"
 
   ; Main executable
+  Call PrepareWebotExeForUpdate
   File "dist\webot.exe"
   File ".env.example"
 

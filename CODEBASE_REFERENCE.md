@@ -1948,6 +1948,7 @@ WCDB_KEY=
 - 页面: 欢迎 → 许可证 → 安装目录 → webot 数据目录 → 安装进度 → 完成
 - 安装目录默认: `$LOCALAPPDATA\webot`
 - 升级安装时会从 HKCU 卸载注册表键读取 `InstallLocation`，自动复用上次安装目录；兼容旧版安装包，旧版没有该字段时从 `UninstallString` 推断安装目录
+- 覆盖 `$INSTDIR\webot.exe` 前会先尝试删除旧文件；如果被运行中的 webot 占用，安装器会提示用户并调用 `taskkill /IM webot.exe /T /F` 自动关闭后重试，避免出现 NSIS 原生的 Abort/Retry/Ignore 写入失败弹窗
 - webot 数据目录默认: `$INSTDIR\data`；用户可在安装时浏览/手输其他目录
 - 安装阶段会创建所选数据目录，并向 `$INSTDIR\.env` 追加 `WEBOT_DATA_DIR=<所选目录>`；如果 `.env` 不存在，先从 `.env.example` 复制
 - 安装完成会向 HKCU 卸载注册表键写入 `InstallLocation`、`WebotDataDir`、`QuietUninstallString` 等字段；升级安装时优先复用 `WebotDataDir`，旧版没有该字段时从既有 `.env` 的最后一个 `WEBOT_DATA_DIR=` 读取

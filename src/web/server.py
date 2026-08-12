@@ -38,6 +38,13 @@ from src.utils.ai_compat import (
     normalize_ai_backend as _normalize_ai_backend,
     normalize_openai_base_url,
 )
+from src.imagegen.generator import (
+    DASHSCOPE_QWEN_BASE_URL,
+    GOOGLE_GEMINI_BASE_URL,
+    infer_image_gen_protocol,
+    normalize_dashscope_base_url,
+    normalize_google_gemini_base_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -248,30 +255,42 @@ def _secret_update(new_value, old_value: str) -> str | None:
 
 def _image_gen_config_from_raw(raw: dict[str, str]) -> dict:
     """Return UI-facing image generation config from env key/value pairs."""
+    protocol = infer_image_gen_protocol(
+        raw.get("IMAGE_GEN_PROTOCOL", "openai_images"),
+        raw.get("IMAGE_GEN_BASE_URL", ""),
+        raw.get("IMAGE_GEN_MODEL", ""),
+    )
     return {
         "image_gen_enabled": raw.get("IMAGE_GEN_ENABLED", "false").lower() == "true",
-        "image_gen_api_key": _mask_key(raw.get("IMAGE_GEN_API_KEY", "")),
+        "image_gen_protocol": protocol,
+        "image_gen_api_key": raw.get("IMAGE_GEN_API_KEY", ""),
         "image_gen_base_url": raw.get("IMAGE_GEN_BASE_URL", ""),
         "image_gen_model": raw.get("IMAGE_GEN_MODEL", ""),
         "image_gen_size": raw.get("IMAGE_GEN_SIZE", ""),
     }
 
 
-def _image_gen_updates_from_config(config: dict,
-                                   old_raw: dict[str, str]) -> dict[str, str | None]:
+def _image_gen_updates_from_config(config: dict) -> dict[str, str | None]:
     """Return env updates for image generation config from UI payload."""
     base_url = config.get("image_gen_base_url")
+    protocol = infer_image_gen_protocol(
+        config.get("image_gen_protocol", "openai_images"),
+        base_url or "",
+        config.get("image_gen_model", ""),
+    )
     return {
         "IMAGE_GEN_ENABLED": (
             str(bool(config.get("image_gen_enabled", False))).lower()
             if "image_gen_enabled" in config else None
         ),
-        "IMAGE_GEN_API_KEY": _secret_update(
-            config.get("image_gen_api_key"),
-            old_raw.get("IMAGE_GEN_API_KEY", ""),
-        ),
+        "IMAGE_GEN_PROTOCOL": protocol if "image_gen_protocol" in config else None,
+        "IMAGE_GEN_API_KEY": config.get("image_gen_api_key"),
         "IMAGE_GEN_BASE_URL": (
-            normalize_openai_base_url(base_url) if base_url else base_url
+            normalize_dashscope_base_url(base_url or DASHSCOPE_QWEN_BASE_URL)
+            if protocol == "dashscope_qwen"
+            else normalize_google_gemini_base_url(base_url or GOOGLE_GEMINI_BASE_URL)
+            if protocol == "google_gemini_image"
+            else normalize_openai_base_url(base_url) if base_url else base_url
         ),
         "IMAGE_GEN_MODEL": config.get("image_gen_model"),
         "IMAGE_GEN_SIZE": config.get("image_gen_size"),
@@ -823,6 +842,7 @@ _FIRST_RUN_ENV_DEFAULTS = {
     "VOICE_LOCAL_MODEL": "small",
     "VOICE_ASR_TO_SIMPLIFIED": "true",
     "IMAGE_GEN_ENABLED": "false",
+    "IMAGE_GEN_PROTOCOL": "openai_images",
     "IMAGE_GEN_API_KEY": "",
     "IMAGE_GEN_BASE_URL": "",
     "IMAGE_GEN_MODEL": "",
@@ -2035,7 +2055,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 }
                 updates.update(_feishu_updates_from_config(config))
                 updates.update(_todo_updates_from_config(config))
-                updates.update(_image_gen_updates_from_config(config, old_raw))
+                updates.update(_image_gen_updates_from_config(config))
                 seen = set()
                 for line in lines:
                     stripped = line.strip()
@@ -2131,7 +2151,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "VOICE_LOCAL_MODEL": config.get("voice_local_model", "small"),
                 }
                 updates.update(_feishu_updates_from_config(config))
-                updates.update(_image_gen_updates_from_config(config, old_raw))
+                updates.update(_image_gen_updates_from_config(config))
                 new_lines = []
                 seen = set()
                 for line in lines:

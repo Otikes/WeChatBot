@@ -357,7 +357,9 @@ class BotConfig:
     # When enabled, @bot + an image-generation intent keyword triggers
     # the configured Images API and the result is pasted into the chat.
     image_gen_enabled: bool = False
-    # OpenAI-compatible Images API credentials (/v1/images/generations)
+    # "openai_images" (/v1/images/generations) | "google_gemini_image" | "dashscope_qwen"
+    image_gen_protocol: str = "openai_images"
+    # Image generation API credentials.
     image_gen_api_key: str = ""
     image_gen_base_url: str = ""
     # Selected image model id (from the "获取模型" list)
@@ -634,6 +636,7 @@ def load_config() -> BotConfig:
         "voice_asr_to_simplified": os.getenv("VOICE_ASR_TO_SIMPLIFIED", "true").strip().lower() == "true",
         # Image generation (文生图)
         "image_gen_enabled": os.getenv("IMAGE_GEN_ENABLED", "false").strip().lower() == "true",
+        "image_gen_protocol": os.getenv("IMAGE_GEN_PROTOCOL", "openai_images").strip() or "openai_images",
         "image_gen_api_key": os.getenv("IMAGE_GEN_API_KEY", "").strip(),
         "image_gen_base_url": os.getenv("IMAGE_GEN_BASE_URL", "").strip(),
         "image_gen_model": os.getenv("IMAGE_GEN_MODEL", "").strip(),

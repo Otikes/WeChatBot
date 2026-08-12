@@ -138,6 +138,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `VOICE_LOCAL_MODEL` | `str` | `"small"` | `src/config.py` | `src/voice/asr.py:LocalWhisperASR.__init__()` |
 | `VOICE_ASR_TO_SIMPLIFIED` | `bool` | `True` | `src/config.py` | `src/voice/asr.py` (各ASR后端) |
 | `IMAGE_GEN_ENABLED` | `bool` | `False` | `src/config.py` | `src/router.py:handle()` (生图分支), `src/imagegen/generator.py:create_image_generator()` |
+| `IMAGE_GEN_PROTOCOL` | `str` | `"openai_images"` | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
 | `IMAGE_GEN_API_KEY` | `str` | `""` (本地兼容服务可空) | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
 | `IMAGE_GEN_BASE_URL` | `str` | `""` | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
 | `IMAGE_GEN_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/imagegen/generator.py:ImageGenerator.__init__()` |
@@ -696,8 +697,8 @@ image_gen_keywords: list[str] = [
 | `_ai_config_from_raw(raw)` | 从 `.env` 键值生成 UI AI 协议配置；legacy `deepseek` 映射为 Chat Completions | `raw: dict[str, str]` | `dict` |
 | `_ai_updates_from_config(config)` | 从 UI payload 生成 AI 相关 `.env` 更新；缺失字段返回 `None` 以保留现值 | `config: dict` | `dict[str, str \| None]` |
 | `_secret_update(new_value, old_value)` | 密钥字段安全更新；回传值含 `***`（掩码）时保留原密钥，避免掩码覆盖真实值 | `new_value, old_value: str` | `str \| None` |
-| `_image_gen_config_from_raw(raw)` | 从 `.env` 键值生成 UI 生图配置；API Key 经 `_mask_key()` 掩码返回 | `raw: dict[str, str]` | `dict` |
-| `_image_gen_updates_from_config(config, old_raw)` | 从 UI payload 生成生图相关 `.env` 更新；密钥经 `_secret_update()` 保护，base_url 经 `normalize_openai_base_url()` 归一化 | `config: dict, old_raw: dict[str, str]` | `dict[str, str \| None]` |
+| `_image_gen_config_from_raw(raw)` | 从 `.env` 键值生成 UI 生图配置；API Key 与 LLM 配置一致明文返回给本地 UI | `raw: dict[str, str]` | `dict` |
+| `_image_gen_updates_from_config(config)` | 从 UI payload 生成生图相关 `.env` 更新；API Key 与 LLM 配置一致按前端值保存，base_url 按 OpenAI Images、Google Gemini Image 或 DashScope 协议归一化 | `config: dict` | `dict[str, str \| None]` |
 | `_normalize_anthropic_base_url(raw)` | 规范化 Messages 协议 Base URL，剥离 `/v1/messages` / `/v1/models` | `raw: str` | `str` |
 | `_extract_model_items(payload)` | 从常见模型列表响应中提取、去重并排序模型项 | `payload: dict \| list` | `list[dict[str, str]]` |
 | `_request_json(url, headers)` | 发起 JSON GET 请求 | `url: str, headers: dict[str, str]` | `dict \| list` |
@@ -745,7 +746,7 @@ image_gen_keywords: list[str] = [
 | `LogViewer.jsx` | `LogViewer` | 实时日志查看器(过滤/搜索/高亮/清空日志文件) |
 | `ConfigPanel.jsx` | `AiSection` | 系统配置里的 LLM模型配置；支持模型获取和选择 |
 | `ConfigPanel.jsx` | `VoiceSection` | 系统配置里的语音模型配置；本地/云端识别后端切换与模型下载 |
-| `ConfigPanel.jsx` | `ImageGenSection` | 系统配置里的生图模型配置；总开关 + 协议/密钥/地址 + 获取模型 + 生图模型/尺寸选择，复用 `/api/ai/models` 获取模型列表 |
+| `ConfigPanel.jsx` | `ImageGenSection` | 系统配置里的生图模型配置；总开关 + 协议/密钥/地址 + 生图模型/尺寸选择；OpenAI Images 通过 `/api/ai/models` 获取模型列表，Google/DashScope 使用内置模型选项 |
 | `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 webot 数据目录与微信数据目录配置；webot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
 
@@ -757,9 +758,18 @@ image_gen_keywords: list[str] = [
 | `match_image_gen_keyword(text, keywords)` | `intent.py` | 返回命中的第一个生图关键词(长词优先)；未命中返回空串 | `text: str, keywords: list[str]` | `str` |
 | `is_image_gen_intent(text, keywords)` | `intent.py` | 判断文本是否带生图意图 | `text: str, keywords: list[str]` | `bool` |
 | `extract_image_prompt(text, keywords)` | `intent.py` | 提取生图提示词：移除首次命中的关键词，仅清理首尾标点空白；结果为空时回退完整文本 | `text: str, keywords: list[str]` | `str` |
-| `ImageGenerator.__init__(api_key, base_url, model, size, timeout)` | `generator.py` | 初始化生图客户端；`model` 为空时抛 `ValueError`，base_url 经归一化 | API配置 | `None` |
-| `ImageGenerator.generate(prompt)` | `generator.py` | 调用 `/images/generations` 生成图片并落盘到 `<WEBOT_DATA_DIR>/images/` | `prompt: str` | `Path` |
-| `ImageGenerator._extract_image_bytes(body)` | `generator.py` | 从响应提取图片二进制；兼容 `b64_json` 内联与 `url` 外链 | `body: dict` | `bytes` |
+| `normalize_image_gen_protocol(raw)` | `generator.py` | 规范化生图协议别名：`openai_images` / `google_gemini_image` / `dashscope_qwen`；New API/One API/GPT 等归入 OpenAI Images 兼容协议 | `raw: str` | `str` |
+| `infer_image_gen_protocol(protocol, base_url, model)` | `generator.py` | 兼容旧配置：阿里云 `compatible-mode` + `qwen-image*` 自动推断为 `dashscope_qwen`，Google Gemini 地址 + gemini 模型自动推断为 `google_gemini_image` | `protocol, base_url, model: str` | `str` |
+| `normalize_dashscope_base_url(raw)` | `generator.py` | 规范化 DashScope/Qwen-Image Base URL，剥离完整端点并将 `compatible-mode` 纠正为 `/api/v1` | `raw: str` | `str` |
+| `normalize_google_gemini_base_url(raw)` | `generator.py` | 规范化 Google Gemini Image Base URL，剥离 `/interactions` 并自动补 `/v1beta` | `raw: str` | `str` |
+| `google_response_format_from_size(size)` | `generator.py` | 将已有图片尺寸字段映射为 Google Gemini Interactions `response_format`，支持常见分辨率、比例与 1K/2K/4K | `size: str` | `dict` |
+| `normalize_dashscope_size(size)` | `generator.py` | 将 UI 共用的 `1024x1024` 尺寸格式转换为 DashScope 接受的 `1024*1024` | `size: str` | `str` |
+| `ImageGenerator.__init__(api_key, base_url, model, size, timeout, protocol="openai_images")` | `generator.py` | 初始化生图客户端；`model` 为空时抛 `ValueError`，按协议归一化 base_url | API配置 | `None` |
+| `ImageGenerator.generate(prompt)` | `generator.py` | 按 `IMAGE_GEN_PROTOCOL` 调 OpenAI Images 兼容、Google Gemini Image 或 DashScope Qwen-Image 生成图片并落盘到 `<WEBOT_DATA_DIR>/images/` | `prompt: str` | `Path` |
+| `ImageGenerator._generate_openai_images(prompt)` | `generator.py` | 调用 OpenAI 兼容 `/images/generations` | `prompt: str` | `Path` |
+| `ImageGenerator._generate_dashscope_qwen(prompt)` | `generator.py` | 调用 DashScope `/services/aigc/multimodal-generation/generation` 同步文生图接口 | `prompt: str` | `Path` |
+| `ImageGenerator._generate_google_gemini_image(prompt)` | `generator.py` | 调用 Google Gemini `/interactions` 图片生成接口，使用 `x-goog-api-key` 认证 | `prompt: str` | `Path` |
+| `ImageGenerator._extract_image_bytes(body)` | `generator.py` | 从响应提取图片二进制；兼容 `b64_json` 内联、`url` 外链、DashScope 图片 URL 与 Google Gemini base64 图片块 | `body: dict` | `bytes` |
 | `ImageGenerator._download(image_url)` | `generator.py` | 下载外链图片，限 20MB(静态) | `image_url: str` | `bytes` |
 | `ImageGenerator._save_image(image_bytes)` | `generator.py` | 按魔数推断扩展名(png/jpg/webp)写入 images 目录(静态) | `image_bytes: bytes` | `Path` |
 | `create_image_generator(config)` | `generator.py` | 工厂：未启用或缺 model/base_url 时返回 `None` | `config: BotConfig` | `ImageGenerator \| None` |
@@ -1763,8 +1773,10 @@ WcdbBackend._poll_group() → _handle_message() [线程池]
         └── _handle_image_gen(msg, clean_content)
               ├── extract_image_prompt()                   [src/imagegen/intent.py]
               ├── ImageGenerator.generate(prompt)          [src/imagegen/generator.py]
-              │     ├── POST {base}/images/generations (urllib, 180s 超时)
-              │     ├── _extract_image_bytes() — b64_json 内联 / url 外链下载(限 20MB)
+              │     ├── openai_images → POST {base}/images/generations (OpenAI/New API/One API 等兼容协议，urllib, 180s 超时)
+              │     ├── google_gemini_image → POST {base}/interactions
+              │     ├── dashscope_qwen → POST {base}/services/aigc/multimodal-generation/generation
+              │     ├── _extract_image_bytes() — b64_json 内联 / url 外链 / DashScope image URL / Google base64 图片块
               │     └── _save_image() → <WEBOT_DATA_DIR>/images/imggen_<ts>_<rand>.<ext>
               └── 返回 ImageReply(image_path) / 失败回文本错误
 WcdbBackend._handle_message()
@@ -1783,10 +1795,11 @@ WcdbBackend._handle_message()
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `IMAGE_GEN_ENABLED` | `false` | 总开关 |
-| `IMAGE_GEN_API_KEY` | 空 | Images API 密钥；UI 读取时掩码，保存时掩码回传不覆盖原值 |
-| `IMAGE_GEN_BASE_URL` | 空 | API 地址；保存时自动剥离 `/images/generations` `/models` 等后缀 |
-| `IMAGE_GEN_MODEL` | 空 | 生图模型 ID；UI 复用 `POST /api/ai/models` 获取列表 |
-| `IMAGE_GEN_SIZE` | 空 | 可选尺寸（如 1024x1024）；留空不传 size 参数 |
+| `IMAGE_GEN_PROTOCOL` | `openai_images` | 生图协议：`openai_images`、`google_gemini_image` 或 `dashscope_qwen`；OpenAI/New API/One API/GPT 兼容服务用 `openai_images`，Google 用 `google_gemini_image`，阿里云 compatible-mode + qwen-image 旧配置会自动推断为 DashScope |
+| `IMAGE_GEN_API_KEY` | 空 | Images API 密钥；与 LLM 配置一致，UI 读取和保存均使用完整值 |
+| `IMAGE_GEN_BASE_URL` | 空 | API 地址；OpenAI Images 保存时剥离 `/images/generations` `/models` 等后缀，Google 保存时补 `/v1beta`，DashScope 保存时纠正为 `/api/v1` |
+| `IMAGE_GEN_MODEL` | 空 | 生图模型 ID；OpenAI Images 可通过 `POST /api/ai/models` 获取，Google/DashScope UI 提供内置选项 |
+| `IMAGE_GEN_SIZE` | 空 | 可选尺寸；OpenAI/DashScope 直接传 size，Google 映射到 `response_format` |
 | `IMAGE_GEN_KEYWORDS` | 见 §1.3 | 生图意图关键词，逗号分隔 |
 
 #### 注意事项
@@ -1884,8 +1897,9 @@ VOICE_ASR_TO_SIMPLIFIED=true
 
 # === 文生图 ===
 IMAGE_GEN_ENABLED=false                        # 总开关：@机器人 + 生图意图关键词时触发
-IMAGE_GEN_API_KEY=                             # Images API 密钥；本地无鉴权服务可空
-IMAGE_GEN_BASE_URL=                            # API 地址；可填 .../v1 或完整 .../v1/images/generations
+IMAGE_GEN_PROTOCOL=openai_images              # openai_images / google_gemini_image / dashscope_qwen
+IMAGE_GEN_API_KEY=                             # 生图 API 密钥；本地无鉴权服务可空
+IMAGE_GEN_BASE_URL=                            # API 地址；OpenAI 可填 .../v1 或完整 .../v1/images/generations，Google 可填 .../v1beta，DashScope 可填 .../api/v1
 IMAGE_GEN_MODEL=                               # 通过 UI 生图模型配置获取模型后选择
 IMAGE_GEN_SIZE=                                # 可选尺寸(如 1024x1024)；留空由模型默认
 IMAGE_GEN_KEYWORDS=画一张,画一个,画一幅,画一只,画个,帮我画,生成一张,生成一幅,生成图片,生图,来一张图,画出来

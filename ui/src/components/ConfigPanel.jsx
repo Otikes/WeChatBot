@@ -411,14 +411,28 @@ function ImageGenSection({ form, update }) {
   const [modelBusy, setModelBusy] = useState(false)
   const [modelError, setModelError] = useState('')
 
+  const protocol = form.image_gen_protocol || 'openai_images'
+  const isDashScope = protocol === 'dashscope_qwen'
+  const isGoogle = protocol === 'google_gemini_image'
   const apiKey = form.image_gen_api_key || ''
   const baseUrl = form.image_gen_base_url || ''
   const modelValue = form.image_gen_model || ''
+  const dashScopeModels = [
+    { id: 'qwen-image-2.0-pro', label: 'qwen-image-2.0-pro', hint: 'DashScope Qwen-Image' },
+    { id: 'qwen-image', label: 'qwen-image', hint: 'DashScope Qwen-Image' },
+  ]
+  const googleModels = [
+    { id: 'gemini-3.1-flash-image', label: 'gemini-3.1-flash-image', hint: 'Nano Banana 2' },
+    { id: 'gemini-3.1-flash-lite-image', label: 'gemini-3.1-flash-lite-image', hint: 'Nano Banana 2 Lite' },
+    { id: 'gemini-3-pro-image', label: 'gemini-3-pro-image', hint: 'Nano Banana Pro' },
+    { id: 'gemini-2.5-flash-image', label: 'gemini-2.5-flash-image', hint: 'Nano Banana' },
+  ]
 
   // 模型下拉项：接口返回的列表 + 当前已配置的模型（避免回显丢失）
   const modelSelectOptions = (() => {
     const seen = new Set()
-    const rows = modelOptions.map(m => ({
+    const sourceModels = isDashScope ? dashScopeModels : isGoogle ? googleModels : modelOptions
+    const rows = sourceModels.map(m => ({
       value: m.id,
       code: m.id,
       desc: m.label || m.id,
@@ -437,8 +451,20 @@ function ImageGenSection({ form, update }) {
     return rows
   })()
 
-  // 复用 /api/ai/models 端点（openai_compatible 协议会请求 /v1/models）
+  // OpenAI Images 通过 /api/ai/models 拉取列表；原生协议使用内置模型选项。
   async function fetchModels() {
+    if (isDashScope) {
+      setModelOptions(dashScopeModels)
+      setModelError('')
+      if (!modelValue) update('image_gen_model', 'qwen-image-2.0-pro')
+      return
+    }
+    if (isGoogle) {
+      setModelOptions(googleModels)
+      setModelError('')
+      if (!modelValue) update('image_gen_model', 'gemini-3.1-flash-image')
+      return
+    }
     setModelBusy(true)
     setModelError('')
     try {
@@ -485,8 +511,29 @@ function ImageGenSection({ form, update }) {
 
               {/* ── 协议 ─────────────────────────────────── */}
               <Field label="生图协议" hint="按接口协议选择；具体模型由请求地址和 Key 动态获取">
-                <Select value="openai_images" onChange={() => {}} options={[
-                  { value: 'openai_images', desc: 'Images', hint: '/v1/images/generations · /v1/models' },
+                <Select value={protocol} onChange={v => {
+                  update('image_gen_protocol', v)
+                  setModelOptions([])
+                  setModelError('')
+                  if (v === 'dashscope_qwen') {
+                    if (!baseUrl || baseUrl.includes('generativelanguage.googleapis.com')) {
+                      update('image_gen_base_url', 'https://dashscope.aliyuncs.com/api/v1')
+                    }
+                    if (!modelValue || !modelValue.startsWith('qwen-image')) {
+                      update('image_gen_model', 'qwen-image-2.0-pro')
+                    }
+                  } else if (v === 'google_gemini_image') {
+                    if (!baseUrl || baseUrl.includes('aliyuncs.com')) {
+                      update('image_gen_base_url', 'https://generativelanguage.googleapis.com/v1beta')
+                    }
+                    if (!modelValue || !modelValue.startsWith('gemini-')) {
+                      update('image_gen_model', 'gemini-3.1-flash-image')
+                    }
+                  }
+                }} options={[
+                  { value: 'openai_images', desc: 'OpenAI Images 兼容', hint: 'OpenAI / New API / One API · /v1/images/generations' },
+                  { value: 'google_gemini_image', desc: 'Google Gemini Image', hint: '/v1beta/interactions' },
+                  { value: 'dashscope_qwen', desc: 'DashScope Qwen-Image', hint: '/api/v1/services/aigc/multimodal-generation/generation' },
                 ]} />
               </Field>
 
@@ -494,12 +541,12 @@ function ImageGenSection({ form, update }) {
               <Field label="API Key" hint="云端接口通常需要；本地无鉴权服务可留空">
                 <Input type="password" value={apiKey} onChange={v => update('image_gen_api_key', v)} placeholder="sk-xxxxxxxxxxxxxxxx（可选）" />
               </Field>
-              <Field label="请求地址" hint="可填 base URL，也可直接粘完整 /v1/images/generations 或 /v1/models；保存时会自动纠正">
-                <Input value={baseUrl} onChange={v => update('image_gen_base_url', v)} placeholder="https://example.com/v1" />
+              <Field label="请求地址" hint={isDashScope ? 'DashScope 可留默认；保存时会把 compatible-mode 地址自动纠正为 /api/v1' : isGoogle ? 'Google Gemini 可留默认；保存时会自动补齐 /v1beta' : '可填 base URL，也可直接粘完整 /v1/images/generations 或 /v1/models；保存时会自动纠正'}>
+                <Input value={baseUrl} onChange={v => update('image_gen_base_url', v)} placeholder={isDashScope ? 'https://dashscope.aliyuncs.com/api/v1' : isGoogle ? 'https://generativelanguage.googleapis.com/v1beta' : 'https://example.com/v1'} />
               </Field>
 
               {/* ── 模型 ─────────────────────────────────── */}
-              <Field label="生图模型" hint={modelOptions.length ? `已获取 ${modelOptions.length} 个模型` : '填写请求地址和 Key 后获取模型列表'} error={modelError || null}>
+              <Field label="生图模型" hint={isDashScope ? 'DashScope Qwen-Image 使用内置模型列表' : isGoogle ? 'Google Gemini Image 使用内置模型列表' : (modelOptions.length ? `已获取 ${modelOptions.length} 个模型` : '填写请求地址和 Key 后获取模型列表')} error={modelError || null}>
                 <div className="flex gap-2">
                   <div className="flex-1 min-w-0">
                     {modelSelectOptions.length ? (
@@ -508,10 +555,10 @@ function ImageGenSection({ form, update }) {
                       <Input value={modelValue} onChange={v => update('image_gen_model', v)} placeholder="先获取模型，或手动填写模型 ID" />
                     )}
                   </div>
-                  <button type="button" onClick={fetchModels} disabled={modelBusy}
+                  {!isDashScope && !isGoogle && <button type="button" onClick={fetchModels} disabled={modelBusy}
                     className="shrink-0 px-5 py-2.5 rounded-full bg-brand-green text-[#0d0d0d] text-[14px] font-semibold hover:opacity-90 disabled:opacity-45 transition-opacity cursor-pointer">
                     {modelBusy ? '获取中' : '获取模型'}
-                  </button>
+                  </button>}
                 </div>
               </Field>
 
@@ -2113,7 +2160,8 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     webot_data_dir: '', resolved_webot_data_dir: '',
     voice_asr_enabled: false, voice_asr_backend: 'local_whisper', voice_asr_language: 'zh',
     voice_openai_api_key: '', voice_openai_base_url: '', voice_local_model: 'small',
-    image_gen_enabled: false, image_gen_api_key: '', image_gen_base_url: '',
+    image_gen_enabled: false, image_gen_protocol: 'openai_images',
+    image_gen_api_key: '', image_gen_base_url: '',
     image_gen_model: '', image_gen_size: '',
   })
 
@@ -2260,6 +2308,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           voice_openai_base_url: form.voice_openai_base_url,
           voice_local_model: form.voice_local_model,
           image_gen_enabled: form.image_gen_enabled,
+          image_gen_protocol: form.image_gen_protocol,
           image_gen_api_key: form.image_gen_api_key,
           image_gen_base_url: form.image_gen_base_url,
           image_gen_model: form.image_gen_model,

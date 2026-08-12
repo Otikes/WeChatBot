@@ -6,7 +6,7 @@
 - generator.py: 初始化校验、响应解析（b64_json）、图片落盘扩展名、工厂函数
 - reply.py: ImageReply 数据类
 - config.py: BotConfig 生图字段默认值
-- server.py: 密钥掩码保护 (_secret_update) 与生图配置读写辅助函数
+- server.py: 生图配置读写辅助函数
 """
 
 import os
@@ -17,7 +17,16 @@ from unittest.mock import patch
 
 from src.config import BotConfig
 from src.imagegen import ImageReply
-from src.imagegen.generator import ImageGenerator, create_image_generator
+from src.imagegen.generator import (
+    ImageGenerator,
+    create_image_generator,
+    google_response_format_from_size,
+    infer_image_gen_protocol,
+    normalize_dashscope_base_url,
+    normalize_dashscope_size,
+    normalize_google_gemini_base_url,
+    normalize_image_gen_protocol,
+)
 from src.imagegen.intent import (
     extract_image_prompt,
     is_image_gen_intent,
@@ -136,6 +145,19 @@ class ImageGeneratorInitTests(unittest.TestCase):
         )
         self.assertEqual(gen.base_url, "https://api.x.com/v1")
 
+    def test_dashscope_compatible_url_normalized(self):
+        """阿里云 compatible-mode 地址在 DashScope 协议下会转为原生 /api/v1。"""
+        gen = ImageGenerator(
+            api_key="sk-x",
+            base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+            model="qwen-image-2.0-pro",
+            protocol="dashscope_qwen",
+        )
+        self.assertEqual(
+            gen.base_url,
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1",
+        )
+
 
 class ExtractImageBytesTests(unittest.TestCase):
     """_extract_image_bytes 的响应解析。"""
@@ -161,6 +183,101 @@ class ExtractImageBytesTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.gen._extract_image_bytes({"data": [{}]})
 
+    def test_dashscope_image_url(self):
+        """兼容 DashScope output.choices[].message.content[].image 响应。"""
+        body = {
+            "output": {
+                "choices": [{
+                    "message": {
+                        "content": [{"image": "https://img.example.com/a.png"}]
+                    }
+                }]
+            }
+        }
+        with patch.object(self.gen, "_download", return_value=b"\x89PNG\r\n\x1a\ndata") as download:
+            self.assertEqual(self.gen._extract_image_bytes(body), b"\x89PNG\r\n\x1a\ndata")
+        download.assert_called_once_with("https://img.example.com/a.png")
+
+    def test_google_image_b64(self):
+        """兼容 Google Gemini Interactions 的 steps image base64 响应。"""
+        import base64
+
+        payload = base64.b64encode(b"\x89PNG\r\n\x1a\ngoogle").decode()
+        body = {
+            "steps": [{
+                "type": "model_output",
+                "content": [{"type": "image", "data": payload}],
+            }]
+        }
+        self.assertEqual(self.gen._extract_image_bytes(body), b"\x89PNG\r\n\x1a\ngoogle")
+
+
+class ImageGenProtocolTests(unittest.TestCase):
+    """生图协议与地址归一化。"""
+
+    def test_protocol_aliases(self):
+        self.assertEqual(normalize_image_gen_protocol("dashscope"), "dashscope_qwen")
+        self.assertEqual(normalize_image_gen_protocol("openai_compatible"), "openai_images")
+        self.assertEqual(normalize_image_gen_protocol("new_api"), "openai_images")
+        self.assertEqual(normalize_image_gen_protocol("google"), "google_gemini_image")
+
+    def test_infers_dashscope_for_qwen_image_compatible_mode(self):
+        self.assertEqual(
+            infer_image_gen_protocol(
+                "openai_images",
+                "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode",
+                "qwen-image-2.0-pro",
+            ),
+            "dashscope_qwen",
+        )
+
+    def test_normalize_dashscope_base_url(self):
+        self.assertEqual(
+            normalize_dashscope_base_url(
+                "token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+            ),
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1",
+        )
+        self.assertEqual(
+            normalize_dashscope_base_url("https://dashscope.aliyuncs.com/api/v1"),
+            "https://dashscope.aliyuncs.com/api/v1",
+        )
+        self.assertEqual(
+            normalize_dashscope_base_url(
+                "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+            ),
+            "https://dashscope.aliyuncs.com/api/v1",
+        )
+
+    def test_normalize_google_gemini_base_url(self):
+        self.assertEqual(
+            normalize_google_gemini_base_url(
+                "generativelanguage.googleapis.com/v1beta/interactions"
+            ),
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
+
+    def test_google_response_format_from_size(self):
+        self.assertEqual(
+            google_response_format_from_size("1024x1792"),
+            {
+                "type": "image",
+                "aspect_ratio": "9:16",
+                "image_size": "1K",
+            },
+        )
+        self.assertEqual(
+            google_response_format_from_size("16:9 2K"),
+            {
+                "type": "image",
+                "aspect_ratio": "16:9",
+                "image_size": "2K",
+            },
+        )
+
+    def test_normalize_dashscope_size(self):
+        self.assertEqual(normalize_dashscope_size("1024x1024"), "1024*1024")
+
 
 class SaveImageTests(unittest.TestCase):
     """_save_image 的落盘与扩展名推断。"""
@@ -184,6 +301,7 @@ class CreateImageGeneratorTests(unittest.TestCase):
     def _config(self, **overrides):
         kwargs = dict(
             image_gen_enabled=True,
+            image_gen_protocol="openai_images",
             image_gen_api_key="sk-x",
             image_gen_base_url="https://api.x.com/v1",
             image_gen_model="gpt-image-1",
@@ -204,6 +322,26 @@ class CreateImageGeneratorTests(unittest.TestCase):
         gen = create_image_generator(self._config())
         self.assertIsInstance(gen, ImageGenerator)
         self.assertEqual(gen.model, "gpt-image-1")
+
+    def test_qwen_compatible_mode_config_infers_dashscope(self):
+        gen = create_image_generator(self._config(
+            image_gen_base_url="https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode",
+            image_gen_model="qwen-image-2.0-pro",
+        ))
+        self.assertEqual(gen.protocol, "dashscope_qwen")
+        self.assertEqual(
+            gen.base_url,
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1",
+        )
+
+    def test_google_config_can_use_default_base_url(self):
+        gen = create_image_generator(self._config(
+            image_gen_protocol="google_gemini_image",
+            image_gen_base_url="",
+            image_gen_model="gemini-3.1-flash-image",
+        ))
+        self.assertEqual(gen.protocol, "google_gemini_image")
+        self.assertEqual(gen.base_url, "https://generativelanguage.googleapis.com/v1beta")
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +369,7 @@ class BotConfigImageGenDefaultsTests(unittest.TestCase):
     def test_defaults(self):
         cfg = BotConfig()
         self.assertFalse(cfg.image_gen_enabled)
+        self.assertEqual(cfg.image_gen_protocol, "openai_images")
         self.assertEqual(cfg.image_gen_api_key, "")
         self.assertEqual(cfg.image_gen_base_url, "")
         self.assertEqual(cfg.image_gen_model, "")
@@ -240,7 +379,7 @@ class BotConfigImageGenDefaultsTests(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# server.py — 密钥掩码保护与生图配置辅助函数
+# server.py — 生图配置读写辅助函数
 # ---------------------------------------------------------------------------
 
 
@@ -267,12 +406,13 @@ class SecretUpdateTests(unittest.TestCase):
 class ImageGenServerHelpersTests(unittest.TestCase):
     """_image_gen_config_from_raw / _image_gen_updates_from_config。"""
 
-    def test_from_raw_masks_key(self):
-        """读取配置时 API Key 必须掩码返回。"""
+    def test_from_raw_returns_plain_key(self):
+        """读取配置时 API Key 与 LLM 配置保持一致，明文返回给本地 UI。"""
         from src.web.server import _image_gen_config_from_raw
 
         raw = {
             "IMAGE_GEN_ENABLED": "true",
+            "IMAGE_GEN_PROTOCOL": "dashscope_qwen",
             "IMAGE_GEN_API_KEY": "sk-abcdefgh1234",
             "IMAGE_GEN_BASE_URL": "https://api.x.com/v1",
             "IMAGE_GEN_MODEL": "gpt-image-1",
@@ -280,8 +420,8 @@ class ImageGenServerHelpersTests(unittest.TestCase):
         }
         cfg = _image_gen_config_from_raw(raw)
         self.assertTrue(cfg["image_gen_enabled"])
-        self.assertIn("***", cfg["image_gen_api_key"])
-        self.assertNotEqual(cfg["image_gen_api_key"], "sk-abcdefgh1234")
+        self.assertEqual(cfg["image_gen_protocol"], "dashscope_qwen")
+        self.assertEqual(cfg["image_gen_api_key"], "sk-abcdefgh1234")
         self.assertEqual(cfg["image_gen_model"], "gpt-image-1")
 
     def test_updates_from_config(self):
@@ -290,20 +430,39 @@ class ImageGenServerHelpersTests(unittest.TestCase):
 
         config = {
             "image_gen_enabled": True,
-            "image_gen_api_key": "sk-a***wxyz",  # 掩码回传
-            "image_gen_base_url": "https://api.x.com/v1/images/generations",
-            "image_gen_model": "gpt-image-1",
+            "image_gen_protocol": "dashscope_qwen",
+            "image_gen_api_key": "sk-new-image-key",
+            "image_gen_base_url": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode",
+            "image_gen_model": "qwen-image-2.0-pro",
             "image_gen_size": "1024x1024",
         }
-        old_raw = {"IMAGE_GEN_API_KEY": "sk-real-secret-key"}
-        updates = _image_gen_updates_from_config(config, old_raw)
+        updates = _image_gen_updates_from_config(config)
         self.assertEqual(updates["IMAGE_GEN_ENABLED"], "true")
-        # 掩码回传 → 保留原密钥
-        self.assertEqual(updates["IMAGE_GEN_API_KEY"], "sk-real-secret-key")
-        # base_url 自动归一化
-        self.assertEqual(updates["IMAGE_GEN_BASE_URL"], "https://api.x.com/v1")
-        self.assertEqual(updates["IMAGE_GEN_MODEL"], "gpt-image-1")
+        self.assertEqual(updates["IMAGE_GEN_PROTOCOL"], "dashscope_qwen")
+        self.assertEqual(updates["IMAGE_GEN_API_KEY"], "sk-new-image-key")
+        self.assertEqual(
+            updates["IMAGE_GEN_BASE_URL"],
+            "https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1",
+        )
+        self.assertEqual(updates["IMAGE_GEN_MODEL"], "qwen-image-2.0-pro")
         self.assertEqual(updates["IMAGE_GEN_SIZE"], "1024x1024")
+
+    def test_updates_from_config_google(self):
+        """Google Gemini Image 协议保存时会归一化 base URL。"""
+        from src.web.server import _image_gen_updates_from_config
+
+        updates = _image_gen_updates_from_config({
+            "image_gen_protocol": "google_gemini_image",
+            "image_gen_api_key": "google-key",
+            "image_gen_base_url": "generativelanguage.googleapis.com/v1beta/interactions",
+            "image_gen_model": "gemini-3.1-flash-image",
+        })
+        self.assertEqual(updates["IMAGE_GEN_PROTOCOL"], "google_gemini_image")
+        self.assertEqual(updates["IMAGE_GEN_API_KEY"], "google-key")
+        self.assertEqual(
+            updates["IMAGE_GEN_BASE_URL"],
+            "https://generativelanguage.googleapis.com/v1beta",
+        )
 
 
 if __name__ == "__main__":

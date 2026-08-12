@@ -1739,6 +1739,59 @@ class ApiConfigEndpointTests(unittest.TestCase):
                 f.unlink(missing_ok=True)
             tmp_dir.rmdir()
 
+    def test_save_config_updates_image_gen_environment(self):
+        """Saving image generation config stores the plain API key."""
+        tmp_dir = Path(tempfile.mkdtemp())
+        tmp_env = tmp_dir / ".env"
+        tmp_env.write_text(
+            "IMAGE_GEN_ENABLED=false\n"
+            "IMAGE_GEN_API_KEY=old-image-key\n"
+            "IMAGE_GEN_BASE_URL=https://api.example.com/v1\n"
+            "IMAGE_GEN_MODEL=old-image-model\n",
+            encoding="utf-8",
+        )
+        save_body = json.dumps({
+            "image_gen_enabled": True,
+            "image_gen_protocol": "openai_images",
+            "image_gen_api_key": "sk-new-image-key",
+            "image_gen_base_url": "relay.example.com/v1/images/generations",
+            "image_gen_model": "qwen-image-2.0-pro",
+            "image_gen_size": "",
+        }).encode()
+        try:
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("src.web.server._find_or_create_env",
+                      return_value=tmp_env),
+            ):
+                handler, sock = _build_handler(
+                    "/api/config", method="POST",
+                    body=save_body,
+                    headers={"Content-Type": "application/json",
+                             "Content-Length": str(len(save_body))},
+                )
+                parts = sock.get_response_text().split("\r\n\r\n", 1)
+                result = json.loads(parts[1])
+                self.assertTrue(result["ok"])
+                self.assertEqual(os.environ["IMAGE_GEN_API_KEY"], "sk-new-image-key")
+                self.assertEqual(os.environ["IMAGE_GEN_ENABLED"], "true")
+                self.assertEqual(os.environ["IMAGE_GEN_PROTOCOL"], "openai_images")
+                self.assertEqual(
+                    os.environ["IMAGE_GEN_BASE_URL"],
+                    "https://relay.example.com/v1",
+                )
+                self.assertEqual(os.environ["IMAGE_GEN_MODEL"], "qwen-image-2.0-pro")
+
+            saved = tmp_env.read_text(encoding="utf-8")
+            self.assertIn("IMAGE_GEN_API_KEY=sk-new-image-key", saved)
+            self.assertIn("IMAGE_GEN_PROTOCOL=openai_images", saved)
+            self.assertNotIn("IMAGE_GEN_API_KEY=old-image-key", saved)
+        finally:
+            tmp_env.unlink(missing_ok=True)
+            for f in tmp_dir.glob("*"):
+                f.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+
     def test_save_config_invalid_json_returns_error(self):
         """POST /api/config with malformed JSON returns error."""
         handler, sock = _build_handler(

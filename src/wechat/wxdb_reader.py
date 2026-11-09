@@ -699,7 +699,7 @@ class WeChatDB:
             self._save_keys()
         except Exception:
             pass
-        print("[wechatauto] 已自动切换账号目录: %s（%d 个库可用密钥）" % (acct, ok),
+        print("[wcdb] 已自动切换账号目录: %s（%d 个库可用密钥）" % (acct, ok),
               file=sys.stderr)
         return True
 
@@ -809,10 +809,10 @@ class WeChatDB:
                     else:
                         import sys as _sys
                         print(
-                            "[wechatauto] 提示: cfg 主密钥无法复现任何库密钥"
+                            "[wcdb] 提示: cfg 主密钥无法复现任何库密钥"
                             "（微信 4.1.13+ 已知问题，cfg 路径已不可信）。当前依赖 "
                             "Config.Cipher 内存扫描；若扫描也失败，请运行 "
-                            "python -m wechatauto.diagnose_keys",
+                            "python -m src.wechat.wxdb_reader --diagnose",
                             file=_sys.stderr,
                         )
         def _still_now():
@@ -836,13 +836,13 @@ class WeChatDB:
             import sys as _sys
             total = len(self._db_files)
             print(
-                "[wechatauto] 警告: 以下库无可用密钥，无法解密: %s"
+                "[wcdb] 警告: 以下库无可用密钥，无法解密: %s"
                 % ", ".join(still),
                 file=_sys.stderr,
             )
             print(
-                "[wechatauto] 已加载 %d/%d 个密钥 (缓存: %s)。请确认微信已登录，"
-                "可运行 python -m wechatauto.diagnose_keys 排查"
+                "[wcdb] 已加载 %d/%d 个密钥 (缓存: %s)。请确认微信已登录，"
+                "可运行 python -m src.wechat.wxdb_reader --diagnose 排查"
                 % (total - len(still), total, self.keys_file),
                 file=_sys.stderr,
             )
@@ -853,7 +853,7 @@ class WeChatDB:
                 accounts = []
             if len(accounts) > 1:
                 print(
-                    "[wechatauto]  >> 检测到多个微信账号目录: %s；当前使用: %s。"
+                    "[wcdb]  >> 检测到多个微信账号目录: %s；当前使用: %s。"
                     "若仍报错，请用 WeChatDB(account=\"当前登录账号\") 显式指定"
                     % (", ".join(accounts), self.account),
                     file=_sys.stderr,
@@ -1098,7 +1098,7 @@ class WeChatDB:
             self._save_keys()
         except Exception:
             pass
-        print("[wechatauto] 已按密钥校验选定账号目录: %s（%d/%d 个库可用密钥）"
+        print("[wcdb] 已按密钥校验选定账号目录: %s（%d/%d 个库可用密钥）"
               % (acct, ok, len(files)), file=sys.stderr)
         return True
 
@@ -1329,10 +1329,10 @@ class WeChatDB:
         2) 微信进程读取权限（管理员权限不匹配 → OpenProcess 失败 → 0 密钥）；
         3) 多账号目录与所选账号对比（选错账号 → 密钥验证不过）。
         """
-        print("[wechatauto] 密钥诊断: '%s' 无可用密钥" % rel, file=sys.stderr)
+        print("[wcdb] 密钥诊断: '%s' 无可用密钥" % rel, file=sys.stderr)
         bits = 64 if sys.maxsize > 2**32 else 32
         if bits != 64:
-            print("[wechatauto]  >> 当前 Python 是 %d 位，而微信 4.x 是 64 位进程。"
+            print("[wcdb]  >> 当前 Python 是 %d 位，而微信 4.x 是 64 位进程。"
                   "请改用 64 位 Python（python -c \"import struct; print(struct.calcsize('P')*8)\" 应输出 64）"
                   % bits, file=sys.stderr)
         import subprocess as _sp
@@ -1350,7 +1350,7 @@ class WeChatDB:
             if len(parts) >= 2 and parts[1].isdigit():
                 pids.append(int(parts[1]))
         if not pids:
-            print("[wechatauto]  >> 未检测到 Weixin.exe 进程，请先登录微信并保持窗口打开",
+            print("[wcdb]  >> 未检测到 Weixin.exe 进程，请先登录微信并保持窗口打开",
                   file=sys.stderr)
             return
         perms = []
@@ -1364,7 +1364,7 @@ class WeChatDB:
                 perms.append((pid, True, 0))
         blocked = [p for p, ok, err in perms if not ok]
         if blocked:
-            print("[wechatauto]  >> 部分微信进程无法读取内存 (PID %s，错误码 %s)："
+            print("[wcdb]  >> 部分微信进程无法读取内存 (PID %s，错误码 %s)："
                   "请用管理员身份运行 Python（若微信本身以管理员运行），"
                   "或取消微信的\"以管理员身份运行\"后重新登录"
                   % (", ".join(str(p) for p, _, _ in blocked),
@@ -1375,12 +1375,12 @@ class WeChatDB:
             for d in _find_account_dirs(self.db_dir)
         ]
         if len(accounts) > 1:
-            print("[wechatauto]  >> 检测到多个微信账号目录: %s；当前自动选择: %s。"
+            print("[wcdb]  >> 检测到多个微信账号目录: %s；当前自动选择: %s。"
                   "若报错，请用 WeChatDB(account=\"当前登录账号\") 显式指定"
                   % (", ".join(sorted(accounts)), self.account),
                   file=sys.stderr)
-        print("[wechatauto] 密钥诊断完成，以上为自动检测结果。完整排查请运行 "
-              "python -m wechatauto.diagnose_keys", file=sys.stderr)
+        print("[wcdb] 密钥诊断完成，以上为自动检测结果。完整排查请运行 "
+              "python -m src.wechat.wxdb_reader --diagnose", file=sys.stderr)
 
     def _build_lock_for(self, rel: str) -> threading.Lock:
         """按库文件取一把构建锁（注册表本身用一把小锁保护）。"""
@@ -1411,7 +1411,7 @@ class WeChatDB:
                 "常见原因：① 32 位 Python 读不了 64 位微信内存；"
                 "② 本脚本权限低于微信（微信以管理员运行时，脚本也要以管理员运行）；"
                 "③ 多账号机器选错账号（用 WeChatDB(account=\"当前登录账号\") 指定）。"
-                "仍复现请运行 python -m wechatauto.diagnose_keys 并把完整输出发给维护者。"
+                "仍复现请运行 python -m src.wechat.wxdb_reader --diagnose 并把完整输出发给维护者。"
                 "也可删除密钥缓存强制重新提取后重试: %s"
                 % (rel, self.keys_file)
             )
@@ -1701,7 +1701,7 @@ class WeChatDB:
                 except OSError:
                     pass
         if removed:
-            sys.stderr.write("[wechatauto] 已清 %d 个缓存文件等待重建\n" % removed)
+            sys.stderr.write("[wcdb] 已清 %d 个缓存文件等待重建\n" % removed)
 
     def _msg_conns(self, user: str, _retry: bool = True) -> List[Tuple[sqlite3.Connection, str]]:
         """打开消息库并定位用户消息表（调用方负责 close 连接）。
@@ -1718,7 +1718,7 @@ class WeChatDB:
             for c in conns:
                 c.close()
             if _retry and _is_malformed(exc):
-                sys.stderr.write("[wechatauto] 消息库损坏(%s)，清缓存重建并重试\n" % exc)
+                sys.stderr.write("[wcdb] 消息库损坏(%s)，清缓存重建并重试\n" % exc)
                 self._invalidate_cache()
                 return self._msg_conns(user, _retry=False)
             raise
@@ -1756,7 +1756,7 @@ class WeChatDB:
                 if attempt or not _is_malformed(exc):
                     raise
                 sys.stderr.write(
-                    "[wechatauto] 查询到库损坏(%s)，清缓存重建并重试\n" % exc
+                    "[wcdb] 查询到库损坏(%s)，清缓存重建并重试\n" % exc
                 )
                 self._invalidate_cache()
             finally:
@@ -3381,3 +3381,23 @@ def auto_detect_db_dir() -> Optional[str]:
         if hit:
             return hit
     return None
+
+
+if __name__ == "__main__":
+    import argparse
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    parser = argparse.ArgumentParser(description="WeChat 4.x WCDB 读取诊断")
+    parser.add_argument("--diagnose", action="store_true", help="提取密钥并输出状态")
+    parser.add_argument("--db-dir", default=None, help="微信数据根目录（默认自动检测）")
+    parser.add_argument("--account", default=None, help="账号目录名（默认自动选择）")
+    args = parser.parse_args()
+
+    reader = WeChatDB(db_dir=args.db_dir, account=args.account)
+    print("account:", reader.account)
+    print("keyed:", len(reader._keys), "/", len(reader._db_files))
+    if getattr(reader, "unkeyed", None):
+        print("unkeyed:", reader.unkeyed)
+    for rel, key in list(reader._keys.items())[:8]:
+        print("  %s -> %s..." % (rel, bytes(key).hex()[:16]))
+

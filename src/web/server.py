@@ -1233,6 +1233,8 @@ def _platform_dependency_report(system_name=None, import_checker=None, command_c
         "PIL": "Pillow",
         "psutil": "psutil",
         "pyperclip": "pyperclip",
+        "cryptography": "cryptography",
+        "zstandard": "zstandard",
     }
     if system == "Windows":
         req_mapping.update({

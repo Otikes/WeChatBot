@@ -1968,17 +1968,22 @@ class ReadRecentLogsTests(unittest.TestCase):
 
     def test_parses_standard_log_entries(self):
         """Parses timestamp, level, module, msg from log lines."""
-        from src.web.server import _read_recent_logs
+        from src.web.server import _LOG_TAIL_CACHE, _read_recent_logs
         log_content = (
             "2024-06-01 12:00:00 [INFO] bot: Bot started\n"
             "2024-06-01 12:01:00 [ERROR] router: Something went wrong\n"
             "Traceback line without timestamp\n"
         )
-        with (
-            patch.object(Path, "exists", return_value=True),
-            patch.object(Path, "read_text", return_value=log_content),
-        ):
-            result = _read_recent_logs()
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "bot.log"
+            log_path.write_text(log_content, encoding="utf-8")
+            _LOG_TAIL_CACHE["sig"] = None
+            _LOG_TAIL_CACHE["result"] = None
+            with patch(
+                "src.web.server.resolve_webot_storage_path",
+                return_value=log_path,
+            ):
+                result = _read_recent_logs()
         self.assertTrue(result["ok"])
         entries = result["logs"]
         self.assertGreaterEqual(len(entries), 2)

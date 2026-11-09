@@ -247,6 +247,11 @@ class BotConfig:
     # are auto-replied; "*" = all discovered friends.  Selected friends get
     # an automatic AI reply to every text message they send.
     wechat_friends: str = ""
+    # AI conversation switches.  Disabling one only stops chat replies in
+    # that context; summaries, image generation and other features are
+    # unaffected.
+    group_chat_enabled: bool = True
+    friend_chat_enabled: bool = True
     # Custom WeChat data directory. Leave empty to auto-detect from Documents.
     # Set to the parent directory containing wxid_* folders (e.g. D:\WeChatData).
     wechat_data_dir: str = ""
@@ -592,6 +597,8 @@ def load_config() -> BotConfig:
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_groups": _decode_wechat_groups(os.getenv("WECHAT_GROUPS", "*")),
         "wechat_friends": _decode_wechat_friends(os.getenv("WECHAT_FRIENDS", "")),
+        "group_chat_enabled": os.getenv("GROUP_CHAT_ENABLED", "true").strip().lower() == "true",
+        "friend_chat_enabled": os.getenv("FRIEND_CHAT_ENABLED", "true").strip().lower() == "true",
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),
         "webot_data_dir": str(get_webot_data_dir()),
         "bot_display_name": _sanitize_display_name(os.getenv("BOT_DISPLAY_NAME", "群聊小助手")),

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowDown, Trash, MagnifyingGlass } from '@phosphor-icons/react'
 
@@ -10,6 +10,8 @@ const LEVEL_STYLES = {
 }
 const LEVEL_LABELS = { ALL: '全部', INFO: 'INFO', WARNING: '警告', ERROR: '错误', DEBUG: 'DEBUG' }
 const FILTER_OPTIONS = ['ALL', 'INFO', 'WARNING', 'ERROR', 'DEBUG']
+const MAX_LOGS = 1000
+const HIGHLIGHT_REGEX = /(\[[^\]]+\]|收到消息|发送消息|\b\d+(?:\.\d+)?(?:ms|s|毫秒|秒)\b|\b(?:OK|SUCCESS|ERROR)\b|成功|失败)/g
 
 function apiUrl(path) {
   if (window.location.port === '5173') return `http://127.0.0.1:7327${path}`
@@ -18,8 +20,7 @@ function apiUrl(path) {
 
 function renderHighlightedMsg(msg) {
   if (!msg) return ''
-  const regex = /(\[[^\]]+\]|收到消息|发送消息|\b\d+(?:\.\d+)?(?:ms|s|毫秒|秒)\b|\b(?:OK|SUCCESS|ERROR)\b|成功|失败)/g
-  const parts = msg.split(regex)
+  const parts = msg.split(HIGHLIGHT_REGEX)
   if (parts.length === 1) return <span>{msg}</span>
 
   return (
@@ -81,14 +82,17 @@ export default function LogViewer() {
   const [autoScroll, setAutoScroll] = useState(true)
   const SCROLL_THRESHOLD = 50  // px from bottom considered "at bottom"
 
-  const filtered = logs.filter(l => {
-    const matchesLevel = filter === 'ALL' || l.level === filter
-    const matchesSearch = !searchQuery ||
-      l.msg.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      l.ts.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      l.level.toLowerCase().includes(searchQuery.toLowerCase())
-    return matchesLevel && matchesSearch
-  })
+  const filtered = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    return logs.filter(l => {
+      const matchesLevel = filter === 'ALL' || l.level === filter
+      const matchesSearch = !query ||
+        l.msg.toLowerCase().includes(query) ||
+        l.ts.toLowerCase().includes(query) ||
+        l.level.toLowerCase().includes(query)
+      return matchesLevel && matchesSearch
+    })
+  }, [logs, filter, searchQuery])
 
   const fetchLogs = useCallback(async () => {
     const generation = requestGenerationRef.current
@@ -111,7 +115,13 @@ export default function LogViewer() {
           if (added) {
             setClearedManually(false)
           }
-          return merged.length > 2000 ? merged.slice(-2000) : merged
+          if (merged.length > MAX_LOGS) {
+            const trimmed = merged.slice(-MAX_LOGS)
+            // 同步收缩去重集合，避免长时间运行后内存与比对成本持续膨胀
+            seenRef.current = new Set(trimmed.map(entry => entry.raw))
+            return trimmed
+          }
+          return merged
         })
       }
     } catch {}
@@ -251,12 +261,9 @@ export default function LogViewer() {
             </div>
           )
         ) : (
-          filtered.map((log, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, x: -4 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: Math.min(i * 0.003, 0.2) }}
+          filtered.map(log => (
+            <div
+              key={log.raw}
               className="flex items-center gap-4 px-4 py-2 hover:bg-bg-main/50 dark:hover:bg-white/5 transition-colors border-0"
             >
               <span className="text-text-muted shrink-0 text-xs font-mono" style={{ width: 70 }}>{log.ts}</span>
@@ -273,7 +280,7 @@ export default function LogViewer() {
                 {log.level}
               </span>
               <span className="text-text-main break-all select-all font-mono">{renderHighlightedMsg(log.msg)}</span>
-            </motion.div>
+            </div>
           ))
         )}
       </motion.div>

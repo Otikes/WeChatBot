@@ -472,17 +472,56 @@ class TestFriendChatConfig:
 
         page.goto(BASE_URL, timeout=10000)
         page.wait_for_timeout(1000)
-        config_btn = page.locator("button:has-text('系统配置')")
-        if config_btn.count() > 0:
-            config_btn.first.click()
-            page.wait_for_timeout(300)
-        identity_btn = page.locator("button:has-text('机器人身份')")
-        if identity_btn.count() > 0:
-            identity_btn.first.click()
+        friend_btn = page.locator("button:has-text('好友私聊')")
+        if friend_btn.count() > 0:
+            friend_btn.first.click()
             page.wait_for_timeout(500)
         page_text = page.inner_text("body")
         assert "好友私聊" in page_text
         assert "未勾选任何好友" in page_text
+
+    def test_save_selection_only_updates_friends(self, server):
+        project_root = Path(__file__).resolve().parent.parent
+        env_path = project_root / ".env"
+
+        status, data = _api_post(
+            "/api/friends/selection", {"friends": "wxid_e2e_test"}
+        )
+        assert status == 200
+        assert data["ok"] is True
+
+        text = env_path.read_text(encoding="utf-8")
+        assert "WECHAT_FRIENDS=wxid_e2e_test" in text
+        # Saving friends must not reset any other configuration.
+        assert "WECHAT_GROUPS=*" in text
+        assert "OPENAI_MODEL=chat-model" in text
+
+        # Reset so the checklist test still sees an empty selection.
+        _api_post("/api/friends/selection", {"friends": ""})
+
+
+class TestChatSwitches:
+    def test_load_config_exposes_chat_switches(self, server):
+        status, data = _api_get("/api/load-config")
+        assert status == 200
+        assert data["ok"] is True
+        assert data["config"]["group_chat_enabled"] is True
+        assert data["config"]["friend_chat_enabled"] is True
+
+    def test_ai_chat_switches_visible(self, page):
+        page.goto(BASE_URL, timeout=10000)
+        page.wait_for_timeout(1000)
+        features_btn = page.locator("button:has-text('功能开关')")
+        if features_btn.count() > 0:
+            features_btn.first.click()
+            page.wait_for_timeout(300)
+        chat_tab = page.locator("button:has-text('AI 对话')")
+        if chat_tab.count() > 0:
+            chat_tab.first.click()
+            page.wait_for_timeout(500)
+        page_text = page.inner_text("body")
+        assert "群聊 AI 对话" in page_text
+        assert "好友私聊 AI 对话" in page_text
 
 
 class TestConfigExportImport:

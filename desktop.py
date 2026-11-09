@@ -20,6 +20,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if getattr(sys, "frozen", False):
     PROJECT_ROOT = Path(sys.executable).resolve().parent
 
+# WebView2 的 GPU 硬件合成在部分显卡/驱动环境下会让窗口一直纯白（页面其实
+# 已加载完成）。关闭 GPU 加速，改用软件渲染，保证 Dashboard 正常显示。
+os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--disable-gpu")
+
 
 def _write_crash_log(exc_info: str) -> None:
     """Write crash details to a file for windowed-mode debugging."""

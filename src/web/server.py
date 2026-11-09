@@ -103,6 +103,8 @@ def _find_or_create_env() -> Path:
         "BOT_DISPLAY_NAME=\n"
         "WECHAT_GROUPS=\n"
         "WECHAT_FRIENDS=\n"
+        "GROUP_CHAT_ENABLED=true\n"
+        "FRIEND_CHAT_ENABLED=true\n"
         "WEBOT_DATA_DIR=\n",
         encoding="utf-8",
     )
@@ -1117,6 +1119,9 @@ def _list_dir_entries(target: Path) -> list[dict]:
     return entries
 
 
+_LOG_TAIL_CACHE = {"sig": None, "result": None}
+
+
 def _read_recent_logs():
     """Read the last 500 lines from the bot log file. Returns JSON-serializable list.
 
@@ -1131,7 +1136,26 @@ def _read_recent_logs():
     if not log_path.exists():
         return {"ok": True, "logs": [], "message": "日志文件尚未创建"}
     try:
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        stat = log_path.stat()
+        sig = (str(log_path), stat.st_mtime_ns, stat.st_size)
+        if _LOG_TAIL_CACHE["sig"] == sig and _LOG_TAIL_CACHE["result"] is not None:
+            return _LOG_TAIL_CACHE["result"]
+
+        # 只从文件尾部按块读取，日志文件再大也不会全量加载
+        with open(log_path, "rb") as f:
+            size = stat.st_size
+            block = 128 * 1024
+            start = max(0, size - block)
+            lines = []
+            while True:
+                f.seek(start)
+                lines = f.read(size - start).decode("utf-8", errors="replace").splitlines()
+                if start > 0:
+                    lines = lines[1:]  # 丢弃被截断的首行
+                if len(lines) >= 500 or start == 0:
+                    break
+                block *= 2
+                start = max(0, size - block)
         # Return last 500 lines
         recent = lines[-500:]
         # Regex: timestamp [LEVEL] module: message
@@ -1157,7 +1181,10 @@ def _read_recent_logs():
                 entry["module"] = ""
                 entry["msg"] = line
             entries.append(entry)
-        return {"ok": True, "logs": entries}
+        result = {"ok": True, "logs": entries}
+        _LOG_TAIL_CACHE["sig"] = sig
+        _LOG_TAIL_CACHE["result"] = result
+        return result
     except Exception as e:
         return {"ok": False, "logs": [], "error": str(e)}
 
@@ -1196,6 +1223,9 @@ def _clear_log_file():
         if cleared_handlers == 0:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text("", encoding="utf-8")
+
+        _LOG_TAIL_CACHE["sig"] = None
+        _LOG_TAIL_CACHE["result"] = None
 
         return {
             "ok": True,
@@ -1704,8 +1734,27 @@ def _handle_ws_upgrade(headers, conn):
 class _UIHandler(SimpleHTTPRequestHandler):
     """HTTP handler: static files + WebSocket upgrade + API."""
 
+    # HTTP/1.1 支持 keep-alive，避免前端每次请求都重新建立 TCP 连接
+    protocol_version = "HTTP/1.1"
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(UI_DIR), **kwargs)
+
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except (ConnectionResetError, BrokenPipeError):
+            # keep-alive 连接被客户端直接关闭时属于正常情况，静默结束
+            self.close_connection = True
+
+    def end_headers(self):
+        path = self.path.split("?", 1)[0]
+        if path.startswith("/assets/"):
+            # Vite 产物带 hash，可长期强缓存
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        elif path == "/" or path.endswith(".html"):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -1713,6 +1762,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_POST(self):
@@ -1727,6 +1777,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/onboarding/step2",
                          "/api/onboarding/step3", "/api/onboarding/step4",
                          "/api/ai/models",
+                         "/api/friends/selection",
                          "/api/sandbox/test",
                          "/api/lots",
                          "/api/todos/action",
@@ -1734,10 +1785,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/wechat-data-dir/detect"):
             self.do_GET()
         else:
+            body = json.dumps({"ok": False, "error": "Method not allowed"}).encode()
             self.send_response(405)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(json.dumps({"ok": False, "error": "Method not allowed"}).encode())
+            self.wfile.write(body)
 
     def do_GET(self):
         self._handle_request()
@@ -1758,6 +1811,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         )
                     except Exception:
                         _status.remove_client(self.request)
+                        self.close_connection = True
                         return
                     # Read loop (ping/pong handled in _read_ws_frame)
                     while True:
@@ -1768,10 +1822,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         except Exception:
                             break
                     _status.remove_client(self.request)
+                    self.close_connection = True
                     return
                 else:
                     self.send_response(400)
+                    self.send_header("Content-Length", "0")
                     self.end_headers()
+                    self.close_connection = True
                     return
 
         # ── API: Start bot ────────────────────────────────────────────
@@ -1814,6 +1871,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                 "wechat_groups": _decode_wechat_groups(raw.get("WECHAT_GROUPS", "*")),
                 "wechat_friends": _decode_wechat_friends(raw.get("WECHAT_FRIENDS", "")),
+                "group_chat_enabled": raw.get("GROUP_CHAT_ENABLED", "true").lower() == "true",
+                "friend_chat_enabled": raw.get("FRIEND_CHAT_ENABLED", "true").lower() == "true",
                 "fun_enabled": raw.get("FUN_ENABLED", "true").lower() == "true",
                 "proactive_enabled": raw.get("PROACTIVE_ENABLED", "false").lower() == "true",
                 "proactive_rate_window_sec": int(raw.get("PROACTIVE_RATE_WINDOW_SEC", "120")),
@@ -1869,6 +1928,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "wechat_groups": raw.get("WECHAT_GROUPS", "*"),
                     "wechat_friends": raw.get("WECHAT_FRIENDS", ""),
+                    "group_chat_enabled": raw.get("GROUP_CHAT_ENABLED", "true").lower() == "true",
+                    "friend_chat_enabled": raw.get("FRIEND_CHAT_ENABLED", "true").lower() == "true",
                     "fun_enabled": raw.get("FUN_ENABLED", "true").lower() == "true",
                     "proactive_enabled": raw.get("PROACTIVE_ENABLED", "false").lower() == "true",
                     "proactive_rate_window_sec": int(raw.get("PROACTIVE_RATE_WINDOW_SEC", "120")),
@@ -1928,6 +1989,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "WECHAT_BACKEND": config.get("wechat_backend"),
                     "WECHAT_GROUPS": config.get("wechat_groups") or "*",
                     "WECHAT_FRIENDS": config.get("wechat_friends", ""),
+                    "GROUP_CHAT_ENABLED": str(config.get("group_chat_enabled", True)).lower(),
+                    "FRIEND_CHAT_ENABLED": str(config.get("friend_chat_enabled", True)).lower(),
                     "FUN_ENABLED": str(config.get("fun_enabled", True)).lower(),
                     "PROACTIVE_ENABLED": str(config.get("proactive_enabled", False)).lower(),
                     "PROACTIVE_RATE_WINDOW_SEC": str(config.get("proactive_rate_window_sec", 120)),
@@ -2026,6 +2089,8 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "WECHAT_BACKEND": config.get("wechat_backend"),
                     "WECHAT_GROUPS": config.get("wechat_groups") or "*",
                     "WECHAT_FRIENDS": config.get("wechat_friends", ""),
+                    "GROUP_CHAT_ENABLED": str(config.get("group_chat_enabled", True)).lower(),
+                    "FRIEND_CHAT_ENABLED": str(config.get("friend_chat_enabled", True)).lower(),
                     "FUN_ENABLED": str(config.get("fun_enabled", True)).lower(),
                     "PROACTIVE_ENABLED": str(config.get("proactive_enabled", False)).lower(),
                     "PROACTIVE_RATE_WINDOW_SEC": str(config.get("proactive_rate_window_sec", 120)),
@@ -2145,6 +2210,28 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": True, "friends": friends})
             except Exception as e:
                 logger.exception("Failed to load friend list")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Save friend chat selection (only writes WECHAT_FRIENDS) ──
+        if self.path == "/api/friends/selection":
+            if self.command != "POST":
+                self.send_json({"ok": False, "error": "Method not allowed"})
+                return
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len) if content_len else b"{}"
+            try:
+                payload = json.loads(body)
+                # Keep "*" or a URL-encoded comma list; empty means no friends.
+                value = str(payload.get("friends", "") or "").strip()
+                env_path = _find_or_create_env()
+                _write_env_updates(env_path, {"WECHAT_FRIENDS": value})
+                logger.info(
+                    "Saved friend chat selection: %s", value or "(none)"
+                )
+                self.send_json({"ok": True, "wechat_friends": value})
+            except Exception as e:
+                logger.exception("Failed to save friend chat selection")
                 self.send_json({"ok": False, "error": str(e)})
             return
 
@@ -2559,11 +2646,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
         # ── API: Get status ───────────────────────────────────────────
         if self.path == "/api/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(_status.snapshot(), ensure_ascii=False).encode())
+            self.send_json(_status.snapshot())
             return
 
         # ── API: Get logs ────────────────────────────────────────────
@@ -3057,10 +3140,12 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
         # ── SPA fallback: serve index.html for unknown paths ──────────
         if self.command != "GET" and self.command != "HEAD":
+            body = json.dumps({"ok": False, "error": "Method not allowed"}).encode()
             self.send_response(405)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(json.dumps({"ok": False, "error": "Method not allowed"}).encode())
+            self.wfile.write(body)
             return
 
         path = self.translate_path(self.path)
@@ -3078,13 +3163,16 @@ class _UIHandler(SimpleHTTPRequestHandler):
             logger.warning("HTTP %s", format % args)
 
     def send_json(self, data):
+        body = json.dumps(data, ensure_ascii=False).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
-        self.wfile.write(json.dumps(data, ensure_ascii=False).encode())
+        self.wfile.write(body)
 
 
 def _run_server(host, port):

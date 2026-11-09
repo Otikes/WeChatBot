@@ -34,6 +34,10 @@ class FakeNicknames:
 
 class FakeStore:
     @staticmethod
+    def insert_message(msg):
+        return True
+
+    @staticmethod
     def get_messages_since(chat_id, since, limit=20):
         return []
 
@@ -42,12 +46,44 @@ class FakeStore:
         return None
 
 
+class FakeDetector:
+    @staticmethod
+    def is_trigger(**kwargs):
+        return False
+
+
 def _router():
     router = object.__new__(MessageRouter)
     router._store = FakeStore()
     router._summarizer = FakeSummarizer()
     router._nicks = FakeNicknames()
-    router._config = SimpleNamespace(bot_display_name="小助手")
+    router._config = SimpleNamespace(
+        bot_display_name="小助手",
+        friend_chat_enabled=True,
+    )
+    return router
+
+
+def _group_router(group_chat_enabled=True):
+    router = _router()
+    router._config = SimpleNamespace(
+        bot_display_name="小助手",
+        welcome_enabled=False,
+        fun_enabled=False,
+        admin_wxid="",
+        image_gen_enabled=False,
+        group_chat_enabled=group_chat_enabled,
+        friend_chat_enabled=True,
+    )
+    router._memory = SimpleNamespace(check_and_consolidate=lambda *a: None)
+    router._sticky = None
+    router._feishu_export = None
+    router._admin = SimpleNamespace(handle=lambda content, name: None)
+    router._todo_handler = None
+    router._todo_store = None
+    router._image_gen = None
+    router._detector = FakeDetector()
+    router.messages_processed = 0
     return router
 
 
@@ -127,6 +163,35 @@ class FriendChatRoutingTests(unittest.TestCase):
         )
 
         self.assertEqual(router._summarizer.calls[0]["message"], "今天好累")
+
+    def test_friend_chat_switch_off_returns_none(self):
+        router = _router()
+        router._config.friend_chat_enabled = False
+        reply = router._handle_friend_chat(_msg())
+
+        self.assertIsNone(reply)
+        self.assertEqual(router._summarizer.calls, [])
+
+    def test_group_chat_switch_off_skips_ai_chat(self):
+        router = _group_router(group_chat_enabled=False)
+        reply = router.handle(_msg(
+            is_group=True,
+            is_at_mentioned=True,
+            content="@小助手 今天好累",
+        ))
+
+        self.assertIsNone(reply)
+        self.assertEqual(router._summarizer.calls, [])
+
+    def test_group_chat_switch_on_still_replies(self):
+        router = _group_router(group_chat_enabled=True)
+        reply = router.handle(_msg(
+            is_group=True,
+            is_at_mentioned=True,
+            content="@小助手 今天好累",
+        ))
+
+        self.assertEqual(reply, "@Alice 你好呀")
 
 
 if __name__ == "__main__":

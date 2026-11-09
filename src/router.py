@@ -321,7 +321,11 @@ class MessageRouter:
             ):
                 reply = self._handle_summary(msg)
 
-            if reply is None and clean_content:
+            if (
+                reply is None
+                and clean_content
+                and getattr(self._config, "group_chat_enabled", True)
+            ):
                 reply = self._handle_chat(msg, clean_content)
 
         else:
@@ -350,7 +354,9 @@ class MessageRouter:
                 reply = self._handle_summary(msg)
 
             # ── Proactive path (rate-based ambient participation) ─
-            if reply is None:
+            # Also gated by the group chat switch: when group AI chat is
+            # turned off the bot does not speak up on its own either.
+            if reply is None and getattr(self._config, "group_chat_enabled", True):
                 should_speak, mode, reason = self._proactive.should_speak(msg)
                 if should_speak and mode is not None:
                     reply = self._handle_proactive_chat(msg, mode)
@@ -534,6 +540,9 @@ class MessageRouter:
         voice) message is treated as a conversation turn.  Stickers,
         images and files are skipped — the AI cannot interpret them.
         """
+        if not getattr(self._config, "friend_chat_enabled", True):
+            return None
+
         content = (msg.get("content") or "").strip()
         if not content:
             return None

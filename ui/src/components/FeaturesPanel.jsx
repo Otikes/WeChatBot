@@ -18,11 +18,11 @@ const paramPanel = {
 }
 
 const sectionTitles = {
-  summarize: '总结功能', feishu: '飞书同步', fun: '趣味抽签',
+  summarize: '总结功能', chat: 'AI 对话', feishu: '飞书同步', fun: '趣味抽签',
   proactive: '主动发言', sticky: '粘性提及', welcome: '欢迎新人', log: '日志级别',
 }
 const sectionAccents = {
-  summarize: '#18E299', feishu: '#3772cf', fun: '#c37d0d',
+  summarize: '#18E299', chat: '#4C9B72', feishu: '#3772cf', fun: '#c37d0d',
   proactive: '#10b981', sticky: '#8b5cf6', welcome: '#f59e0b', log: '#6b7280',
 }
 
@@ -34,6 +34,39 @@ function ParamRow({ label, hint, children }) {
       <p className="text-[14px] text-text-main font-medium">{label}</p>
       <p className="text-xs text-text-muted mt-0.5 mb-2">{hint}</p>
       {children}
+    </div>
+  )
+}
+
+// ── AI Chat ─────────────────────────────────────────────────────────
+
+function ChatSection({ form, update }) {
+  const items = [
+    {
+      key: 'group_chat_enabled',
+      title: '群聊 AI 对话',
+      hint: '关闭后，群里 @机器人 的闲聊不再回复；总结、生图、群聊待办等功能不受影响，主动发言也会停止',
+    },
+    {
+      key: 'friend_chat_enabled',
+      title: '好友私聊 AI 对话',
+      hint: '关闭后，已勾选的好友发来消息也不会获得 AI 回复',
+    },
+  ]
+  return (
+    <div className="space-y-7">
+      {items.map(item => (
+        <div key={item.key} className="flex items-center justify-between">
+          <div className="flex-1 mr-8">
+            <p className="text-[15px] text-text-main font-medium">{item.title}</p>
+            <p className="text-sm text-text-muted mt-1.5">{item.hint}</p>
+          </div>
+          <Toggle
+            enabled={form[item.key] !== false}
+            onChange={v => update(item.key, v)}
+          />
+        </div>
+      ))}
     </div>
   )
 }
@@ -345,6 +378,7 @@ export default function FeaturesPanel({ activeSection, onNavigate }) {
   const [loaded, setLoaded] = useState(false)
   const [form, setForm] = useState({
     summarize_enabled: true, fallback_window_hours: 8, trigger_keywords: [],
+    group_chat_enabled: true, friend_chat_enabled: true,
     fun_enabled: true,
     proactive_enabled: false, proactive_rate_window_sec: 120,
     proactive_rate_quiet: 1.5, proactive_rate_casual: 4.0,
@@ -386,6 +420,14 @@ export default function FeaturesPanel({ activeSection, onNavigate }) {
         body: JSON.stringify({
           summarize_enabled: form.summarize_enabled, fallback_window_hours: form.fallback_window_hours,
           trigger_keywords: form.trigger_keywords,
+          group_chat_enabled: form.group_chat_enabled,
+          friend_chat_enabled: form.friend_chat_enabled,
+          // Conversation targets are edited elsewhere; send them back so
+          // saving feature switches cannot reset an existing selection.
+          bot_display_name: form.bot_display_name,
+          wechat_backend: form.wechat_backend,
+          wechat_groups: form.wechat_groups,
+          wechat_friends: form.wechat_friends,
           fun_enabled: form.fun_enabled,
           proactive_enabled: form.proactive_enabled, proactive_rate_window_sec: form.proactive_rate_window_sec,
           proactive_rate_quiet: form.proactive_rate_quiet, proactive_rate_casual: form.proactive_rate_casual,
@@ -442,6 +484,7 @@ export default function FeaturesPanel({ activeSection, onNavigate }) {
             <div className="bg-bg-card border border-border-main rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
               <div className="p-7">
                 {activeSection === 'summarize' && <SummarizeSection form={form} update={update} />}
+                {activeSection === 'chat' && <ChatSection form={form} update={update} />}
                 {activeSection === 'feishu' && <FeishuSection form={form} update={update} />}
                 {activeSection === 'fun' && <FunSection form={form} update={update} />}
                 {activeSection === 'proactive' && <ProactiveSection form={form} update={update} />}

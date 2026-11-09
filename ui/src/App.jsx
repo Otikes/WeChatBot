@@ -1,13 +1,26 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare } from '@phosphor-icons/react'
+import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare, ChatCircleDots } from '@phosphor-icons/react'
 import Dashboard from './components/Dashboard'
-import ConfigPanel from './components/ConfigPanel'
-import FeaturesPanel from './components/FeaturesPanel'
-import NicknameEditor from './components/NicknameEditor'
-import LogViewer from './components/LogViewer'
-import TodoManager from './components/TodoManager'
-import Onboarding from './components/Onboarding'
+
+// 非首屏面板按需加载，避免启动时解析全部面板代码
+// 这些面板不依赖实时状态，memo 后不会被状态推送触发重渲染
+const ConfigPanel = memo(lazy(() => import('./components/ConfigPanel')))
+const FeaturesPanel = memo(lazy(() => import('./components/FeaturesPanel')))
+const FriendChatPanel = memo(lazy(() => import('./components/FriendChatPanel')))
+const NicknameEditor = memo(lazy(() => import('./components/NicknameEditor')))
+const LogViewer = memo(lazy(() => import('./components/LogViewer')))
+const TodoManager = memo(lazy(() => import('./components/TodoManager')))
+const Onboarding = memo(lazy(() => import('./components/Onboarding')))
+
+function PanelFallback() {
+  return (
+    <div className="flex items-center justify-center py-24 text-text-muted">
+      <Spinner size={22} weight="bold" className="animate-spin text-brand-green mr-3" />
+      <span className="text-xs font-mono">正在加载...</span>
+    </div>
+  )
+}
 
 const iconVariants = {
   hover: { y: -1.5, scale: 1.05, transition: { type: 'spring', stiffness: 300, damping: 15 } }
@@ -30,6 +43,7 @@ const TABS = [
     id: 'features', label: '功能开关', icon: Sliders,
     subs: [
       { id: 'summarize', label: '总结功能' },
+      { id: 'chat', label: 'AI 对话' },
       { id: 'feishu', label: '飞书同步' },
       { id: 'fun', label: '趣味抽签' },
       { id: 'proactive', label: '主动发言' },
@@ -38,6 +52,7 @@ const TABS = [
       { id: 'log', label: '日志级别' },
     ],
   },
+  { id: 'friend-chat', label: '好友私聊', icon: ChatCircleDots },
   { id: 'nicknames', label: '群友昵称', icon: Users },
   { id: 'todo-manager', label: '群聊待办', icon: CheckSquare },
   { id: 'logs', label: '运行日志', icon: Scroll },
@@ -152,7 +167,11 @@ export default function App() {
 
   // Onboarding
   if (!onboardingDone) {
-    return <Onboarding onComplete={() => setOnboardingDone(true)} />
+    return (
+      <Suspense fallback={<PanelFallback />}>
+        <Onboarding onComplete={() => setOnboardingDone(true)} />
+      </Suspense>
+    )
   }
 
   return (
@@ -303,12 +322,15 @@ export default function App() {
             transition={{ duration: 0.2 }}
             className="p-8"
           >
+            <Suspense fallback={<PanelFallback />}>
             {activeTab === 'dashboard' && <Dashboard status={status} onResetComplete={handleResetComplete} />}
             {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
             {activeTab === 'features' && <FeaturesPanel activeSection={featuresSection} onNavigate={setFeaturesSection} />}
+            {activeTab === 'friend-chat' && <FriendChatPanel />}
             {activeTab === 'nicknames' && <NicknameEditor />}
             {activeTab === 'todo-manager' && <TodoManager />}
             {activeTab === 'logs' && <LogViewer />}
+            </Suspense>
           </motion.div>
         </AnimatePresence>
       </div>

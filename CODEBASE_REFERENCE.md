@@ -98,7 +98,9 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `OPENAI_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
-| `WECHAT_FRIENDS` | `str` | `""` (不回复任何好友) | `src/config.py` (经 `_decode_wechat_friends`；空值不展开为 `*`) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_friends()` |
+| `WECHAT_FRIENDS` | `str` | `""` (不回复任何好友) | `src/config.py` (经 `_decode_wechat_friends`；空值不展开为 `*`) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_friends(), _poll_cycle()` |
+| `GROUP_CHAT_ENABLED` | `bool` | `True` | `src/config.py` | `src/router.py:handle()` (群聊 @ 对话与主动发言) |
+| `FRIEND_CHAT_ENABLED` | `bool` | `True` | `src/config.py` | `src/router.py:_handle_friend_chat()`, `src/wechat/wcdb_backend.py:_poll_cycle()` |
 | `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/local_wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
 | `WEBOT_DATA_DIR` | `str` | 当前应用目录下 `data/` (留空) | `src/config.py` | `src/config.py` 路径辅助函数；webot 自有 DB、日志、昵称、模板、群缓存、语音缓存、崩溃日志 |
 | `BOT_DISPLAY_NAME` | `str` | `"群聊小助手"` | `src/config.py` (经 `_sanitize_display_name` 清洗) | `src/router.py:handle()` (多处), `src/bot.py:_log_banner()` |
@@ -274,13 +276,13 @@ image_gen_keywords: list[str] = [
 |---|---|---|---|---|
 | `MessageRouter.__init__()` | ~45 | 初始化消息路由器 | `store, detector, summarizer, admin_handler, nickname_service, config, feishu_export_service=None` | `None` |
 | `MessageRouter._strip_markdown(text)` | ~65 | 去除 Markdown 格式(静态方法) | `text: str` | `str` |
-| `MessageRouter.handle(msg)` | ~70 | 处理传入群聊消息的主入口；返回 `ImageReply` 时由后端走图片发送通道 | `msg: dict` | `str \| ImageReply \| None` (回复文本或图片) |
+| `MessageRouter.handle(msg)` | ~70 | 处理传入群聊消息的主入口；`GROUP_CHAT_ENABLED=false` 时跳过 @ 对话与主动发言（总结/生图/待办不受影响）；返回 `ImageReply` 时由后端走图片发送通道 | `msg: dict` | `str \| ImageReply \| None` (回复文本或图片) |
 | `MessageRouter._load_group_names()` | ~115 | 加载 chat_id → 群名映射(懒加载) | 无 | `dict[str, str]` |
 | `MessageRouter._is_todo_group(chat_id)` | ~125 | 判断群聊是否启用待办功能 | `chat_id: str` | `bool` |
 | `MessageRouter._get_group_memory(chat_id)` | ~140 | 获取群聊记忆文本 | `chat_id: str` | `str` |
 | `MessageRouter._handle_summary(msg)` | ~145 | 生成聊天总结 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_chat(msg, clean_content, is_group=True)` | ~230 | 处理 @bot AI 对话；好友私聊时不加 `@` 前缀 | `msg: dict, clean_content: str, is_group: bool` | `str \| None` |
-| `MessageRouter._handle_friend_chat(msg)` | ~210 | 处理已勾选好友的私聊消息：无需 @，仅文本/已转写语音自动回复，非文本与过期消息跳过 | `msg: dict` | `str \| None` |
+| `MessageRouter._handle_friend_chat(msg)` | ~210 | 处理已勾选好友的私聊消息：`FRIEND_CHAT_ENABLED=false` 直接返回；无需 @，仅文本/已转写语音自动回复，非文本与过期消息跳过 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_image_gen(msg, clean_content)` | — | 处理 @bot 生图请求：提取提示词 → 调用 Images API → 返回 `ImageReply`，失败回文本错误 | `msg: dict, clean_content: str` | `ImageReply \| str` |
 | `MessageRouter._handle_welcome(msg)` | ~280 | 发送新成员欢迎消息 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_proactive_chat(msg, mode)` | ~305 | 处理主动发言 | `msg: dict, mode: ProactiveMode` | `str \| None` |
@@ -374,7 +376,7 @@ image_gen_keywords: list[str] = [
 | `_load_cached_friend_names()` | 读取 `<WEBOT_DATA_DIR>/friend_names.json` 好友映射 | 无 | `dict[str, dict]` |
 | `_save_friend_names(friends)` | 持久化好友映射(静态)，供 Web UI 勾选列表使用 | `friends: dict` | `None` |
 | `_resolve_friends()` | 发现全部好友并写入缓存；仅解析 `WECHAT_FRIENDS` 勾选的好友到 `_friend_ids` | 无 | `None` |
-| `_poll_cycle(callback)` | 单次轮询周期；先群聊后好友私聊 | `callback: MessageCallback` | `None` |
+| `_poll_cycle(callback)` | 单次轮询周期；先群聊后好友私聊；`FRIEND_CHAT_ENABLED=false` 时完全跳过好友轮询（不存储、不回复） | `callback: MessageCallback` | `None` |
 | `_poll_group(group_name, talker, callback, is_group=True)` | 轮询单个聊天消息；用 `_raw_message_key()` 去重、自发内容按聊天排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback, is_group` | `None` |
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池)；回复为 `ImageReply` 时走 `_send_image_and_confirm()` 图片通道 | `group_name, talker, standardized, callback` | `None` |
 | `_stable_id_text(value)` | 过滤 WCDB 空值/`0` 占位 ID，避免把所有 `server_id=0` 消息视为同一条 | `value` | `str` |
@@ -764,6 +766,8 @@ image_gen_keywords: list[str] = [
 | `ConfigPanel.jsx` | `VoiceSection` | 系统配置里的语音模型配置；本地/云端识别后端切换与模型下载 |
 | `ConfigPanel.jsx` | `ImageGenSection` | 系统配置里的生图模型配置；总开关 + 协议/密钥/地址 + 生图模型/尺寸选择；OpenAI Images 通过 `/api/ai/models` 获取模型列表，Google/DashScope 使用内置模型选项 |
 | `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 webot 数据目录与微信数据目录配置；webot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
+| `FriendChatPanel.jsx` | `FriendChatPanel` | 左侧“好友私聊”页：好友勾选列表/搜索/全选/清空，保存走 `/api/friends/selection`；好友总开关关闭时显示提示 |
+| `FeaturesPanel.jsx` | `ChatSection` | 功能开关 → AI 对话：群聊 AI 对话与好友私聊 AI 对话两个总开关 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
 
 ### 2.37 `src/imagegen/` (文生图)
@@ -1154,10 +1158,10 @@ MessageRouter.handle(msg)
   │           │
   │           └── format_summary_for_reply() — 格式化为微信回复
   │
-  ├── [好友私聊] → _handle_friend_chat(msg)   # 仅后端轮询的已勾选好友；无需 @
+  ├── [好友私聊] → _handle_friend_chat(msg)   # 仅后端轮询的已勾选好友；FRIEND_CHAT_ENABLED=false 时直接返回 None
   │     └── 仅 msg_type 1/34(有转写) 且未过期 → _handle_chat(msg, content, is_group=False)
   │
-  └── [AI 对话] → _handle_chat(msg, clean_content)
+  └── [AI 对话] → _handle_chat(msg, clean_content)   # GROUP_CHAT_ENABLED=false 时不进入此分支，主动发言也不执行
         ├── MessageStore.get_messages_since() — 获取最近 600s 上下文
         ├── NicknameService.resolve_name() — 解析发送者昵称
         └── AbstractSummarizer.chat(
@@ -1306,6 +1310,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/nicknames` | 保存/删除昵称映射 | 无 |
 | `GET` | `/api/nicknames/groups` | 获取群组列表 | 无 |
 | `GET` | `/api/friends` | 获取已发现的好友列表 (`friend_names.json`)，供配置面板勾选 | 无 |
+| `POST` | `/api/friends/selection` | 仅保存 `WECHAT_FRIENDS`（好友私聊勾选），不覆盖其它配置 | `{"friends": "URL编码逗号列表 / \\"*\\" / \\"\\""}` |
 | `GET` | `/api/welcome/templates` | 获取欢迎模板配置 | 无 |
 | `POST` | `/api/welcome/templates` | 保存欢迎模板配置 | 无 |
 | `GET` | `/api/todos?status=active&chat_id=xxx` | 获取待办列表 | 无 |
@@ -1866,7 +1871,9 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com     # 旧预设 API 地址
 # === 微信后端 ===
 WECHAT_BACKEND=wcdb                            # "wcdb" / "mac_hybrid" / "mac_ui"
 WECHAT_GROUPS=*                                # 群名(逗号分隔, URL编码, "*"=全部)
-WECHAT_FRIENDS=                                # 好友名/wxid(逗号分隔, URL编码, 空=不回复, "*"=全部)
+WECHAT_FRIENDS=                                # 好友名/wxid(逗号分隔, URL编码, 空=不回复, "*"=全部)；优先在 UI 勾选
+GROUP_CHAT_ENABLED=true                        # 群聊 AI 对话总开关；false 时不回复 @ 闲聊，主动发言也停止
+FRIEND_CHAT_ENABLED=true                       # 好友私聊 AI 对话总开关；false 时完全不轮询好友私聊
 WECHAT_DATA_DIR=                               # 微信数据目录(留空自动从微信进程参数/默认目录检测)
 WEBOT_DATA_DIR=                                # webot 自身数据目录(留空=程序目录下 data；不影响微信数据目录)
 

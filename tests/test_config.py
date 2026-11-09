@@ -623,6 +623,30 @@ class LoadConfigTests(unittest.TestCase):
             self.assertTrue(config.proactive_enabled)
             self.assertFalse(config.sticky_mention_enabled)
 
+    def test_load_config_chat_switches_default_true(self):
+        """Both AI chat switches default to enabled."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "OPENAI_MODEL": "chat-model",
+        }, clear=True):
+            config = load_config()
+            self.assertTrue(config.group_chat_enabled)
+            self.assertTrue(config.friend_chat_enabled)
+
+    def test_load_config_chat_switches_parse_false(self):
+        """GROUP/FRIEND_CHAT_ENABLED=false disables the matching chat."""
+        from src.config import load_config
+
+        with patch.dict(os.environ, {
+            "OPENAI_MODEL": "chat-model",
+            "GROUP_CHAT_ENABLED": "false",
+            "FRIEND_CHAT_ENABLED": "FALSE",
+        }, clear=True):
+            config = load_config()
+            self.assertFalse(config.group_chat_enabled)
+            self.assertFalse(config.friend_chat_enabled)
+
     def test_load_config_sticky_mention_defaults(self):
         """Sticky mention settings have correct defaults."""
         from src.config import load_config

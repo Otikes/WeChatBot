@@ -66,14 +66,12 @@ function MetricCard({ icon: Icon, label, value, sub, accent = 'green', chartData
                 <stop offset="100%" stopColor={accent === 'green' ? '#18E299' : (accent === 'blue' ? '#3772cf' : (accent === 'amber' ? '#c37d0d' : '#d45656'))} stopOpacity="0.0" />
               </linearGradient>
             </defs>
-            <motion.path
-              animate={{ d: `${generateSmoothPath(chartData)} L 120 30 L 0 30 Z` }}
-              transition={{ type: 'spring', stiffness: 50, damping: 15 }}
+            <path
+              d={`${generateSmoothPath(chartData)} L 120 30 L 0 30 Z`}
               fill={`url(#grad-${accent})`}
             />
-            <motion.path
-              animate={{ d: generateSmoothPath(chartData) }}
-              transition={{ type: 'spring', stiffness: 50, damping: 15 }}
+            <path
+              d={generateSmoothPath(chartData)}
               fill="none"
               stroke={accent === 'green' ? '#18E299' : (accent === 'blue' ? '#3772cf' : (accent === 'amber' ? '#c37d0d' : '#d45656'))}
               strokeWidth="1.5"

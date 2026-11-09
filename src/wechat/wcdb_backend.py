@@ -857,13 +857,19 @@ class WcdbBackend(AbstractWeChatBackend):
 
         # Friend chats: only selected friends are in _friend_ids, so
         # unselected friends are never polled and never get AI replies.
-        for friend_name in list(self._friend_ids):
-            if not self._running:
-                break
-            talker = self._friend_ids.get(friend_name)
-            if not talker:
-                continue
-            self._poll_group(friend_name, talker, callback, is_group=False)
+        # When friend chat is switched off, skip polling entirely so those
+        # conversations are neither stored nor answered.
+        friend_chat_enabled = getattr(
+            getattr(self, "_voice_config", None), "friend_chat_enabled", True,
+        )
+        if friend_chat_enabled:
+            for friend_name in list(self._friend_ids):
+                if not self._running:
+                    break
+                talker = self._friend_ids.get(friend_name)
+                if not talker:
+                    continue
+                self._poll_group(friend_name, talker, callback, is_group=False)
 
         # Check shutdown signal before sleeping so stop() is responsive
         if not self._running:

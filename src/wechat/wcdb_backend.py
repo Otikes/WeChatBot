@@ -1115,11 +1115,16 @@ class WcdbBackend(AbstractWeChatBackend):
 
         # Filter other system messages (but NOT join events)
         if not is_system_join:
-            _FILTER_KEYWORDS = (
-                "修改群名", "退出了群聊",
-                "撤回了一条消息", "被移除", "开启了朋友验证",
-                "邀请", "移出了群聊",
-            )
+            if is_group:
+                _FILTER_KEYWORDS = (
+                    "修改群名", "退出了群聊",
+                    "撤回了一条消息", "被移除", "开启了朋友验证",
+                    "邀请", "移出了群聊",
+                )
+            else:
+                # Private chats have no group notices; keep normal
+                # messages that merely contain words like "邀请".
+                _FILTER_KEYWORDS = ("撤回了一条消息", "开启了朋友验证")
             if any(kw in content for kw in _FILTER_KEYWORDS):
                 return None
 

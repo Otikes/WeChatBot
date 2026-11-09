@@ -72,7 +72,7 @@ webot — 微信消息总结机器人，支持 WCDB 直读数据库、AI 自动�
 - 前端：React + Vite (ui/)
 - 桌面：PyWebView (WebView2)
 - 打包：PyInstaller (build.spec)
-- 数据库：WCDB (微信加密数据库)，通过 wcdb_api.dll + DRM patch 直读
+- 数据库：WCDB (微信加密数据库)，纯 Python SQLCipher 解密直读（内存取密钥，无原生 DLL）
 
 ## 项目结构
 
@@ -83,8 +83,10 @@ src/router.py           - 消息路由
 src/summarize/          - AI 后端 (DeepSeek/Codex)
 src/wechat/             - 微信后端
   wcdb_backend.py       - WCDB 直读后端
-  wcdb_client.py        - WCDB DLL 封装 (wcdb_api.dll)
-  extract_key.py        - 密钥提取 (wx_key.dll Hook)
+  local_wcdb_client.py  - 纯 Python SQLCipher 读取 (替换 wcdb_api.dll)
+  wxdb_reader.py        - 微信 4.x 内存取密钥 + 逐页解密 (vendored, Apache-2.0)
+  wcdb_client.py        - 旧 wcdb_api.dll 封装 (已弃用, 仅测试参考)
+  extract_key.py        - 密钥提取 (内存扫描优先, wx_key.dll Hook 回退)
   window_controller.py  - 微信窗口操控 (键盘导航 + 消息发送)
   helpers.py            - 去重等工具
 src/web/server.py       - Web UI 服务器 + WebSocket + API

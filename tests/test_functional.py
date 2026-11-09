@@ -405,7 +405,7 @@ class TestPageLoads:
         reset_btn = page.locator("button:has-text('重置数据')")
         assert reset_btn.count() > 0
 
-    def test_runtime_reset_returns_to_onboarding_flow(self, page):
+    def test_runtime_reset_keeps_configuration(self, page):
         project_root = Path(__file__).resolve().parent.parent
         env_path = project_root / ".env"
         try:
@@ -413,13 +413,13 @@ class TestPageLoads:
             page.wait_for_selector("button:has-text('重置数据')", timeout=5000)
             page.once("dialog", lambda dialog: dialog.accept())
             page.locator("button:has-text('重置数据')").click()
-            page.wait_for_selector("text=环境准备与密钥", timeout=5000)
-            page.wait_for_selector("button:has-text('开始自动获取')", timeout=5000)
-            page.wait_for_selector("text=本地环境配置文件", timeout=5000)
+            page.wait_for_timeout(1000)
             status, data = _api_get("/api/onboarding/status")
             assert status == 200
-            assert data["onboarding_done"] is False
-            assert not env_path.exists()
+            # Runtime reset clears chat data but intentionally keeps .env,
+            # onboarding progress and AI/WeChat configuration.
+            assert data["onboarding_done"] is True
+            assert env_path.exists()
         finally:
             _write_dashboard_env(env_path)
 

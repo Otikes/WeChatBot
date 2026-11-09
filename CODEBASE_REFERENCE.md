@@ -99,7 +99,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
 | `WECHAT_FRIENDS` | `str` | `""` (不回复任何好友) | `src/config.py` (经 `_decode_wechat_friends`；空值不展开为 `*`) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_friends()` |
-| `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
+| `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/local_wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
 | `WEBOT_DATA_DIR` | `str` | 当前应用目录下 `data/` (留空) | `src/config.py` | `src/config.py` 路径辅助函数；webot 自有 DB、日志、昵称、模板、群缓存、语音缓存、崩溃日志 |
 | `BOT_DISPLAY_NAME` | `str` | `"群聊小助手"` | `src/config.py` (经 `_sanitize_display_name` 清洗) | `src/router.py:handle()` (多处), `src/bot.py:_log_banner()` |
 | `ADMIN_WXID` | `str` | `""` | `src/config.py` | `src/router.py:handle()` (管理员命令判断) |
@@ -159,7 +159,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WEBOT_APP_HOME` | `str` | `""` (自动检测) | `src/config.py:_resolve_project_root()` | `src/config.py`, `src/web/server.py`, `desktop.py` |
 | `WEBOT_ENV_FILE` | `str` | `""` | `src/config.py:find_env_file()` | `src/config.py` (显式指定 .env 路径) |
 | `ONBOARDING_DONE` | `bool` | `False` | `.env` 写入 | `src/config.py:is_onboarding_done()`, `src/web/server.py`, `desktop.py`；步骤草稿存入 SQLite `onboarding_state` |
-| `WCDB_KEY` | `str` | `""` | `.env` / 引导流程写入 | `src/wechat/wcdb_client.py`；引导草稿副本存入 SQLite `onboarding_state.wcdb_key` |
+| `WCDB_KEY` | `str` | `""` | `.env` / 引导流程写入 | 兼容字段；纯 Python 读取器从微信内存自动取密钥，不再依赖该值；引导草稿副本存入 SQLite `onboarding_state.wcdb_key` |
 | `MAC_WECHAT_SEND_SHORTCUT` | `str` | `"enter"` | `desktop_mac.py` | `src/wechat/mac_ui_backend.py` |
 | `MAC_CHAT_TITLE_CACHE_FILE` | `str` | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
 | `MAC_CHAT_TITLE_MAP` | `str` (JSON) | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
@@ -398,22 +398,29 @@ image_gen_keywords: list[str] = [
 | `find_wxid_and_dbpath(custom_base_dir)` | 按自定义路径、微信进程参数、默认目录顺序检测账号和数据根目录 | `custom_base_dir: str = ""` | `tuple[str, str]` |
 | `detect_default_data_dir()` | 返回自动检测到的微信数据根目录，失败返回空字符串 | 无 | `str` |
 
-### 2.9 `src/wechat/wcdb_client.py` (WcdbNativeClient)
+### 2.9 `src/wechat/local_wcdb_client.py` (LocalWcdbClient)
+
+纯 Python WCDB 读取客户端，已在 Windows 后端取代 `wcdb_client.py`（原 `wcdb_api.dll` ctypes 方案）。密钥从 `Weixin.exe` 内存提取，数据库逐页解密后交给 `sqlite3`，不再依赖任何原生 DLL。
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `__init__(dll_dir)` | 初始化 WCDB 客户端 | `dll_dir: str` | `None` |
-| `_find_wxid_and_dbpath(custom_base_dir)` | 兼容包装，委托 `src/wechat/data_dir.py:find_wxid_and_dbpath()` 自动检测微信数据目录 | `custom_base_dir: str = ""` | `tuple[str, str]` |
-| `init()` | 初始化 wcdb_api.dll | 无 | `bool` |
-| `open()` | 打开加密数据库 | 无 | `bool` |
-| `_call_json(func, *args)` | 调用返回 JSON 字符串指针的 DLL 函数；捕获 ctypes access violation 并返回空结果 | `func, *args` | `dict \| list \| None` |
-| `_load_nickname_cache()` | 预加载会话/联系人昵称缓存；失败时仅降级，不阻断启动 | 无 | `None` |
-| `close()` | 关闭数据库连接 | 无 | `None` |
-| `get_sessions()` | 获取所有会话列表 | 无 | `list[dict]` |
-| `get_messages(talker, limit)` | 获取指定 talker 的消息 | `talker: str, limit: int` | `list[dict]` |
-| `get_group_members(talker)` | 获取群成员列表 | `talker: str` | `list[dict] \| None` |
-| `resolve_nickname(wxid)` | 解析 wxid → 昵称 | `wxid: str` | `str` |
-| `get_display_names(wxids)` | 批量解析昵称 | `wxids: list[str]` | `dict[str, str]` |
+| `__init__(dll_dir=None, config_path=None)` | 兼容原客户端签名 | `dll_dir: str \| None, config_path: str \| None` | `None` |
+| `init()` | 定位微信数据目录并打开 `WeChatDB`；会话库无密钥时抛出中文错误 | 无 | `None` |
+| `open()` | 兼容钩子（实际打开在 `init()`） | 无 | `bool` |
+| `close()` / `health()` | 释放引用 / 健康检查 | 无 | `None` / `bool` |
+| `get_sessions(limit=500)` | 会话列表，并补全 `nick_name` / `display` | `limit: int` | `list[dict]` |
+| `get_contacts(limit=5000)` | 从 `contact.db` 读取全部联系人（30 秒缓存） | `limit: int` | `list[dict]` |
+| `resolve_nickname(wxid)` / `get_display_names(wxids)` | wxid → 备注/昵称 | `wxid: str` / `wxids: list[str]` | `str` / `dict[str, str]` |
+| `get_group_members(chatroom)` | 群成员列表（60 秒缓存） | `chatroom: str` | `list[dict]` |
+| `get_messages(talker, limit=50, offset=0)` | 消息列表，映射为 `sender_username` / `message_content` / `local_type` / `create_time` 等后端字段 | `talker: str, limit: int, offset: int` | `list[dict]` |
+
+### 2.9.1 `src/wechat/wxdb_reader.py` (WeChatDB)
+
+从 `wechatauto-replica` 1.2.10（Apache-2.0）移植的微信 4.x SQLCipher 读取实现：`Config.Cipher` 内存扫描取密钥、按页 AES-CBC 解密到临时缓存、`sqlite3` 查询。除 `logging` 外无内部包依赖，可选 `zstandard` 解码长文本消息。
+
+### 2.9.2 `src/wechat/wcdb_client.py` (WcdbNativeClient, 已弃用)
+
+旧 `wcdb_api.dll` 方案保留供 macOS/测试参考，Windows 后端不再实例化。该 DLL 带在线 DRM 与自毁逻辑，加载时会触发 `wcdb_init failed` 或直接删除自身，启动报 `wcdb_api.dll not found` 即源于此。
 
 ### 2.10 `src/wechat/window_controller.py` (WeChatWindowController)
 
@@ -439,7 +446,8 @@ image_gen_keywords: list[str] = [
 
 | 函数 | 描述 | 参数 | 返回值 |
 |---|---|---|---|
-| `extract_wcdb_key(require_restart=True, on_progress=None)` | 提取 WCDB 解密密钥(主入口) | `require_restart: bool, on_progress: Callable \| None` | `str \| None` (64字符hex) |
+| `extract_wcdb_key(require_restart=True, on_progress=None)` | 提取 WCDB 解密密钥(主入口)；优先纯 Python 内存扫描，失败后回退 wx_key.dll Hook | `require_restart: bool, on_progress: Callable \| None` | `str \| None` (64字符hex) |
+| `_extract_key_via_memory()` | 通过 `wxdb_reader.WeChatDB` 从微信内存提取密钥，无需重启微信 | 无 | `str \| None` |
 | `_find_wechat_pid()` | 查找微信进程 PID(内部) | 无 | `int \| None` |
 | `_find_wx_key_dll()` | 定位 wx_key.dll(内部) | 无 | `str \| None` |
 | `_verify_dll_loadable(dll_path)` | 预检查 DLL 是否能加载(内部) | `dll_path: str` | `str \| None` (None=OK, str=错误信息) |
@@ -827,9 +835,10 @@ desktop.py  (桌面入口)
             └── src/wechat/  (微信后端)
                   ├── base.py              → AbstractWeChatBackend
                   ├── wcdb_backend.py      → WcdbBackend (Windows 直读)
-                  │     ├── wcdb_client.py      → WcdbNativeClient (ctypes DLL)
+                  │     ├── local_wcdb_client.py → LocalWcdbClient (纯 Python SQLCipher 读取)
+                  │     ├── wxdb_reader.py       → WeChatDB (内存取密钥 + 逐页解密, Apache-2.0 vendored)
                   │     └── window_controller.py → WeChatWindowController (键盘操控)
-                  ├── extract_key.py       → 密钥提取 (wx_key.dll Hook)
+                  ├── extract_key.py       → 密钥提取 (内存扫描优先, wx_key.dll Hook 回退)
                   ├── keyboard.py          → 键盘模拟 (keybd_event)
                   ├── helpers.py           → 去重/类型映射/非文本消息摘要
                   ├── mac_ui_backend.py     → MacUIBackend (macOS 界面自动化)
@@ -952,7 +961,7 @@ AbstractSummarizer (base.py)
          │
 2. WcdbBackend._poll_cycle() 每秒轮询
          │
-3. WcdbNativeClient.get_messages() — 通过 wcdb_api.dll 读取加密数据
+3. LocalWcdbClient.get_messages() — 从微信进程内存取密钥，逐页解密 SQLCipher 数据库后读取
          │
 4. WcdbBackend._standardize() — 标准化为统一消息格式
          │  (解析 sender, content, timestamp, msg_type, @mention 等)
@@ -1021,9 +1030,10 @@ AbstractSummarizer (base.py)
 | 文件 | 路径 | 角色 |
 |---|---|---|
 | `wcdb_backend.py` | `src/wechat/wcdb_backend.py` | 后端主控, 消息轮询与标准化 |
-| `wcdb_client.py` | `src/wechat/wcdb_client.py` | 底层 DLL 封装, 加密数据库读写 |
+| `local_wcdb_client.py` | `src/wechat/local_wcdb_client.py` | WCDB 后端适配器，纯 Python 解密读取 |
+| `wxdb_reader.py` | `src/wechat/wxdb_reader.py` | 微信 4.x SQLCipher 解密/查询实现 (vendored, Apache-2.0) |
 | `data_dir.py` | `src/wechat/data_dir.py` | 微信数据目录自动检测，支持自定义路径、微信 4.x 进程参数和常见目录 |
-| `extract_key.py` | `src/wechat/extract_key.py` | 密钥提取 (wx_key.dll Hook) |
+| `extract_key.py` | `src/wechat/extract_key.py` | 密钥提取 (内存扫描优先, wx_key.dll Hook 回退) |
 | `base.py` | `src/wechat/base.py` | 抽象基类 (接口定义) |
 | `helpers.py` | `src/wechat/helpers.py` | 去重集合、消息类型映射、图片/表情/文件占位摘要 |
 
@@ -1032,13 +1042,14 @@ AbstractSummarizer (base.py)
 ```
 WcdbBackend.start(callback)
   │
-  ├── WcdbNativeClient.init()
-  │     └── ctypes 加载 wcdb_api.dll
-  │
-  ├── WcdbNativeClient.open()
+  ├── LocalWcdbClient.init()
   │     ├── data_dir.find_wxid_and_dbpath() → 检测 wxid_* 数据根目录
-  │     ├── 应用 1-byte DRM patch + 打开 session.db
-  │     └── _call_json() → DLL JSON 指针读取(捕获 access violation 并降级)
+  │     └── WeChatDB(...) → 内存取密钥 + 逐页解密缓存
+  │
+  ├── LocalWcdbClient.open()
+  │     ├── WeChatDB → 扫描 Weixin.exe 的 Config.Cipher 对象提取密钥
+  │     ├── 按页 AES-256-CBC 解密到临时缓存 → sqlite3 查询
+  │     └── 会话库无密钥时抛出明确错误（提示保持微信登录）
   │
   ├── _resolve_groups()
   │     ├── get_sessions() → 从最近会话收集 @chatroom
@@ -1949,12 +1960,11 @@ WCDB_KEY=
 # 二进制:
 #   - WebView2Loader.dll → runtimes/win-x64/native
 #   - WebBrowserInterop.x64.dll → lib/
-#   - wcdb_api.dll → native/windows/
-#   - WCDB.dll → native/windows/
 #   - MSVCP140.dll → native/windows/
 #   - VCRUNTIME140.dll → native/windows/
 #   - VCRUNTIME140_1.dll → native/windows/
-#   - wx_key.dll → native/windows/
+#   - wx_key.dll → native/windows/ (仅密钥提取回退路径使用)
+# 说明: Windows 读取器已改为纯 Python，不再打包 wcdb_api.dll / WCDB.dll
 # 数据:
 #   - ui/dist → ui/dist (前端构建产物)
 #   - .env.example → . (示例配置)

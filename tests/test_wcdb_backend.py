@@ -269,6 +269,37 @@ class WcdbBackendPollingTests(unittest.TestCase):
         self.assertFalse(msg["is_group"])
         self.assertEqual(msg["group_name"], "Alice")
 
+    def test_private_chat_keeps_messages_containing_group_notice_words(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 16,
+            "sender_username": "wxid_alice",
+            "message_content": "周末我邀请你吃饭",
+            "localType": 1,
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Alice", "wxid_alice", is_group=False)
+
+        self.assertIsNotNone(msg)
+        self.assertEqual(msg["content"], "周末我邀请你吃饭")
+
+    def test_private_chat_filters_recall_notice(self):
+        backend = self._polling_backend([])
+        raw = {
+            "server_id": 0,
+            "local_id": 17,
+            "sender_username": "wxid_alice",
+            "message_content": "撤回了一条消息",
+            "localType": 10000,
+            "create_time": 100,
+        }
+
+        msg = backend._standardize(raw, "Alice", "wxid_alice", is_group=False)
+
+        self.assertIsNone(msg)
+
     def test_standardize_summarizes_plain_file_name_without_xml(self):
         backend = self._polling_backend([])
         raw = {

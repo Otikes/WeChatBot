@@ -135,7 +135,6 @@ export default function App() {
 
   function handleResetComplete() {
     setBotStatus(null)
-    setOnboardingDone(false)
     setActiveTab('dashboard')
   }
 

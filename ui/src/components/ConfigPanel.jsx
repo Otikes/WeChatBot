@@ -712,16 +712,17 @@ function IdentitySection({ form, update }) {
 
     if (isAllFriends) {
       // Expand "*" into the concrete list so individual friends can be unchecked.
+      // Store chat_id (unique) so duplicate display names stay distinguishable.
       const next = friends
-        .map(f => f.name || f.chat_id)
-        .filter(n => n !== key)
+        .map(f => f.chat_id || f.name)
+        .filter(n => n !== friend.chat_id && n !== key)
       syncFriendsToForm(next)
       return
     }
     if (checked) {
       syncFriendsToForm(selectedFriends.filter(n => n !== key && n !== friend.chat_id))
     } else {
-      syncFriendsToForm([...selectedFriends, key])
+      syncFriendsToForm([...selectedFriends, friend.chat_id || key])
     }
   }
 

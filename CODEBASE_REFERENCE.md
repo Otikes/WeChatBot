@@ -911,7 +911,8 @@ _API 请求 → _UIHandler._handle_request()
 AbstractWeChatBackend (base.py)
     │
     ├── WcdbBackend (wcdb_backend.py) — Windows 原生
-    │     ├── WcdbNativeClient (wcdb_client.py) — ctypes DLL 封装
+    │     ├── LocalWcdbClient (local_wcdb_client.py) — 纯 Python SQLCipher 读取
+    │     │     └── WeChatDB (wxdb_reader.py) — 内存扫描取密钥 + 逐页 AES-CBC 解密
     │     ├── data_dir.py — 微信数据目录自动探测(WECHAT_DATA_DIR / 进程参数 / 默认目录)
     │     ├── WeChatWindowController (window_controller.py) — 键盘操控发送
     │     │     └── keyboard.py — keybd_event 底层模拟

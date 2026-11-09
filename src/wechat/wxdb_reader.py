@@ -550,6 +550,10 @@ class WeChatDB:
         self.db_dir = db_dir or auto_detect_db_dir()
         if not self.db_dir:
             raise RuntimeError("未找到微信数据库目录，请通过 db_dir 参数手动指定")
+        # An explicitly supplied account is never overridden by live-key
+        # detection (CLI/diagnostics rely on that).  Auto mode follows the
+        # account that WeChat is actually logged into right now.
+        self._explicit_account = bool(account)
         self.account = account or self._pick_account()
         self.account_dir = os.path.join(self.db_dir, self.account)
         self.workdir = workdir or os.path.join(
@@ -582,7 +586,34 @@ class WeChatDB:
         if not candidates:
             raise RuntimeError("未找到任何已登录账号的数据库")
         candidates.sort(reverse=True)
+        # 上次用进程内存密钥确认过的登录账号优先于 mtime 启发式：
+        # 微信账号目录的 .db 可能被备份/同步工具触碰，mtime 并不可靠。
+        last = self._read_last_account_marker()
+        if last and any(name == last for _, name in candidates):
+            return last
         return candidates[0][1]
+
+    def _last_account_marker_path(self) -> str:
+        return os.path.join(
+            tempfile.gettempdir(), "wechatauto_db", "last_account.txt"
+        )
+
+    def _read_last_account_marker(self) -> str:
+        try:
+            with open(self._last_account_marker_path(), "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except OSError:
+            return ""
+
+    def _remember_last_account(self) -> None:
+        """Persist the account verified against live WeChat process keys."""
+        try:
+            path = self._last_account_marker_path()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(self.account)
+        except OSError:
+            pass
 
     def _collect_db_files(self) -> List[Tuple[str, str, int]]:
         files = []
@@ -626,82 +657,48 @@ class WeChatDB:
     # ------------------------------------------------------------------
     KDF_ITER = 256000  # 主密钥→库密钥 PBKDF2 迭代(微信魔改 WCDB, 实测确认)
 
-    def _try_other_accounts(self) -> bool:
-        """账号自愈：当前账号目录解不开时，改用同一主密钥能解开的其它账号目录。
+    def _merge_key_caches(self) -> None:
+        """合并**当前账号**自己的密钥缓存并按页1校验过滤。
 
-        多账号机器上 `_pick_account()` 的“最近修改 .db”启发式可能选错账号：
-        内存里提取到的主密钥属于**当前登录账号**，拿去解另一个账号的库会全部
-        页1 HMAC 校验失败（表现为“已加载 0/N 个密钥”、`-N/N`）。
-        这里用同一主密钥对其余账号目录重新派生/校验，选可用库最多的那个并
-        切换过去。返回是否发生了切换。
+        只读稳定副本 / 工作缓存 / .bak 三处；绝不读取其它账号的 keys.json，
+        否则旧账号的缓存会让错误的账号“看起来完全可解密”，微信已登录新
+        账号时就会静默读成旧账号数据。
         """
-        try:
-            dirs = [d for d in _find_account_dirs(self.db_dir)
-                    if os.path.basename(d) != self.account]
-        except Exception:
-            return False
-        if not dirs:
-            return False
-
-        master = self.master_key
-        if not master:
+        cache_paths: List[str] = []
+        sf = self._stable_key_file()
+        if sf:
+            cache_paths.append(sf)
+        cache_paths += [self.keys_file, self.keys_file + ".bak"]
+        for cp in cache_paths:
+            if not os.path.exists(cp):
+                continue
+            for rel, key in self._load_key_cache(cp).items():
+                self._keys.setdefault(rel, key)
+        if not self._keys:
+            return
+        valid: Dict[str, bytes] = {}
+        for rel, k in self._keys.items():
             try:
-                auto = self.extract_master_key()
+                if self._key_works(rel):
+                    valid[rel] = k
             except Exception:
-                auto = None
-            if auto:
-                master = auto[0]
-                self.master_key = master
-        if not master:
-            return False
-
-        def probe(acct: str):
-            """在不动全局状态的前提下，试算某账号可用库数。"""
-            acct_dir = os.path.join(self.db_dir, acct)
-            workdir = os.path.join(tempfile.gettempdir(), "wechatauto_db", acct)
-            keys_file = os.path.join(workdir, "keys.json")
-            saved = (self.account, self.account_dir, self._db_files, self.workdir,
-                     self.keys_file, self._keys)
+                continue          # 缓存里可能残留已不存在的库条目，忽略
+        self._keys = valid
+        # 规范化存储形式：48 字节（key+salt）只适用于「明文头」库；
+        # 若能以 32 字节裸密钥通过页1 校验，说明是标准库 → 截回 32 字节。
+        # （否则解密会走错分支，产出 file is not a database 的文件）
+        for rel in list(self._keys):
+            k = self._keys[rel]
+            if len(k) != 48:
+                continue
             try:
-                self.account, self.account_dir = acct, acct_dir
-                self._db_files = self._collect_db_files()
-                self.workdir, self.keys_file = workdir, keys_file
-                self._keys = {}
-                if os.path.exists(keys_file):     # 先用该账号已有缓存
-                    # 走 _load_key_cache：兼容 DPAPI 密文与明文旧缓存
-                    self._keys.update(self._load_key_cache(keys_file))
-                if not any(self._key_works(rel) for rel, _, _ in self._db_files):
-                    self._keys.update(self.derive_keys_from_master(master))
-                ok = sum(1 for rel, _, _ in self._db_files if self._key_works(rel))
-                return ok, dict(self._keys), list(self._db_files), workdir, keys_file
+                with open(self._db_path(rel), "rb") as f:
+                    _p1 = f.read(PAGE_SZ)
             except Exception:
-                return 0, {}, [], workdir, keys_file
-            finally:
-                (self.account, self.account_dir, self._db_files, self.workdir,
-                 self.keys_file, self._keys) = saved
-
-        cur_ok = sum(1 for rel, _, _ in self._db_files if self._key_works(rel))
-        best = None
-        for d in dirs:
-            ok, keys, files, workdir, keys_file = probe(os.path.basename(d))
-            if ok and (best is None or ok > best[0]):
-                best = (ok, os.path.basename(d), keys, files, workdir, keys_file)
-        if best is None or best[0] <= cur_ok:
-            return False
-
-        ok, acct, keys, files, workdir, keys_file = best
-        self.account = acct
-        self.account_dir = os.path.join(self.db_dir, acct)
-        self._keys, self._db_files = keys, files
-        self.workdir, self.keys_file = workdir, keys_file
-        try:
-            os.makedirs(self.workdir, exist_ok=True)
-            self._save_keys()
-        except Exception:
-            pass
-        print("[wcdb] 已自动切换账号目录: %s（%d 个库可用密钥）" % (acct, ok),
-              file=sys.stderr)
-        return True
+                continue
+            if _verify_enc_key(k[:32], _p1):
+                self._keys[rel] = k[:32]
+        self._save_keys()
 
     def _load_or_extract_keys(self, master_key: Optional[str] = None) -> None:
         """加载/提取密钥, 五层优先级:
@@ -723,59 +720,34 @@ class WeChatDB:
             self.master_key = None
             self.cfg_dword = None
             
-            # 优先级1: 尝试已保存的密钥——多位置合并（稳定副本 > 工作缓存 > .bak >
-            # 其它账号缓存），全部经页1 HMAC 校验，只保留真能用的
-            cache_paths = []
-            sf = self._stable_key_file()
-            if sf:
-                cache_paths.append(sf)
-            cache_paths += [self.keys_file, self.keys_file + ".bak"]
-            try:
-                for other in _find_account_dirs(self.db_dir):
-                    oa = os.path.basename(other)
-                    if oa != self.account:
-                        cache_paths.append(os.path.join(
-                            tempfile.gettempdir(), "wechatauto_db", oa, "keys.json"))
-            except Exception:
-                pass
-            for cp in cache_paths:
-                if not os.path.exists(cp):
-                    continue
-                for rel, key in self._load_key_cache(cp).items():
-                    self._keys.setdefault(rel, key)
-            # 只保留能通过页1 校验的（丢弃错账号/陈旧条目）
-            if self._keys:
-                valid: Dict[str, bytes] = {}
-                for rel, k in self._keys.items():
-                    try:
-                        if self._key_works(rel):
-                            valid[rel] = k
-                    except Exception:
-                        continue          # 缓存里可能残留已不存在的库条目，忽略
-                self._keys = valid
-                # 规范化存储形式：48 字节（key+salt）只适用于「明文头」库；
-                # 若能以 32 字节裸密钥通过页1 校验，说明是标准库 → 截回 32 字节。
-                # （否则解密会走错分支，产出 file is not a database 的文件）
-                for rel in list(self._keys):
-                    k = self._keys[rel]
-                    if len(k) != 48:
-                        continue
-                    try:
-                        with open(self._db_path(rel), "rb") as f:
-                            _p1 = f.read(PAGE_SZ)
-                    except Exception:
-                        continue
-                    if _verify_enc_key(k[:32], _p1):
-                        self._keys[rel] = k[:32]
-                self._save_keys()
-            
+            # 优先级1: 当前账号自己的密钥缓存（去重合并后逐库页1校验）。
+            self._merge_key_caches()
+
+            # 优先级2: 微信运行时用**进程内存密钥**确认当前登录账号。
+            # 内存里的密钥只属于当前登录账号；拿它对每个账号目录做页1校验，
+            # 能解开的那一个才是当前账号。即使 mtime 选中的旧账号目录有完整
+            # 缓存，也必须让真正登录的账号胜出（这是“账号不对/混入多账号”的
+            # 根因修复）。
+            live_candidates: set = set()
+            if not self._explicit_account:
+                try:
+                    live_candidates = self._all_key_candidates()
+                except Exception:
+                    live_candidates = set()
+                if live_candidates:
+                    if self._select_account_by_keys(live_candidates, force=True):
+                        # 切到新账号后补上它自己的缓存，再校验一次
+                        self._merge_key_caches()
+                    self._remember_last_account()
+
             missing = [
                 rel for rel, path, _ in self._db_files
                 if rel not in self._keys or not self._key_works(rel)
             ]
-            
-            # 优先级2: Config.Cipher 内存扫描(4.1+ 主路径)
-            if missing:
+
+            # 优先级3: Config.Cipher 内存扫描(4.1+ 主路径)
+            # 上面已用全量候选校验过，仅显式账号/无候选时才需要重新扫描。
+            if missing and not live_candidates:
                 extracted = self.extract_keys()
                 self._keys.update(extracted)
                 self._save_keys()
@@ -819,19 +791,8 @@ class WeChatDB:
             return [rel for rel, _, _ in self._db_files if not self._key_works(rel)]
 
         still = _still_now()
-        # 账号自愈（第一步，便宜）：先试其它账号目录已有的缓存/主密钥派生
-        if still and self._try_other_accounts():
-            still = _still_now()
-        if still:
-            # 账号自愈（第二步，彻底）：一次内存扫描收集候选密钥材料，对**每个账号
-            # 目录**分别做 HMAC 打分，选能解开的那一个——不再依赖 mtime 启发式，
-            # 从根上解决“微信每次更新后重写 .db → 选错账号 → 0 密钥”。
-            try:
-                cands = self._all_key_candidates()
-            except Exception:
-                cands = set()
-            if cands and self._select_account_by_keys(cands):
-                still = _still_now()
+        # 账号选择已在上面用进程内存密钥完成；这里不再“试其它账号缓存”，
+        # 否则微信未运行时会静默切换到旧账号，读成上一个登录账号的数据。
         if still:
             import sys as _sys
             total = len(self._db_files)
@@ -1042,13 +1003,25 @@ class WeChatDB:
                     break
         return keys
 
-    def _select_account_by_keys(self, cands) -> bool:
+    def _select_account_by_keys(self, cands, force: bool = False) -> bool:
         """用候选密钥给每个账号目录打分，选可用库最多的那个并切换。
 
         这是“微信更新后选错账号”的根除手段：不再看 mtime，而看**能不能解开**。
-        返回是否发生了切换/改善。
+        ``force=True`` 用于初始化时强制以内存密钥为准：当前账号若能被内存
+        密钥解开，就合并这些密钥并保留；否则即使旧账号缓存“看起来完整”，
+        也切换到内存密钥真正能解开的账号。返回是否发生了切换。
         """
         if not cands:
+            return False
+        # 当前账号能被进程内存密钥解开 → 它就是当前登录账号。
+        try:
+            cur_live = self._keys_from_candidates(cands)
+        except Exception:
+            cur_live = {}
+        if cur_live:
+            if force:
+                self._keys.update(cur_live)
+                self._save_keys()
             return False
         best = None
         try:
@@ -1085,7 +1058,7 @@ class WeChatDB:
         if best is None:
             return False
         cur = sum(1 for rel, _, _ in self._db_files if self._key_works(rel))
-        if best[0] <= cur:
+        if best[0] <= cur and not force:
             return False
         ok, acct, keys, files = best
         self.account = acct

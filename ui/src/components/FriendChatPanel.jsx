@@ -93,6 +93,7 @@ export default function FriendChatPanel() {
     if (!q) return true
     return (f.name || '').toLowerCase().includes(q)
       || (f.chat_id || '').toLowerCase().includes(q)
+      || (f.alias || '').toLowerCase().includes(q)
   })
 
   const selectedCount = isAll ? friends.length : selected.length
@@ -234,9 +235,11 @@ export default function FriendChatPanel() {
                         className="w-4 h-4 accent-[#4C9B72] cursor-pointer"
                       />
                       <span className="flex-1 min-w-0">
-                        <span className="block text-[13.5px] text-text-main truncate">{f.name || chatId}</span>
-                        {f.name && f.chat_id && f.name !== f.chat_id && (
-                          <span className="block text-[11px] text-text-muted/80 truncate">{f.chat_id}</span>
+                        <span className="block text-[13.5px] text-text-main truncate">{f.name || f.alias || chatId}</span>
+                        {(f.alias || (f.name && f.chat_id && f.name !== f.chat_id)) && (
+                          <span className="block text-[11px] text-text-muted/80 truncate">
+                            {f.alias || f.chat_id}
+                          </span>
                         )}
                       </span>
                     </label>

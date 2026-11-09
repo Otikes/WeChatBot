@@ -365,16 +365,19 @@ image_gen_keywords: list[str] = [
 | `_merge_chatrooms(target, source)` | 合并群聊元数据，优先保留真实群名 | `target: dict, source: dict` | `int` |
 | `_chatrooms_from_records(records)` | 从 session/contact 记录收集 `@chatroom` 群聊元数据 | `records` | `dict[str, dict]` |
 | `_chatrooms_from_contacts()` | 从联系人列表加载群聊，作为 session 缺失时的兜底 | 无 | `dict[str, dict]` |
-| `_load_cached_group_names()` | 读取 `<WEBOT_DATA_DIR>/group_names.json` 中的持久化群名映射 | 无 | `dict[str, dict]` |
+| `_load_cached_group_names()` | 读取 `<WEBOT_DATA_DIR>/group_names.json` 群名映射；仅当 `wechat_account.txt` 记录与当前账号一致时使用 | 无 | `dict[str, dict]` |
 | `_add_configured_chatroom_ids(chatrooms)` | 接受 `WECHAT_GROUPS` 中直接配置的 `@chatroom` ID | `chatrooms: dict` | `int` |
 | `_resolve_groups()` | 按 session → contacts → 缓存 → 直接 ID 解析群组名称到 talker ID | 无 | `None` |
-| `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
-| `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
+| `_prepare_account_caches()` | 启动/重初始化时比对账号标记；账号切换则清空旧群聊缓存并写入当前账号 | 无 | `None` |
+| `_save_group_names(chatrooms)` | 持久化群名映射并写入当前账号标记 | `chatrooms: dict` | `None` |
+| `_save_group_members(chat_members)` | 持久化群成员列表；仅在账号一致时合并旧缓存 | `chat_members: dict` | `None` |
 | `_is_friend_username(username)` | 判断 session/contact 用户名是否可作为好友私聊（排除 `@chatroom`、`gh_`、系统账号） | `username: str` | `bool` |
+| `_is_friend_contact(record)` | 按 `contact.db` 字段判定真实好友：`local_type=1` 且 `flag ∈ (1,3)`，排除 `delete_flag=1` | `record: dict` | `bool` |
 | `_friends_from_records(records)` | 从 session/contact 记录构建好友元数据 | `records` | `dict[str, dict]` |
-| `_friends_from_contacts()` | 从联系人兜底加载好友（联系人备注优先，便于搜索发送） | 无 | `dict[str, dict]` |
-| `_load_cached_friend_names()` | 读取 `<WEBOT_DATA_DIR>/friend_names.json` 好友映射 | 无 | `dict[str, dict]` |
-| `_save_friend_names(friends)` | 持久化好友映射(静态)，供 Web UI 勾选列表使用 | `friends: dict` | `None` |
+| `_friends_from_contacts()` | 从联系人加载好友（contact.db 为权威来源，联系人备注优先） | 无 | `dict[str, dict]` |
+| `_load_cached_friend_names()` | 读取 `<WEBOT_DATA_DIR>/friend_names.json` 好友映射；账号不一致的缓存直接丢弃 | 无 | `dict[str, dict]` |
+| `_save_friend_names(friends)` | 持久化好友映射（`{"account", "friends"}` 结构），供 Web UI 勾选列表使用 | `friends: dict` | `None` |
+| `_check_account_switch()` | 每 30 秒检测微信是否已换号登录；是则重初始化并刷新群聊/好友数据 | 无 | `bool` |
 | `_resolve_friends()` | 发现全部好友并写入缓存；仅解析 `WECHAT_FRIENDS` 勾选的好友到 `_friend_ids` | 无 | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期；先群聊后好友私聊；`FRIEND_CHAT_ENABLED=false` 时完全跳过好友轮询（不存储、不回复） | `callback: MessageCallback` | `None` |
 | `_poll_group(group_name, talker, callback, is_group=True)` | 轮询单个聊天消息；用 `_raw_message_key()` 去重、自发内容按聊天排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback, is_group` | `None` |
@@ -411,7 +414,8 @@ image_gen_keywords: list[str] = [
 | `open()` | 兼容钩子（实际打开在 `init()`） | 无 | `bool` |
 | `close()` / `health()` | 释放引用 / 健康检查 | 无 | `None` / `bool` |
 | `get_sessions(limit=500)` | 会话列表，并补全 `nick_name` / `display` | `limit: int` | `list[dict]` |
-| `get_contacts(limit=5000)` | 从 `contact.db` 读取全部联系人（30 秒缓存） | `limit: int` | `list[dict]` |
+| `get_contacts(limit=0)` | 从 `contact.db` 读取联系人（30 秒缓存）；`limit<=0` 返回全部，并携带 `local_type`/`flag`/`alias`，排除当前账号自己 | `limit: int` | `list[dict]` |
+| `account` (property) | 当前实际打开的微信账号目录名（如 `wxid_rli50t0h8lfd22_0111`） | 无 | `str` |
 | `resolve_nickname(wxid)` / `get_display_names(wxids)` | wxid → 备注/昵称 | `wxid: str` / `wxids: list[str]` | `str` / `dict[str, str]` |
 | `get_group_members(chatroom)` | 群成员列表（60 秒缓存） | `chatroom: str` | `list[dict]` |
 | `get_messages(talker, limit=50, offset=0)` | 消息列表，映射为 `sender_username` / `message_content` / `local_type` / `create_time` 等后端字段 | `talker: str, limit: int, offset: int` | `list[dict]` |
@@ -419,6 +423,8 @@ image_gen_keywords: list[str] = [
 ### 2.9.1 `src/wechat/wxdb_reader.py` (WeChatDB)
 
 从 `wechatauto-replica` 1.2.10（Apache-2.0）移植的微信 4.x SQLCipher 读取实现：`Config.Cipher` 内存扫描取密钥、按页 AES-CBC 解密到临时缓存、`sqlite3` 查询。除 `logging` 外无内部包依赖，可选 `zstandard` 解码长文本消息。
+
+**账号选择（单账号原则）**：微信 PC 同一实例只允许一个账号在线；历史账号目录（`wxid_*_xxxx`）只是旧登录残留。自动模式（不显式传 `account`）下，初始化时用 `Weixin.exe` 进程内存密钥对每个账号目录做页 1 HMAC 校验，能解开的才是当前登录账号（`_select_account_by_keys(..., force=True)`）；不再合并其它账号的 `keys.json` 缓存，避免旧账号缓存“看起来可解密”导致静默读错账号。最近一次校验通过的账号写入 `%TEMP%/wechatauto_db/last_account.txt`，微信未运行时作为 mtime 之外的兜底。显式传入 `account` 时保持调用方指定账号，不做自动切换。
 
 ### 2.9.2 `src/wechat/wcdb_client.py` (WcdbNativeClient, 已弃用)
 

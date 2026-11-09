@@ -68,7 +68,10 @@ class LocalWcdbClient:
 
         started = time.monotonic()
         with self._lock:
-            self._db = WeChatDB(db_dir=base_dir, account=wxid)
+            # Do not force the mtime-based guess: WeChatDB re-selects the
+            # account whose databases decrypt with the live Weixin.exe keys,
+            # i.e. the account that is logged in right now.
+            self._db = WeChatDB(db_dir=base_dir)
         logger.info(
             "WeChatDB ready in %.1fs (%d/%d databases keyed)",
             time.monotonic() - started,
@@ -108,6 +111,20 @@ class LocalWcdbClient:
             logger.warning("LocalWcdbClient health check failed: %s", exc)
             return False
 
+    @property
+    def account(self) -> str:
+        """Account directory currently opened (empty before :meth:`init`).
+
+        ``WeChatDB`` may switch accounts while self-healing broken keys, so
+        the live database is the source of truth, not the initial guess.
+        """
+        db = self._db
+        if db is not None:
+            account = str(getattr(db, "account", "") or "").strip()
+            if account:
+                return account
+        return self._account
+
     # ── Sessions / contacts / names ───────────────────────────────────
 
     def get_sessions(self, limit: int = DEFAULT_SESSION_LIMIT) -> list[dict]:
@@ -133,19 +150,38 @@ class LocalWcdbClient:
             })
         return out
 
-    def get_contacts(self, limit: int = 5000) -> list[dict]:
-        """Return all contacts (``contact.db``) — used for group/friend discovery."""
+    def get_contacts(self, limit: int = 0) -> list[dict]:
+        """Return all contacts (``contact.db``) — used for group/friend discovery.
+
+        ``limit<=0`` returns every contact: truncating at a fixed number can
+        silently drop friends when the address book is large.
+        """
         cached_at, cached_rows = self._contacts_cache
         if cached_rows and time.monotonic() - cached_at < CONTACT_CACHE_SEC:
-            return cached_rows[: max(1, int(limit or 5000))]
+            return cached_rows if limit <= 0 else cached_rows[: int(limit)]
 
         db = self._require_db()
         conn = db._contact_conn()
         if conn is None:
             return []
         try:
+            columns = {
+                str(row[1]) for row in conn.execute("PRAGMA table_info(contact)")
+            }
+            fields = ["username", "nick_name", "remark"]
+            has_type = "local_type" in columns
+            has_delete = "delete_flag" in columns
+            has_flag = "flag" in columns
+            if has_type:
+                fields.append("local_type")
+            if has_delete:
+                fields.append("delete_flag")
+            if has_flag:
+                fields.append("flag")
+            if "alias" in columns:
+                fields.append("alias")
             rows = conn.execute(
-                "SELECT username, nick_name, remark FROM contact"
+                "SELECT %s FROM contact" % ", ".join(fields)
             ).fetchall()
         except Exception as exc:
             logger.warning("Failed to read contact.db: %s", exc)
@@ -154,23 +190,55 @@ class LocalWcdbClient:
             conn.close()
 
         out: list[dict] = []
+        self_wxid = str(getattr(db, "wxid", "") or "").strip()
         for row in rows:
             username = str(row["username"] or "").strip()
             if not username:
                 continue
+            if self_wxid and username == self_wxid:
+                # The logged-in account itself is stored as a contact row —
+                # it must never show up as one of its own friends.
+                continue
             nickname = str(row["nick_name"] or "").strip()
             remark = str(row["remark"] or "").strip()
             display = remark or nickname or username
-            out.append({
+            record = {
                 "username": username,
                 "nick_name": nickname,
                 "remark": remark,
                 "display": display,
                 "nickname": display,
                 "name": username,
-            })
+            }
+            if "alias" in row.keys():
+                alias = str(row["alias"] or "").strip()
+                if alias and alias != username:
+                    record["alias"] = alias
+            if has_type:
+                record["local_type"] = row["local_type"]
+            if has_delete:
+                record["delete_flag"] = row["delete_flag"]
+            if has_flag:
+                record["flag"] = row["flag"]
+            out.append(record)
         self._contacts_cache = (time.monotonic(), out)
-        return out[: max(1, int(limit or 5000))]
+        return out if limit <= 0 else out[: int(limit)]
+
+    def get_groups(self) -> list[dict]:
+        """List every group chat from ``contact.db`` (the ``chat_room`` table).
+
+        ``get_sessions`` only covers recent conversations, so a freshly
+        created group that has no session row yet (nothing has been sent in
+        it) can only be found here.  Rows are ``{username, name,
+        member_count, ...}``; ``name`` falls back to the raw chatroom id
+        while the group has not been renamed.
+        """
+        db = self._require_db()
+        try:
+            return db.get_groups()
+        except Exception as exc:
+            logger.warning("Failed to list groups from contact.db: %s", exc)
+            return []
 
     def resolve_nickname(self, wxid: str) -> str:
         """Return a human-readable name for ``wxid`` (falls back to the wxid)."""

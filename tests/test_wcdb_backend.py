@@ -1,6 +1,9 @@
 """Tests for WCDB backend group resolution fallbacks."""
 
 from collections import deque
+import json
+from pathlib import Path
+import tempfile
 import threading
 import time
 import unittest
@@ -17,17 +20,23 @@ except Exception as exc:  # pragma: no cover - non-Windows import guard
 
 
 class FakeWcdbClient:
-    def __init__(self, sessions=None, contacts=None, names=None, messages=None):
+    def __init__(self, sessions=None, contacts=None, names=None, messages=None,
+                 groups=None, account=""):
         self.sessions = sessions or []
         self.contacts = contacts or []
         self.names = names or {}
         self.messages = messages or []
+        self.groups = groups or []
+        self.account = account
 
     def get_sessions(self):
         return self.sessions
 
     def get_contacts(self):
         return self.contacts
+
+    def get_groups(self):
+        return self.groups
 
     def get_group_members(self, chat_id):
         return []
@@ -47,6 +56,10 @@ def _backend(groups, client):
     backend._groups = groups
     backend._client = client
     backend._talker_ids = {"stale": "stale@chatroom"}
+    backend._groups_lock = threading.RLock()
+    backend._chatrooms = {}
+    backend._auto_discover = bool(groups) and groups[0].strip() in ("*", "all", "")
+    backend._last_group_refresh = 0.0
     return backend
 
 
@@ -101,6 +114,65 @@ class WcdbBackendGroupResolutionTests(unittest.TestCase):
 
         self.assertEqual(backend._talker_ids, {"999999@chatroom": "999999@chatroom"})
 
+    def test_resolves_new_group_from_chat_room_table(self):
+        # A brand-new, not yet renamed group has no session row and may not
+        # be in the contact table either; only chat_room knows about it.
+        client = FakeWcdbClient(
+            sessions=[],
+            contacts=[],
+            groups=[{
+                "username": "555555@chatroom",
+                "name": "555555@chatroom",
+                "member_count": 6,
+            }],
+        )
+        backend = _backend(["*"], client)
+
+        with (
+            patch.object(WcdbBackend, "_load_cached_group_names", return_value={}),
+            patch.object(WcdbBackend, "_save_group_names"),
+            patch.object(WcdbBackend, "_save_group_members"),
+        ):
+            backend._resolve_groups()
+
+        self.assertEqual(
+            backend._talker_ids,
+            {"555555@chatroom": "555555@chatroom"},
+        )
+        self.assertEqual(backend._chatrooms["555555@chatroom"]["member_count"], 6)
+
+    def test_refresh_picks_up_group_created_after_startup(self):
+        client = FakeWcdbClient(sessions=[])
+        backend = _backend(["*"], client)
+        backend._chatrooms = {}
+        backend._last_group_refresh = 0.0
+
+        with (
+            patch.object(WcdbBackend, "_load_cached_group_names", return_value={}),
+            patch.object(WcdbBackend, "_save_group_names"),
+            patch.object(WcdbBackend, "_save_group_members"),
+        ):
+            backend._resolve_groups()
+        self.assertEqual(backend._talker_ids, {})
+
+        client.groups = [{
+            "username": "666666@chatroom",
+            "name": "666666@chatroom",
+            "member_count": 3,
+        }]
+        backend._last_group_refresh = 0.0
+        with (
+            patch.object(WcdbBackend, "_save_group_names"),
+            patch.object(WcdbBackend, "_save_group_members"),
+        ):
+            self.assertTrue(backend.refresh_group_cache(force=True))
+
+        self.assertEqual(
+            backend._talker_ids,
+            {"666666@chatroom": "666666@chatroom"},
+        )
+        self.assertEqual(backend._groups, ["666666@chatroom"])
+
 
 @unittest.skipIf(WcdbBackend is None, f"wcdb_backend unavailable: {IMPORT_ERROR}")
 class WcdbBackendPollingTests(unittest.TestCase):
@@ -111,6 +183,7 @@ class WcdbBackendPollingTests(unittest.TestCase):
             messages=messages,
         )
         backend._client_lock = threading.Lock()
+        backend._groups_lock = threading.RLock()
         backend._known_ids = DedupSet(max_size=100)
         backend._recent_sends = deque(maxlen=32)
         backend._running = True
@@ -398,6 +471,11 @@ class WcdbBackendFriendResolutionTests(unittest.TestCase):
         backend._friend_ids = {"Alice": "wxid_alice"}
         backend._poll_sec = 0
         backend._running = True
+        backend._groups_lock = threading.RLock()
+        backend._chatrooms = {}
+        backend._auto_discover = True
+        backend._last_group_refresh = 0.0
+        backend._client = FakeWcdbClient()
 
         polled = []
         with (
@@ -416,8 +494,267 @@ class WcdbBackendFriendResolutionTests(unittest.TestCase):
         backend = object.__new__(WcdbBackend)
         backend._talker_ids = {}
         backend._friend_ids = {"Alice": "wxid_alice"}
+        backend._groups_lock = threading.RLock()
 
         self.assertEqual(backend._talker_to_name("wxid_alice"), "Alice")
+
+    def test_contacts_without_remark_or_nickname_are_skipped(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "wxid_named", "remark": "有备注", "nick_name": ""},
+                {"username": "wxid_noname", "remark": "", "nick_name": ""},
+            ],
+        )
+        backend = self._friend_backend(["*"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(backend._friend_ids, {"有备注": "wxid_named"})
+
+    def test_system_service_accounts_are_skipped(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "brandservicesessionholder", "nickName": "品牌服务"},
+                {"username": "brandsessionholder", "nickName": "品牌会话"},
+                {"username": "gh_news", "nickName": "新闻"},
+                {"username": "officialaccounts", "nickName": "公众号"},
+                {"username": "wxid_alice", "remark": "Alice"},
+            ],
+        )
+        backend = self._friend_backend(["*"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(backend._friend_ids, {"Alice": "wxid_alice"})
+
+    def test_sessions_not_in_contacts_are_not_listed_as_friends(self):
+        client = FakeWcdbClient(
+            sessions=[
+                {"username": "wxid_alice", "displayName": "Alice"},
+                {"username": "wxid_stranger", "displayName": "临时会话"},
+            ],
+            contacts=[{"username": "wxid_alice", "remark": "Alice"}],
+        )
+        backend = self._friend_backend(["*"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(backend._friend_ids, {"Alice": "wxid_alice"})
+
+    def test_duplicate_display_names_are_all_polled(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "wxid_a", "remark": "同名"},
+                {"username": "wxid_b", "remark": "同名"},
+            ],
+        )
+        backend = self._friend_backend(["*"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(len(backend._friend_ids), 2)
+        self.assertEqual(
+            set(backend._friend_ids.values()), {"wxid_a", "wxid_b"}
+        )
+
+    def test_ambiguous_name_selection_is_skipped(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "wxid_a", "remark": "同名"},
+                {"username": "wxid_b", "remark": "同名"},
+            ],
+        )
+        backend = self._friend_backend(["同名"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(backend._friend_ids, {})
+
+    def test_cached_friends_from_another_account_are_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "friend_names.json"
+            cache.write_text(
+                json.dumps({
+                    "account": "wxid_old_account",
+                    "friends": {"wxid_old_friend": {"name": "旧账号好友"}},
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            client = FakeWcdbClient(account="wxid_current_account")
+            backend = self._friend_backend([], client)
+
+            with (
+                patch(
+                    "src.wechat.wcdb_backend.webot_data_path",
+                    return_value=cache,
+                ),
+                patch.object(WcdbBackend, "_save_friend_names"),
+            ):
+                backend._resolve_friends()
+
+            self.assertEqual(backend._friend_ids, {})
+
+    def test_cached_friends_of_same_account_are_reused_when_db_unreadable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "friend_names.json"
+            cache.write_text(
+                json.dumps({
+                    "account": "wxid_current_account",
+                    "friends": {"wxid_alice": {"name": "Alice"}},
+                }, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            client = FakeWcdbClient(account="wxid_current_account")
+            backend = self._friend_backend(["Alice"], client)
+
+            with (
+                patch(
+                    "src.wechat.wcdb_backend.webot_data_path",
+                    return_value=cache,
+                ),
+                patch.object(WcdbBackend, "_save_friend_names"),
+            ):
+                backend._resolve_friends()
+
+            self.assertEqual(backend._friend_ids, {"Alice": "wxid_alice"})
+
+    def test_legacy_cache_without_account_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp) / "friend_names.json"
+            cache.write_text(
+                json.dumps({"wxid_alice": {"name": "Alice"}}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            client = FakeWcdbClient(account="wxid_current_account")
+            backend = self._friend_backend([], client)
+
+            with (
+                patch(
+                    "src.wechat.wcdb_backend.webot_data_path",
+                    return_value=cache,
+                ),
+                patch.object(WcdbBackend, "_save_friend_names"),
+            ):
+                backend._resolve_friends()
+
+            self.assertEqual(backend._friend_ids, {})
+
+    def test_strangers_and_non_friend_contact_types_are_skipped(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "wxid_friend", "local_type": 1, "flag": 3, "remark": "好友"},
+                {"username": "wxid_starred", "local_type": 1, "flag": 1,
+                 "nickName": "星标好友"},
+                {"username": "wxid_stranger", "local_type": 0, "nickName": "陌生人"},
+                {"username": "wxid_group_member", "local_type": 3, "flag": 4,
+                 "nickName": "群成员档案"},
+                {"username": "wxid_deleted", "local_type": 1, "flag": 3, "delete_flag": 1,
+                 "remark": "已删除"},
+                {"username": "2598@openim", "local_type": 6, "nickName": "企业联系人"},
+            ],
+        )
+        backend = self._friend_backend(["*"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(
+            backend._friend_ids,
+            {"好友": "wxid_friend", "星标好友": "wxid_starred"},
+        )
+
+    def test_contacts_with_non_friend_flag_bits_are_skipped(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "wxid_friend", "local_type": 1, "flag": 3, "remark": "好友"},
+                {"username": "wxid_blocked", "local_type": 1, "flag": 259,
+                 "nickName": "已拉黑"},
+                {"username": "wxid_service", "local_type": 1, "flag": 65539,
+                 "nickName": "企业服务"},
+            ],
+        )
+        backend = self._friend_backend(["*"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(backend._friend_ids, {"好友": "wxid_friend"})
+
+    def test_group_cache_from_another_account_is_ignored(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            group_cache = Path(tmp) / "group_names.json"
+            marker = Path(tmp) / "wechat_account.txt"
+            group_cache.write_text(
+                json.dumps({"old@chatroom": "旧账号的群"}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            marker.write_text("wxid_old_account", encoding="utf-8")
+            client = FakeWcdbClient(account="wxid_current_account")
+            backend = self._friend_backend([], client)
+
+            with patch(
+                "src.wechat.wcdb_backend.webot_data_path",
+                side_effect=lambda name: Path(tmp) / name,
+            ):
+                self.assertEqual(backend._load_cached_group_names(), {})
+
+    def test_account_switch_clears_group_caches_and_updates_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            group_cache = Path(tmp) / "group_names.json"
+            members_cache = Path(tmp) / "group_members.json"
+            marker = Path(tmp) / "wechat_account.txt"
+            for path in (group_cache, members_cache, marker):
+                path.write_text("{}" if path != marker else "wxid_old_account",
+                                encoding="utf-8")
+            client = FakeWcdbClient(account="wxid_new_account")
+            backend = self._friend_backend([], client)
+
+            with patch(
+                "src.wechat.wcdb_backend.webot_data_path",
+                side_effect=lambda name: Path(tmp) / name,
+            ):
+                backend._prepare_account_caches()
+
+            self.assertFalse(group_cache.exists())
+            self.assertFalse(members_cache.exists())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "wxid_new_account")
+
+    def test_group_members_do_not_merge_across_accounts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            members_cache = Path(tmp) / "group_members.json"
+            marker = Path(tmp) / "wechat_account.txt"
+            members_cache.write_text(
+                json.dumps({"old@chatroom": {"wxid_old": "旧成员"}},
+                           ensure_ascii=False),
+                encoding="utf-8",
+            )
+            marker.write_text("wxid_old_account", encoding="utf-8")
+            client = FakeWcdbClient(account="wxid_current_account")
+            backend = self._friend_backend([], client)
+
+            with patch(
+                "src.wechat.wcdb_backend.webot_data_path",
+                side_effect=lambda name: Path(tmp) / name,
+            ):
+                backend._save_group_members(
+                    {"new@chatroom": {"wxid_new": "新成员"}}
+                )
+
+            saved = json.loads(members_cache.read_text(encoding="utf-8"))
+            self.assertEqual(saved, {"new@chatroom": {"wxid_new": "新成员"}})
+            self.assertEqual(
+                marker.read_text(encoding="utf-8"), "wxid_current_account"
+            )
+
+    def test_selection_accepts_visible_wechat_alias(self):
+        client = FakeWcdbClient(
+            contacts=[
+                {"username": "wxid_alice", "alias": "YY_25408", "remark": "Alice"},
+            ],
+        )
+        backend = self._friend_backend(["YY_25408"], client)
+
+        self._resolve(backend)
+
+        self.assertEqual(backend._friend_ids, {"Alice": "wxid_alice"})
 
 
 if __name__ == "__main__":

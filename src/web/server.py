@@ -1480,6 +1480,11 @@ class _BotControl:
         with self._lock:
             return self.running
 
+    def get_backend(self):
+        """Return the registered backend (None when the bot is stopped)."""
+        with self._lock:
+            return self.backend
+
     def set_running(self):
         with self._lock:
             self.running = True
@@ -2197,14 +2202,22 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 if path.exists():
                     raw = json.loads(path.read_text(encoding="utf-8"))
                     if isinstance(raw, dict):
-                        for chat_id, val in raw.items():
+                        # New format binds the cache to one WeChat account:
+                        # {"account": "...", "friends": {chat_id: {...}}}.
+                        entries = raw.get("friends")
+                        if not isinstance(entries, dict):
+                            entries = raw
+                        for chat_id, val in entries.items():
                             if isinstance(val, dict):
                                 name = str(val.get("name") or chat_id)
+                                alias = str(val.get("alias") or "")
                             else:
                                 name = str(val or chat_id)
+                                alias = ""
                             friends.append({
                                 "chat_id": str(chat_id),
                                 "name": name,
+                                "alias": alias,
                             })
                 friends.sort(key=lambda item: item["name"])
                 self.send_json({"ok": True, "friends": friends})
@@ -2253,6 +2266,16 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
                 conn = sqlite3.connect(_onboarding_db_path())
                 conn.row_factory = sqlite3.Row
+
+                # Refresh the WCDB group cache first so a group created while
+                # the bot is running shows up without restarting the bot.
+                backend = _bot_control.get_backend()
+                refresh = getattr(backend, "refresh_group_cache", None)
+                if callable(refresh):
+                    try:
+                        refresh(force=True)
+                    except Exception as e:
+                        logger.warning("Group cache refresh failed: %s", e)
 
                 # ── Load persisted chat_id -> group info ─────────────────
                 # Written by WcdbBackend._save_group_names() when the bot

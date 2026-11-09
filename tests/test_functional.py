@@ -475,7 +475,8 @@ class TestFriendChatConfig:
         friend_btn = page.locator("button:has-text('好友私聊')")
         if friend_btn.count() > 0:
             friend_btn.first.click()
-            page.wait_for_timeout(500)
+            # 好友列表可能很大，懒加载面板 + 渲染需要时间，等待提示文案出现
+            page.wait_for_selector("text=未勾选任何好友", timeout=15000)
         page_text = page.inner_text("body")
         assert "好友私聊" in page_text
         assert "未勾选任何好友" in page_text

@@ -72,6 +72,8 @@ data/bot_status.json
 data/group_names.json
 data/group_members.json
 data/friend_names.json
+# Last live WeChat account (local wxid, never commit)
+data/wechat_account.txt
 
 # Claude Code
 .claude/

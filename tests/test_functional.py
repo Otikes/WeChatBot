@@ -415,7 +415,7 @@ class TestPageLoads:
             page.locator("button:has-text('重置数据')").click()
             page.wait_for_selector("text=环境准备与密钥", timeout=5000)
             page.wait_for_selector("button:has-text('开始自动获取')", timeout=5000)
-            page.wait_for_selector("text=配置文件尚未创建", timeout=5000)
+            page.wait_for_selector("text=本地环境配置文件", timeout=5000)
             status, data = _api_get("/api/onboarding/status")
             assert status == 200
             assert data["onboarding_done"] is False
@@ -460,6 +460,29 @@ class TestSidebarNavigation:
             page.wait_for_timeout(500)
             page_text = page.inner_text("body")
             assert "提示词沙箱" in page_text
+
+
+class TestFriendChatConfig:
+    def test_friend_chat_checklist_visible(self, page):
+        resp = page.request.get(f"{BASE_URL}/api/friends")
+        assert resp.ok
+        data = resp.json()
+        assert data["ok"] is True
+        assert "friends" in data
+
+        page.goto(BASE_URL, timeout=10000)
+        page.wait_for_timeout(1000)
+        config_btn = page.locator("button:has-text('系统配置')")
+        if config_btn.count() > 0:
+            config_btn.first.click()
+            page.wait_for_timeout(300)
+        identity_btn = page.locator("button:has-text('机器人身份')")
+        if identity_btn.count() > 0:
+            identity_btn.first.click()
+            page.wait_for_timeout(500)
+        page_text = page.inner_text("body")
+        assert "好友私聊" in page_text
+        assert "未勾选任何好友" in page_text
 
 
 class TestConfigExportImport:

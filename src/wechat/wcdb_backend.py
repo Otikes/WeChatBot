@@ -2,9 +2,11 @@
 WCDB Native Backend — zero external dependencies.
 
 Reads WeChat messages directly from the encrypted WCDB database via
-patched wcdb_api.dll (ctypes).  Uses WeChatWindowController for sending.
+pure-Python SQLCipher decryption (no native DLL).  Uses
+WeChatWindowController for sending.
 
-WCDB native access — reads encrypted database in-process, no external dependencies.
+WCDB pure-Python access — reads encrypted database in-process, no external
+dependencies, no ``wcdb_api.dll``.
 """
 import concurrent.futures
 import hashlib
@@ -19,7 +21,7 @@ from pathlib import Path
 from typing import Optional
 
 from .base import AbstractWeChatBackend, MessageCallback
-from .wcdb_client import WcdbNativeClient
+from .local_wcdb_client import LocalWcdbClient
 from .window_controller import WeChatWindowController
 from .helpers import DedupSet, format_nontext_content, normalize_msg_type
 from src.config import webot_data_path
@@ -35,8 +37,8 @@ MAX_CONSECUTIVE_ERRORS = 5   # trigger reinit after this many consecutive failur
 class WcdbBackend(AbstractWeChatBackend):
     """Native WCDB backend — database read + window send.
 
-    Reads messages directly from WeChat's session.db via wcdb_api.dll
-    with one-byte DRM patch. Sends via WeChatWindowController.
+    Reads messages directly from WeChat's SQLCipher databases via the
+    pure-Python :class:`LocalWcdbClient`. Sends via WeChatWindowController.
 
     Usage:
         backend = WcdbBackend(
@@ -50,17 +52,23 @@ class WcdbBackend(AbstractWeChatBackend):
     def __init__(self,
                  bot_display_name: str = "",
                  groups: list[str] | None = None,
+                 friends: list[str] | None = None,
                  poll_sec: float = DEFAULT_POLL_SEC,
                  store=None,
                  config=None):
         self._bot_name = bot_display_name
         self._groups = groups or []
+        self._friends = friends or []
         self._poll_sec = poll_sec
         self._store = store  # MessageStore fallback for name resolution
         self._running = False
-        self._client: Optional[WcdbNativeClient] = None
+        self._client: Optional[LocalWcdbClient] = None
         self._window = WeChatWindowController()
         self._talker_ids: dict[str, str] = {}
+        # Selected friend display name -> wxid for 1-on-1 chats.
+        # Only these friends are polled, so unselected friends never get AI replies.
+        self._friend_ids: dict[str, str] = {}
+        self._session_cache: list[dict] = []
         self._known_ids = DedupSet(max_size=MAX_DEDUP_SIZE)
         # Thread safety: WCDB DLL (ctypes) may not be thread-safe internally.
         # All _client calls are serialized through this lock.
@@ -79,18 +87,21 @@ class WcdbBackend(AbstractWeChatBackend):
     # ── Public API ─────────────────────────────────────────────────
 
     def start(self, callback: MessageCallback) -> None:
-        if not self._groups:
-            logger.error("No groups configured. Set WECHAT_GROUPS in .env")
+        if not self._groups and not self._friends:
+            logger.error(
+                "No groups or friends configured. "
+                "Set WECHAT_GROUPS or WECHAT_FRIENDS in .env"
+            )
             return
 
         logger.info(
-            "WcdbBackend starting (groups=%s, poll=%ss, bot=%r)",
-            self._groups, self._poll_sec, self._bot_name,
+            "WcdbBackend starting (groups=%s, friends=%s, poll=%ss, bot=%r)",
+            self._groups, self._friends, self._poll_sec, self._bot_name,
         )
 
         # Init and open database
         try:
-            self._client = WcdbNativeClient()
+            self._client = LocalWcdbClient()
             self._client.init()
             self._client.open()
             logger.info("WCDB database opened successfully")
@@ -106,11 +117,14 @@ class WcdbBackend(AbstractWeChatBackend):
                 pass
             return
 
-        # Resolve group talker IDs
+        # Resolve group talker IDs and friend chat IDs
         self._resolve_groups()
+        self._resolve_friends()
 
-        if not self._talker_ids:
-            logger.error("No groups resolved. Check WECHAT_GROUPS.")
+        if not self._talker_ids and not self._friend_ids:
+            logger.error(
+                "No groups or friends resolved. Check WECHAT_GROUPS / WECHAT_FRIENDS."
+            )
             return
 
         # Pre-find WeChat window
@@ -208,7 +222,7 @@ class WcdbBackend(AbstractWeChatBackend):
             except Exception:
                 pass
         try:
-            self._client = WcdbNativeClient()
+            self._client = LocalWcdbClient()
             self._client.init()
             self._client.open()
             logger.info("WCDB reinitialized successfully")
@@ -217,8 +231,9 @@ class WcdbBackend(AbstractWeChatBackend):
             raise
         # Clear dedup set — WCDB may return messages with new IDs
         self._known_ids = DedupSet(max_size=MAX_DEDUP_SIZE)
-        # Re-resolve groups (talker IDs may have changed)
+        # Re-resolve groups and friends (talker IDs may have changed)
         self._resolve_groups()
+        self._resolve_friends()
         # Re-find WeChat window
         hwnd = self._window.find_hwnd()
         if hwnd:
@@ -428,6 +443,7 @@ class WcdbBackend(AbstractWeChatBackend):
         """
         self._talker_ids.clear()
         sessions = self._client.get_sessions()
+        self._session_cache = sessions
 
         # Build a map of all known @chatroom entries:
         # username -> {name, member_count}.
@@ -584,8 +600,246 @@ class WcdbBackend(AbstractWeChatBackend):
         except Exception as e:
             logger.warning("Failed to persist group_names.json: %s", e)
 
+    # ── Friend chat resolution ──────────────────────────────────────
+
+    # System / official accounts that look like personal usernames but
+    # are not friends and must never be auto-replied.
+    _NON_FRIEND_USERNAMES = {
+        "weixin", "wechat", "fmessage", "medianote", "floatbottle",
+        "qqmail", "qqsafe", "filehelper", "notifymessage", "tmessage",
+        "brandsessionholder", "officialaccounts", "exmail_tips",
+        "weixinreminder", "mphelper", "micromsg",
+    }
+
+    @classmethod
+    def _is_friend_username(cls, username: str) -> bool:
+        """True when a session/contact username can be a personal friend chat."""
+        value = str(username or "").strip()
+        if not value or "@" in value:
+            return False
+        lower = value.lower()
+        if lower in cls._NON_FRIEND_USERNAMES:
+            return False
+        if lower.startswith("gh_"):
+            return False
+        return True
+
+    @classmethod
+    def _friend_display_name(cls, record: dict, username: str) -> str:
+        """Resolve a friend's display name.
+
+        Remark first — that's what WeChat's search box matches when sending.
+        Excludes last_sender_display_name: in a 1-on-1 chat it may be the bot
+        itself (when the bot sent the last message).
+        """
+        display = cls._record_text(
+            record,
+            "remark", "Remark", "conRemark",
+            "nickName", "nickname", "nick_name",
+            "displayName", "displayname", "display_name",
+            "display", "chat",
+        )
+        return display if display and display != username else ""
+
+    def _friends_from_records(self, records) -> dict[str, dict]:
+        """Build friend metadata (username -> {name}) from session/contact rows."""
+        friends: dict[str, dict] = {}
+        for record in self._records_from_payload(
+            records, "sessions", "contacts", "friends", "data",
+        ):
+            username = self._record_username(record)
+            if not self._is_friend_username(username):
+                continue
+
+            display = self._friend_display_name(record, username)
+            if not display:
+                try:
+                    display = self._client.resolve_nickname(username)
+                except Exception:
+                    display = ""
+            if not display or display == username:
+                display = username
+
+            current = friends.get(username)
+            if current is None:
+                friends[username] = {"name": display}
+            elif current["name"] in ("", username) and display != username:
+                current["name"] = display
+        return friends
+
+    def _friends_from_contacts(self) -> dict[str, dict]:
+        """Load friend chats from contacts as a fallback to sessions."""
+        get_contacts = getattr(self._client, "get_contacts", None)
+        if not callable(get_contacts):
+            return {}
+        try:
+            return self._friends_from_records(get_contacts())
+        except Exception as exc:
+            logger.warning("Failed to load friends from contacts: %s", exc)
+            return {}
+
+    @staticmethod
+    def _merge_friends(target: dict[str, dict], source: dict[str, dict]) -> int:
+        """Merge friend metadata, preferring real names over raw IDs."""
+        added = 0
+        for username, info in source.items():
+            if not username or not WcdbBackend._is_friend_username(username):
+                continue
+            current = target.get(username)
+            if current is None:
+                target[username] = {
+                    "name": str(info.get("name") or username).strip() or username,
+                }
+                added += 1
+                continue
+
+            new_name = str(info.get("name") or "").strip()
+            # Contacts are merged after sessions and carry remarks, which
+            # WeChat's search box prefers when opening a chat to send.
+            if new_name and new_name != username:
+                current["name"] = new_name
+        return added
+
+    @staticmethod
+    def _load_cached_friend_names() -> dict[str, dict]:
+        """Load persisted friend metadata from friend_names.json."""
+        path = webot_data_path("friend_names.json")
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Failed to load cached friend names from %s: %s", path, exc)
+            return {}
+        if not isinstance(raw, dict):
+            return {}
+
+        friends: dict[str, dict] = {}
+        for username, info in raw.items():
+            username = str(username or "").strip()
+            if not WcdbBackend._is_friend_username(username):
+                continue
+            if isinstance(info, dict):
+                display = str(info.get("name") or info.get("display") or username).strip()
+            else:
+                display = str(info or username).strip()
+            friends[username] = {"name": display or username}
+        if friends:
+            logger.info(
+                "Loaded %d cached friend-name mappings from %s", len(friends), path,
+            )
+        return friends
+
+    @staticmethod
+    def _save_friend_names(friends: dict[str, dict]) -> None:
+        """Persist friend username -> {name} to friend_names.json atomically."""
+        import os as _os
+        path = webot_data_path("friend_names.json")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = path.with_suffix(".tmp")
+            data = json.dumps(friends, ensure_ascii=False, indent=2)
+            tmp_path.write_text(data, encoding="utf-8")
+            _os.replace(tmp_path, path)
+            logger.info("Saved %d friend-name mappings to %s", len(friends), path)
+        except Exception as e:
+            logger.warning("Failed to persist friend_names.json: %s", e)
+
+    def _resolve_friends(self) -> None:
+        """Map selected friends to chat IDs and persist the full friend list.
+
+        Discovery always runs (even when no friends are selected) so the
+        config UI can list candidates.  Only configured friends are polled,
+        so unselected friends never receive an AI reply.
+        """
+        self._friend_ids.clear()
+        all_friends = self._load_cached_friend_names()
+
+        sessions = self._session_cache or self._client.get_sessions()
+        session_friends = self._friends_from_records(sessions)
+        if session_friends:
+            added = self._merge_friends(all_friends, session_friends)
+            logger.info(
+                "Found %d friend chats in WCDB sessions (%d new)",
+                len(session_friends), added,
+            )
+
+        contact_friends = self._friends_from_contacts()
+        if contact_friends:
+            added = self._merge_friends(all_friends, contact_friends)
+            logger.info(
+                "Loaded %d friends from contacts (%d new)",
+                len(contact_friends), added,
+            )
+
+        # Persist every discovered friend so the web UI can offer a checklist.
+        if all_friends:
+            self._save_friend_names(all_friends)
+
+        if not self._friends:
+            logger.info("No friend chats selected — friend messages will be ignored.")
+            return
+
+        auto_discover = (
+            len(self._friends) == 1
+            and self._friends[0].strip().lower() in ("*", "all")
+        )
+
+        if auto_discover:
+            for username, info in all_friends.items():
+                self._friend_ids[info["name"]] = username
+            logger.info(
+                "Auto-discovered %d friend chats: %s",
+                len(self._friend_ids), list(self._friend_ids.keys()),
+            )
+            return
+
+        for friend_name in self._friends:
+            wanted = str(friend_name or "").strip()
+            if not wanted:
+                continue
+            found = wanted if wanted in all_friends else None
+            if not found:
+                for username, info in all_friends.items():
+                    if wanted.lower() == info["name"].lower():
+                        found = username
+                        break
+            if not found:
+                for username, info in all_friends.items():
+                    display = info["name"]
+                    if (
+                        wanted.lower() in display.lower()
+                        or display.lower() in wanted.lower()
+                    ):
+                        found = username
+                        break
+            if found:
+                display = all_friends[found]["name"]
+                self._friend_ids[display] = found
+                logger.info(
+                    "Resolved friend '%s' -> %s (display='%s')",
+                    wanted, found, display,
+                )
+            else:
+                logger.warning(
+                    "Could not resolve friend '%s'. Available: %s",
+                    wanted,
+                    [
+                        f"{info['name']} ({username})"
+                        for username, info in all_friends.items()
+                    ],
+                )
+
+        if not self._friend_ids:
+            logger.warning(
+                "No selected friends resolved — friend chat replies disabled."
+            )
+
     def _talker_to_name(self, talker_id: str) -> str:
         for name, tid in self._talker_ids.items():
+            if tid == talker_id:
+                return name
+        for name, tid in self._friend_ids.items():
             if tid == talker_id:
                 return name
         return ""
@@ -600,17 +854,28 @@ class WcdbBackend(AbstractWeChatBackend):
             if not talker:
                 continue
             self._poll_group(group_name, talker, callback)
+
+        # Friend chats: only selected friends are in _friend_ids, so
+        # unselected friends are never polled and never get AI replies.
+        for friend_name in list(self._friend_ids):
+            if not self._running:
+                break
+            talker = self._friend_ids.get(friend_name)
+            if not talker:
+                continue
+            self._poll_group(friend_name, talker, callback, is_group=False)
+
         # Check shutdown signal before sleeping so stop() is responsive
         if not self._running:
             return
         time.sleep(self._poll_sec)
 
     def _poll_group(self, group_name: str, talker: str,
-                    callback: MessageCallback) -> None:
-        """Fetch messages for one group and dispatch new ones.
+                    callback: MessageCallback, is_group: bool = True) -> None:
+        """Fetch messages for one chat and dispatch new ones.
 
         AI-triggering callbacks are submitted to the thread pool so slow
-        summarization in one group never blocks polling of other groups.
+        summarization in one chat never blocks polling of other chats.
         """
         with self._client_lock:
             messages = self._client.get_messages(talker=talker, limit=50)
@@ -630,7 +895,9 @@ class WcdbBackend(AbstractWeChatBackend):
             if raw_key in self._known_ids:
                 continue
 
-            standardized = self._standardize(msg, group_name, talker)
+            standardized = self._standardize(
+                msg, group_name, talker, is_group=is_group,
+            )
             # Mark as seen even when filtered out (None), so it is never
             # standardized again on later polls.
             self._known_ids.add(raw_key)
@@ -807,7 +1074,7 @@ class WcdbBackend(AbstractWeChatBackend):
         return f"{talker}|{sender}|{content}|{ts}|{local_type}"
 
     def _standardize(self, msg: dict, group_name: str,
-                     talker: str) -> Optional[dict]:
+                     talker: str, is_group: bool = True) -> Optional[dict]:
         """Convert WCDB raw message to standard format."""
         # WCDB message fields: sender_username, message_content, local_type, create_time
         sender = str(msg.get("sender_username", msg.get("senderUsername", msg.get("sender", ""))))
@@ -937,7 +1204,7 @@ class WcdbBackend(AbstractWeChatBackend):
             "timestamp": ts,
             "is_at_mentioned": bool(is_at),
             "bot_mention_text": bot_mention_text,
-            "is_group": True,
+            "is_group": is_group,
             "is_system_join": is_system_join,
             "new_member_id": new_member_id,
         }

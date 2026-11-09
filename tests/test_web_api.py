@@ -929,7 +929,7 @@ class PublicApiTests(unittest.TestCase):
 
 
 class RuntimeResetTests(unittest.TestCase):
-    """Tests for clearing local data and returning to first-run state."""
+    """Tests for clearing local runtime data while preserving configuration."""
 
     def setUp(self):
         from src.web import server
@@ -1026,13 +1026,14 @@ class RuntimeResetTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_reset_runtime_data_returns_to_first_run_state(self):
-        """Runtime reset clears generated data, config, and onboarding_state."""
+    def test_reset_runtime_data_clears_data_and_preserves_config(self):
+        """Runtime reset clears generated data but keeps config and onboarding."""
         from src.web import server
 
         self._seed_runtime_db()
         for filename in server._RUNTIME_RESET_FILES:
             (self.data_dir / filename).write_text("old", encoding="utf-8")
+        (self.data_dir / "welcome_templates.json").write_text("{}", encoding="utf-8")
 
         result = server._reset_runtime_data()
 
@@ -1045,15 +1046,17 @@ class RuntimeResetTests(unittest.TestCase):
             "todos",
         ):
             self.assertEqual(self._count_rows(table), 0, table)
-        self.assertEqual(self._count_rows("onboarding_state"), 0)
-        self.assertFalse(self.env_path.exists())
-        self.assertFalse(result["onboarding_done"])
-        self.assertTrue(result["config"]["removed_env"])
-        self.assertNotIn("ONBOARDING_DONE", os.environ)
-        self.assertNotIn("WCDB_KEY", os.environ)
-        self.assertNotIn("OPENAI_API_KEY", os.environ)
-        self.assertNotIn("OPENAI_BASE_URL", os.environ)
-        self.assertNotIn("OPENAI_MODEL", os.environ)
+        # Onboarding progress is configuration, not runtime data.
+        self.assertEqual(self._count_rows("onboarding_state"), 1)
+        # .env survives untouched, along with the process environment.
+        self.assertTrue(self.env_path.exists())
+        self.assertIn("OPENAI_API_KEY=sk-old", self.env_path.read_text(encoding="utf-8"))
+        self.assertIn("WCDB_KEY=keep-key", self.env_path.read_text(encoding="utf-8"))
+        self.assertEqual(os.environ["OPENAI_API_KEY"], "sk-old")
+        self.assertEqual(os.environ["WCDB_KEY"], "keep-key")
+        self.assertTrue(result["config_preserved"])
+        # User-authored welcome templates are configuration too.
+        self.assertTrue((self.data_dir / "welcome_templates.json").exists())
         self.assertFalse((self.data_dir / "group_names.json").exists())
         self.assertFalse((self.data_dir / "bot_status.json").exists())
         snap = server._status.snapshot()

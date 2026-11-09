@@ -98,6 +98,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `OPENAI_MODEL` | `str` | `""` (需通过模型列表选择) | `src/config.py` | `src/summarize/openai_compatible_backend.py`, `src/bot.py:_log_banner()` |
 | `WECHAT_BACKEND` | `str` | `"wcdb"` | `src/config.py` | `src/bot.py:_create_wechat_backend()` |
 | `WECHAT_GROUPS` | `str` | `"*"` | `src/config.py` (经 `_decode_wechat_groups` URL解码) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_groups()` |
+| `WECHAT_FRIENDS` | `str` | `""` (不回复任何好友) | `src/config.py` (经 `_decode_wechat_friends`；空值不展开为 `*`) | `src/bot.py:_create_wechat_backend()`, `src/wechat/wcdb_backend.py:_resolve_friends()` |
 | `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
 | `WEBOT_DATA_DIR` | `str` | 当前应用目录下 `data/` (留空) | `src/config.py` | `src/config.py` 路径辅助函数；webot 自有 DB、日志、昵称、模板、群缓存、语音缓存、崩溃日志 |
 | `BOT_DISPLAY_NAME` | `str` | `"群聊小助手"` | `src/config.py` (经 `_sanitize_display_name` 清洗) | `src/router.py:handle()` (多处), `src/bot.py:_log_banner()` |
@@ -278,7 +279,8 @@ image_gen_keywords: list[str] = [
 | `MessageRouter._is_todo_group(chat_id)` | ~125 | 判断群聊是否启用待办功能 | `chat_id: str` | `bool` |
 | `MessageRouter._get_group_memory(chat_id)` | ~140 | 获取群聊记忆文本 | `chat_id: str` | `str` |
 | `MessageRouter._handle_summary(msg)` | ~145 | 生成聊天总结 | `msg: dict` | `str \| None` |
-| `MessageRouter._handle_chat(msg, clean_content)` | ~230 | 处理 @bot AI 对话 | `msg: dict, clean_content: str` | `str \| None` |
+| `MessageRouter._handle_chat(msg, clean_content, is_group=True)` | ~230 | 处理 @bot AI 对话；好友私聊时不加 `@` 前缀 | `msg: dict, clean_content: str, is_group: bool` | `str \| None` |
+| `MessageRouter._handle_friend_chat(msg)` | ~210 | 处理已勾选好友的私聊消息：无需 @，仅文本/已转写语音自动回复，非文本与过期消息跳过 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_image_gen(msg, clean_content)` | — | 处理 @bot 生图请求：提取提示词 → 调用 Images API → 返回 `ImageReply`，失败回文本错误 | `msg: dict, clean_content: str` | `ImageReply \| str` |
 | `MessageRouter._handle_welcome(msg)` | ~280 | 发送新成员欢迎消息 | `msg: dict` | `str \| None` |
 | `MessageRouter._handle_proactive_chat(msg, mode)` | ~305 | 处理主动发言 | `msg: dict, mode: ProactiveMode` | `str \| None` |
@@ -287,7 +289,7 @@ image_gen_keywords: list[str] = [
 
 | 函数 | 行号 | 描述 | 参数 | 返回值 |
 |---|---|---|---|---|
-| `chat(message, ...)` | ~20 | AI 对话响应 (@bot)；上下文中的图片/表情/文件占位禁止脑补画面 | `message: str, context_messages=None, requester_name="", bot_name="", group_name="", group_memory=""` | `str` |
+| `chat(message, ...)` | ~20 | AI 对话响应 (@bot 或好友私聊)；上下文中的图片/表情/文件占位禁止脑补画面 | `message: str, context_messages=None, requester_name="", bot_name="", group_name="", group_memory="", is_private=False` | `str` |
 | `proactive_chat(mode, context_messages, ...)` | ~50 | 主动发言；上下文中的图片/表情/文件占位禁止脑补画面 | `mode: ProactiveMode, context_messages: list[dict], bot_name="", group_name="", group_memory=""` | `str` |
 | `summarize(messages, requester_name)` | ~80 | 生成结构化摘要 | `messages: list[dict], requester_name: str` | `SummaryResult` |
 | `_multi_level_map_reduce(chunks, requester_name)` | ~100 | 多级 Map-Reduce 处理大量消息 | `chunks: list[list[dict]], requester_name: str` | `SummaryResult` |
@@ -366,12 +368,18 @@ image_gen_keywords: list[str] = [
 | `_resolve_groups()` | 按 session → contacts → 缓存 → 直接 ID 解析群组名称到 talker ID | 无 | `None` |
 | `_save_group_names(chatrooms)` | 持久化群名映射(静态) | `chatrooms: dict` | `None` |
 | `_save_group_members(chat_members)` | 持久化群成员列表(静态) | `chat_members: dict` | `None` |
-| `_poll_cycle(callback)` | 单次轮询周期 | `callback: MessageCallback` | `None` |
-| `_poll_group(group_name, talker, callback)` | 轮询单个群聊消息；用 `_raw_message_key()` 去重、自发内容按群排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback` | `None` |
+| `_is_friend_username(username)` | 判断 session/contact 用户名是否可作为好友私聊（排除 `@chatroom`、`gh_`、系统账号） | `username: str` | `bool` |
+| `_friends_from_records(records)` | 从 session/contact 记录构建好友元数据 | `records` | `dict[str, dict]` |
+| `_friends_from_contacts()` | 从联系人兜底加载好友（联系人备注优先，便于搜索发送） | 无 | `dict[str, dict]` |
+| `_load_cached_friend_names()` | 读取 `<WEBOT_DATA_DIR>/friend_names.json` 好友映射 | 无 | `dict[str, dict]` |
+| `_save_friend_names(friends)` | 持久化好友映射(静态)，供 Web UI 勾选列表使用 | `friends: dict` | `None` |
+| `_resolve_friends()` | 发现全部好友并写入缓存；仅解析 `WECHAT_FRIENDS` 勾选的好友到 `_friend_ids` | 无 | `None` |
+| `_poll_cycle(callback)` | 单次轮询周期；先群聊后好友私聊 | `callback: MessageCallback` | `None` |
+| `_poll_group(group_name, talker, callback, is_group=True)` | 轮询单个聊天消息；用 `_raw_message_key()` 去重、自发内容按聊天排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback, is_group` | `None` |
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池)；回复为 `ImageReply` 时走 `_send_image_and_confirm()` 图片通道 | `group_name, talker, standardized, callback` | `None` |
 | `_stable_id_text(value)` | 过滤 WCDB 空值/`0` 占位 ID，避免把所有 `server_id=0` 消息视为同一条 | `value` | `str` |
 | `_raw_message_key(msg, talker)` | 生成轮询去重和消息 ID 使用的稳定群内原始键；优先非零 server/local ID，否则用发送人+内容+时间+类型 | `msg: dict, talker: str` | `str` |
-| `_standardize(msg, group_name, talker)` | 标准化WCDB原始消息；图片/表情/文件转干净摘要占位；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str` | `dict \| None` |
+| `_standardize(msg, group_name, talker, is_group=True)` | 标准化WCDB原始消息；图片/表情/文件转干净摘要占位；@mention 精确+模糊匹配(含字面 @name)，输出 `bot_mention_text` | `msg: dict, group_name: str, talker: str, is_group: bool` | `dict \| None` |
 | `_send_and_confirm(group_name, talker, content)` | 通过键盘发送；成功后按 `(talker, content, timestamp)` 写入 `_recent_sends` 供同群自发自排除 | `group_name, talker, content` | `bool` |
 | `_send_image_and_confirm(group_name, talker, image_path)` | 通过剪贴板粘贴发送生成图片；成功后按 `(talker, "[图片]", timestamp)` 写入 `_recent_sends` 防自触发 | `group_name, talker, image_path` | `bool` |
 | `_get_voice()` | 懒初始化语音识别管道 | 无 | `VoicePipeline \| None \| False` |
@@ -870,6 +878,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/ai/models      → _fetch_ai_models() → _request_json()
   ├── /api/nicknames      → NicknameService
   ├── /api/nicknames/groups → <WEBOT_DATA_DIR>/group_names.json / messages.db
+  ├── /api/friends        → <WEBOT_DATA_DIR>/friend_names.json (配置面板好友勾选列表)
   ├── /api/welcome/templates → WelcomeManager
   ├── /api/sandbox/test   → create_summarizer() → .chat()
   ├── /api/todos          → TodoStore
@@ -1040,10 +1049,15 @@ WcdbBackend.start(callback)
   │     ├── get_display_names() → 批量解析昵称
   │     └── _save_group_names() → 持久化到 <WEBOT_DATA_DIR>/group_names.json
   │
+  ├── _resolve_friends()
+  │     ├── sessions/contacts → 收集非 @chatroom / 非 gh_ / 非系统账号的个人好友
+  │     ├── _save_friend_names() → 持久化全部好友到 <WEBOT_DATA_DIR>/friend_names.json
+  │     └── 仅将 WECHAT_FRIENDS 勾选的好友解析进 _friend_ids (未勾选不轮询)
+  │
   └── while self._running:           # 主轮询循环
         ├── _poll_cycle(callback)
-        │     └── for each group:
-        │           _poll_group(group_name, talker, callback)
+        │     ├── for each group:  _poll_group(group_name, talker, callback)
+        │     └── for each friend: _poll_group(friend_name, talker, callback, is_group=False)
         │             ├── get_messages(talker, limit=50)
         │             ├── _raw_message_key() → 非零 ID/内容组合轻量去重，旧消息不进入 standardize
         │             ├── _standardize() → 统一消息格式
@@ -1081,7 +1095,7 @@ WcdbBackend.start(callback)
     "timestamp": int,       # Unix 秒
     "is_at_mentioned": bool, # 是否 @机器人 (精确+模糊匹配 BOT_DISPLAY_NAME)
     "bot_mention_text": str, # 命中的 @ 文本 (如 "@俞")，供 router 剥离；未命中为 ""
-    "is_group": bool,       # 是否群聊(始终 True)
+    "is_group": bool,       # 是否群聊(好友私聊为 False)
     "is_system_join": bool, # 是否"xxx 加入了群聊"事件
     "new_member_id": str,   # 新成员 wxid
 }
@@ -1127,6 +1141,9 @@ MessageRouter.handle(msg)
   │           │     └── 超大量 → _multi_level_map_reduce() (多级合并)
   │           │
   │           └── format_summary_for_reply() — 格式化为微信回复
+  │
+  ├── [好友私聊] → _handle_friend_chat(msg)   # 仅后端轮询的已勾选好友；无需 @
+  │     └── 仅 msg_type 1/34(有转写) 且未过期 → _handle_chat(msg, content, is_group=False)
   │
   └── [AI 对话] → _handle_chat(msg, clean_content)
         ├── MessageStore.get_messages_since() — 获取最近 600s 上下文
@@ -1276,6 +1293,7 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/nicknames?chat_id=xxx` | 获取群成员昵称列表 | 无 |
 | `POST` | `/api/nicknames` | 保存/删除昵称映射 | 无 |
 | `GET` | `/api/nicknames/groups` | 获取群组列表 | 无 |
+| `GET` | `/api/friends` | 获取已发现的好友列表 (`friend_names.json`)，供配置面板勾选 | 无 |
 | `GET` | `/api/welcome/templates` | 获取欢迎模板配置 | 无 |
 | `POST` | `/api/welcome/templates` | 保存欢迎模板配置 | 无 |
 | `GET` | `/api/todos?status=active&chat_id=xxx` | 获取待办列表 | 无 |
@@ -1836,6 +1854,7 @@ DEEPSEEK_BASE_URL=https://api.deepseek.com     # 旧预设 API 地址
 # === 微信后端 ===
 WECHAT_BACKEND=wcdb                            # "wcdb" / "mac_hybrid" / "mac_ui"
 WECHAT_GROUPS=*                                # 群名(逗号分隔, URL编码, "*"=全部)
+WECHAT_FRIENDS=                                # 好友名/wxid(逗号分隔, URL编码, 空=不回复, "*"=全部)
 WECHAT_DATA_DIR=                               # 微信数据目录(留空自动从微信进程参数/默认目录检测)
 WEBOT_DATA_DIR=                                # webot 自身数据目录(留空=程序目录下 data；不影响微信数据目录)
 

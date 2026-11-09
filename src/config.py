@@ -40,6 +40,17 @@ def _decode_wechat_groups(raw: str) -> str:
     return ",".join(decoded) if decoded else "*"
 
 
+def _decode_wechat_friends(raw: str) -> str:
+    """Decode URL-encoded friend names from .env WECHAT_FRIENDS value.
+
+    Unlike WECHAT_GROUPS, an empty value means "no friends" (not "*"):
+    friends are auto-replied only when explicitly selected in the UI.
+    """
+    if not raw or not raw.strip():
+        return ""
+    return _decode_wechat_groups(raw)
+
+
 def _sanitize_display_name(name: str) -> str:
     """Remove only truly dangerous characters from a display name.
 
@@ -232,6 +243,10 @@ class BotConfig:
     wechat_backend: str = "wcdb"
     # Comma-separated group names to monitor. "*" = auto-discover all groups.
     wechat_groups: str = "*"
+    # Comma-separated friend names for 1-on-1 AI chat.  Empty = no friends
+    # are auto-replied; "*" = all discovered friends.  Selected friends get
+    # an automatic AI reply to every text message they send.
+    wechat_friends: str = ""
     # Custom WeChat data directory. Leave empty to auto-detect from Documents.
     # Set to the parent directory containing wxid_* folders (e.g. D:\WeChatData).
     wechat_data_dir: str = ""
@@ -576,6 +591,7 @@ def load_config() -> BotConfig:
         "openai_model": os.getenv("OPENAI_MODEL", "").strip(),
         "wechat_backend": os.getenv("WECHAT_BACKEND", "wcdb").strip(),
         "wechat_groups": _decode_wechat_groups(os.getenv("WECHAT_GROUPS", "*")),
+        "wechat_friends": _decode_wechat_friends(os.getenv("WECHAT_FRIENDS", "")),
         "wechat_data_dir": os.getenv("WECHAT_DATA_DIR", "").strip(),
         "webot_data_dir": str(get_webot_data_dir()),
         "bot_display_name": _sanitize_display_name(os.getenv("BOT_DISPLAY_NAME", "群聊小助手")),

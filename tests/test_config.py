@@ -187,6 +187,40 @@ class DecodeWeChatGroupsTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _decode_wechat_friends
+# ---------------------------------------------------------------------------
+
+
+class DecodeWeChatFriendsTests(unittest.TestCase):
+    """Tests for _decode_wechat_friends — empty means no friends."""
+
+    def test_empty_returns_empty(self):
+        from src.config import _decode_wechat_friends
+
+        self.assertEqual(_decode_wechat_friends(""), "")
+        self.assertEqual(_decode_wechat_friends(None), "")
+        self.assertEqual(_decode_wechat_friends("   "), "")
+
+    def test_wildcard_passes_through(self):
+        from src.config import _decode_wechat_friends
+
+        self.assertEqual(_decode_wechat_friends("*"), "*")
+
+    def test_encoded_friend_names_decoded(self):
+        from src.config import _decode_wechat_friends
+
+        result = _decode_wechat_friends(
+            "Hello%20World,%E5%B0%8F%E6%98%8E",
+        )
+        self.assertEqual(result, "Hello World,小明")
+
+
+# ---------------------------------------------------------------------------
+# find_env_file
+# ---------------------------------------------------------------------------
+
+
 class FindEnvFileTests(unittest.TestCase):
     """Tests for find_env_file() behaviour."""
 

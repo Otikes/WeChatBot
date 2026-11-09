@@ -105,7 +105,32 @@ def _log_console(msg):
     logger.warning(msg)
 
 
-# ── Primary: wx_key.dll (zero-dependency key extraction) ─────────────
+# ── Primary: pure-Python memory scan (WeChat 4.x, no restart needed) ──
+
+def _extract_key_via_memory() -> str | None:
+    """Extract a database key from ``Weixin.exe`` memory via ``wxdb_reader``.
+
+    Works while WeChat is running and logged in — no wx_key.dll hook and no
+    restart required.  Returns a 64-char hex key, or None.
+    """
+    from .data_dir import find_wxid_and_dbpath
+    from .wxdb_reader import WeChatDB
+
+    wxid, base_dir = find_wxid_and_dbpath("")
+    db = WeChatDB(db_dir=base_dir, account=wxid)
+
+    # Prefer the session.db key (the one the legacy WCDB reader consumed).
+    for rel, key in db._keys.items():
+        if os.path.basename(str(rel).replace("\\", "/")) == "session.db":
+            return bytes(key).hex()
+
+    auto = db.extract_master_key()
+    if auto:
+        return auto[0]
+    return None
+
+
+# ── Fallback: wx_key.dll (zero-dependency key extraction) ─────────────
 
 def extract_wcdb_key(require_restart: bool = True,
                      on_progress=None):
@@ -128,6 +153,17 @@ def extract_wcdb_key(require_restart: bool = True,
                 on_progress(phase, msg)
             except Exception:
                 pass
+
+    # ── Fast path: memory scan (works while WeChat keeps running) ──
+    _progress("hooking", "正在从微信内存读取数据库密钥...")
+    try:
+        key = _extract_key_via_memory()
+    except Exception as e:
+        logger.warning("内存扫描提取密钥失败: %s", e)
+        key = None
+    if key:
+        logger.info("密钥提取成功（纯 Python 内存扫描，无需重启微信）")
+        return key
 
     dll_path = _find_wx_key_dll()
     if not dll_path:

@@ -593,6 +593,31 @@ function IdentitySection({ form, update }) {
   // Local editable groups array — source of truth for rendering
   const [groups, setGroups] = useState([])
 
+  // Friend checklist source (persisted by WcdbBackend as friend_names.json)
+  const [friends, setFriends] = useState([])
+  const [friendQuery, setFriendQuery] = useState('')
+  const [friendLoading, setFriendLoading] = useState(false)
+  const [friendError, setFriendError] = useState('')
+
+  async function loadFriends() {
+    setFriendLoading(true)
+    setFriendError('')
+    try {
+      const res = await fetch('http://127.0.0.1:7327/api/friends')
+      const data = await res.json()
+      if (data.ok) {
+        setFriends(data.friends || [])
+      } else {
+        setFriendError(data.error || '好友列表加载失败')
+      }
+    } catch {
+      setFriendError('无法连接本地服务，请确认应用正在运行')
+    }
+    setFriendLoading(false)
+  }
+
+  useEffect(() => { loadFriends() }, [])
+
   // Initialize from form.wechat_groups on mount only
   useEffect(() => {
     const raw = (form.wechat_groups || '').trim()
@@ -659,6 +684,65 @@ function IdentitySection({ form, update }) {
     syncToForm(['*'])
   }
 
+  // ── Friend chat selection ─────────────────────────────────
+  const friendRaw = (form.wechat_friends || '').trim()
+  const isAllFriends = friendRaw === '*'
+  const selectedFriends = isAllFriends
+    ? friends.map(f => f.name || f.chat_id)
+    : friendRaw.split(',').map(s => {
+        const trimmed = s.trim()
+        if (!trimmed) return ''
+        try { return decodeURIComponent(trimmed) } catch { return trimmed }
+      }).filter(Boolean)
+
+  function syncFriendsToForm(names) {
+    const nonEmpty = names.filter(Boolean)
+    if (nonEmpty.length === 0) {
+      update('wechat_friends', '')
+    } else {
+      update('wechat_friends', nonEmpty.map(n => encodeURIComponent(n)).join(','))
+    }
+  }
+
+  function toggleFriend(friend) {
+    const key = friend.name || friend.chat_id
+    const checked = isAllFriends
+      || selectedFriends.includes(key)
+      || selectedFriends.includes(friend.chat_id)
+
+    if (isAllFriends) {
+      // Expand "*" into the concrete list so individual friends can be unchecked.
+      const next = friends
+        .map(f => f.name || f.chat_id)
+        .filter(n => n !== key)
+      syncFriendsToForm(next)
+      return
+    }
+    if (checked) {
+      syncFriendsToForm(selectedFriends.filter(n => n !== key && n !== friend.chat_id))
+    } else {
+      syncFriendsToForm([...selectedFriends, key])
+    }
+  }
+
+  const knownFriendKeys = new Set()
+  friends.forEach(f => {
+    knownFriendKeys.add(f.name)
+    knownFriendKeys.add(f.chat_id)
+  })
+  const orphanSelected = isAllFriends
+    ? []
+    : selectedFriends.filter(n => !knownFriendKeys.has(n))
+  const query = friendQuery.trim().toLowerCase()
+  const visibleFriends = friends.filter(f => {
+    if (!query) return true
+    return (f.name || '').toLowerCase().includes(query)
+      || (f.chat_id || '').toLowerCase().includes(query)
+  })
+  const selectedFriendCount = isAllFriends
+    ? friends.length
+    : selectedFriends.length
+
   return (
     <div>
       <Field label="机器人微信昵称" hint="用于检测 @提及">
@@ -702,6 +786,92 @@ function IdentitySection({ form, update }) {
         </p>
         {!isAll && (
           <p className="text-[11px] text-text-muted mt-1">💡 请输入微信中显示的完整群名，必须完全一致</p>
+        )}
+      </Field>
+
+      <Field
+        label="好友私聊"
+        hint={
+          isAllFriends
+            ? '已勾选全部好友：他们发来的文字消息会自动获得 AI 回复'
+            : selectedFriendCount > 0
+              ? `已勾选 ${selectedFriendCount} 位好友：他们发来的文字消息会自动获得 AI 回复`
+              : '未勾选任何好友：好友私聊不会收到任何 AI 回复'
+        }
+      >
+        <div className="rounded-xl border border-border-main bg-bg-raised overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-border-main/70">
+            <input
+              type="text"
+              value={friendQuery}
+              onChange={e => setFriendQuery(e.target.value)}
+              placeholder="搜索好友名称或微信号"
+              className="flex-1 min-w-0 bg-transparent text-[13.5px] text-text-main placeholder:text-text-muted/60 focus:outline-none"
+            />
+            <button
+              type="button"
+              onClick={loadFriends}
+              disabled={friendLoading}
+              className="shrink-0 px-2.5 py-1 text-[12px] rounded-lg border border-border-main text-text-muted hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {friendLoading ? '刷新中…' : '刷新'}
+            </button>
+          </div>
+          <div className="max-h-56 overflow-y-auto p-1.5">
+            {visibleFriends.length === 0 ? (
+              <p className="px-2.5 py-3 text-[12px] text-text-muted leading-relaxed">
+                {friends.length === 0
+                  ? '暂无好友列表：启动一次机器人后会自动同步微信好友，再回到这里勾选。'
+                  : '没有匹配的好友'}
+              </p>
+            ) : visibleFriends.map(f => {
+              const key = f.name || f.chat_id
+              const checked = isAllFriends
+                || selectedFriends.includes(key)
+                || selectedFriends.includes(f.chat_id)
+              return (
+                <label
+                  key={f.chat_id || key}
+                  className="flex items-center gap-2.5 px-2 py-1.5 rounded-lg hover:bg-bg-main cursor-pointer transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleFriend(f)}
+                    className="w-4 h-4 accent-[#4C9B72] cursor-pointer"
+                  />
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-[13.5px] text-text-main truncate">{key}</span>
+                    {f.name && f.name !== f.chat_id && (
+                      <span className="block text-[11px] text-text-muted/80 truncate">{f.chat_id}</span>
+                    )}
+                  </span>
+                </label>
+              )
+            })}
+          </div>
+        </div>
+        {orphanSelected.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {orphanSelected.map((name, i) => (
+              <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-brand-green-light border border-brand-green/20 rounded-lg text-[13px] text-brand-green-hover dark:text-brand-green">
+                {name}
+                <button
+                  type="button"
+                  onClick={() => syncFriendsToForm(selectedFriends.filter(n => n !== name))}
+                  className="ml-0.5 text-brand-green-hover/60 hover:text-[#d45656] transition-colors leading-none text-base"
+                >
+                  &times;
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="text-[11px] text-text-muted mt-1.5">
+          只有勾选的好友会收到 AI 回复；未勾选的好友消息不会被处理。
+        </p>
+        {friendError && (
+          <p className="text-[11px] text-[#d45656] mt-1">{friendError}</p>
         )}
       </Field>
 
@@ -2140,6 +2310,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     anthropic_api_key: '', anthropic_base_url: 'https://api.anthropic.com',
     summarize_model: '',
     bot_display_name: '', wechat_backend: 'wcdb', wechat_groups: '*',
+    wechat_friends: '',
     fun_enabled: true,
     proactive_enabled: false, proactive_rate_window_sec: 120,
     proactive_rate_quiet: 1.5, proactive_rate_casual: 4.0,
@@ -2236,6 +2407,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
             ...prev,
             ...data.config,
             wechat_groups: data.config.wechat_groups || '*',
+            wechat_friends: data.config.wechat_friends || '',
           }))
           if (data.detected_data_dir) {
             setDetectedDataDir(data.detected_data_dir)
@@ -2269,6 +2441,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           bot_display_name: form.bot_display_name,
           wechat_backend: form.wechat_backend,
           wechat_groups: form.wechat_groups,
+          wechat_friends: form.wechat_friends,
           fun_enabled: form.fun_enabled,
           proactive_enabled: form.proactive_enabled,
           proactive_rate_window_sec: form.proactive_rate_window_sec,

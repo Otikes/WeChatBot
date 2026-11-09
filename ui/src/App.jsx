@@ -135,9 +135,8 @@ export default function App() {
 
   function handleResetComplete() {
     setBotStatus(null)
-    setWsConnected(false)
-    setActiveTab('dashboard')
     setOnboardingDone(false)
+    setActiveTab('dashboard')
   }
 
   // Loading state

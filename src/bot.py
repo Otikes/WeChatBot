@@ -341,6 +341,8 @@ class Bot:
         logger.info("Bot name: %r", config.bot_display_name)
         if config.wechat_groups:
             logger.info("Groups: %s", config.wechat_groups)
+        if config.wechat_friends:
+            logger.info("Friend chats: %s", config.wechat_friends)
         logger.info("DB path: %s", config.db_path)
         logger.info("=" * 50)
 
@@ -353,12 +355,16 @@ class Bot:
         groups = [
             g.strip() for g in config.wechat_groups.split(",") if g.strip()
         ]
+        friends = [
+            f.strip() for f in config.wechat_friends.split(",") if f.strip()
+        ]
 
         if config.wechat_backend == "wcdb":
             from .wechat.wcdb_backend import WcdbBackend
             return WcdbBackend(
                 bot_display_name=config.bot_display_name,
                 groups=groups,
+                friends=friends,
                 poll_sec=config.poll_interval_sec,
                 store=store,
                 config=config,

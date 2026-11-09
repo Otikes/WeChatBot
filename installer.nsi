@@ -239,11 +239,9 @@ Section "Install"
   File "dist\webot.exe"
   File ".env.example"
 
-  ; Native DLLs (VC++ runtime + WCDB + wx_key hook)
+  ; Native DLLs (VC++ runtime + wx_key hook fallback)
   SetOutPath "$INSTDIR\native\windows"
   File "native\windows\wx_key.dll"
-  File "native\windows\wcdb_api.dll"
-  File "native\windows\WCDB.dll"
   File "native\windows\MSVCP140.dll"
   File "native\windows\VCRUNTIME140.dll"
   File "native\windows\VCRUNTIME140_1.dll"

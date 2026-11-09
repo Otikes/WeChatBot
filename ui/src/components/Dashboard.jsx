@@ -204,7 +204,7 @@ export default function Dashboard({ status, onResetComplete }) {
   async function handleResetRuntime() {
     if (status.running || resetBusy) return
     const confirmed = window.confirm(
-      '确定要重置所有数据吗？\n\n会清空消息历史、群聊记忆、待办、昵称缓存、运行日志、.env 配置、API Key、微信密钥和功能开关，并回到首次启动流程。'
+      '确定要重置数据吗？\n\n会清空消息历史、群聊记忆、待办、昵称与群名缓存、运行日志。\n\n所有配置（模型、API Key、微信密钥、功能开关）都会保留，无需重新初始化。'
     )
     if (!confirmed) return
 
@@ -216,7 +216,7 @@ export default function Dashboard({ status, onResetComplete }) {
       if (!data.ok) {
         setResetResult({ ok: false, message: data.error || '重置失败' })
       } else {
-        setResetResult({ ok: true, message: data.message || '已重置为首次运行状态' })
+        setResetResult({ ok: true, message: data.message || '已清空本地数据，配置保持不变' })
         onResetComplete?.(data)
       }
     } catch {
@@ -270,7 +270,7 @@ export default function Dashboard({ status, onResetComplete }) {
             whileHover={{ scale: status.running || resetBusy ? 1 : 1.02 }}
             onClick={handleResetRuntime}
             disabled={status.running || resetBusy}
-            title={status.running ? '请先停止机器人再重置数据' : '清空本地数据并回到首次启动流程'}
+            title={status.running ? '请先停止机器人再重置数据' : '清空本地聊天数据与缓存，保留所有配置'}
             className="w-36 py-2.5 rounded-full text-[13px] font-semibold tracking-wide border border-border-main bg-bg-raised text-text-muted hover:text-[#d45656] hover:border-[#d45656]/25 hover:bg-[#d45656]/10 disabled:hover:text-text-muted disabled:hover:border-border-main disabled:hover:bg-bg-raised disabled:opacity-50 transition-all duration-300 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {resetBusy ? (

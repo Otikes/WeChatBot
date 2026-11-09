@@ -6,6 +6,10 @@ Routes messages to five response modes:
 3. Summary requests: keyword trigger → summarizer.summarize()
 4. AI chat: @bot mention (non-summary) → summarizer.chat()
 5. Proactive chat: ambient participation via rate-based gating → summarizer.proactive_chat()
+
+Friend (1-on-1) chats are separate: the backend only polls friends selected
+in the config UI, and every text message from them gets an AI reply without
+needing an @mention. Unselected friends never reach this router.
 """
 
 import logging
@@ -164,6 +168,13 @@ class MessageRouter:
                     "Ignoring stale join event for '%s' (age=%ds, max=%ds)",
                     msg.get("new_member_id", "?"), msg_age, WELCOME_MAX_AGE_SEC,
                 )
+
+        # ── Route: private chat with a selected friend ───────────
+        # No @mention is needed in 1-on-1 chats.  The backend only polls
+        # friends selected in the config UI, so unselected friends never
+        # get here and never receive an AI reply.
+        if not msg.get("is_group", True):
+            return self._handle_friend_chat(msg)
 
         # ── Route: @mention vs proactive ─────────────────────────
         # Sticky mention: if the user previously sent an empty @mention,
@@ -516,8 +527,46 @@ class MessageRouter:
 
     # ── AI Chat handler ──────────────────────────────────────────
 
-    def _handle_chat(self, msg: dict, clean_content: str) -> str | None:
-        """Handle a conversational @bot mention."""
+    def _handle_friend_chat(self, msg: dict) -> str | None:
+        """Auto-reply to a selected friend's 1-on-1 message.
+
+        In a private chat there is no @mention: every text (or recognised
+        voice) message is treated as a conversation turn.  Stickers,
+        images and files are skipped — the AI cannot interpret them.
+        """
+        content = (msg.get("content") or "").strip()
+        if not content:
+            return None
+
+        msg_age_sec = int(time.time()) - msg.get("timestamp", 0)
+        if msg_age_sec > AT_MENTION_MAX_AGE_SEC:
+            logger.info(
+                "Ignoring stale friend message from '%s' (age=%ds, max=%ds)",
+                msg["sender_name"], msg_age_sec, AT_MENTION_MAX_AGE_SEC,
+            )
+            return None
+
+        msg_type = msg.get("msg_type", 1)
+        if msg_type not in (1, 34):
+            return None
+        if msg_type == 34 and content == "[语音]":
+            return None
+
+        # Strip WeChat reply-quote prefix (wxid_xxx:\n) if present.
+        content = re.sub(r'^\s*wxid_[a-zA-Z0-9]+:\s*', '', content).strip()
+        if not content:
+            return None
+
+        logger.info(
+            "Friend chat: '%s' in %s: %s",
+            msg["sender_name"], msg.get("group_name", msg["chat_id"][:20]),
+            content[:80],
+        )
+        return self._handle_chat(msg, content, is_group=False)
+
+    def _handle_chat(self, msg: dict, clean_content: str,
+                     is_group: bool = True) -> str | None:
+        """Handle a conversational turn (@bot mention or friend chat)."""
         # Resolve custom nickname from file (via sender_id=wxid),
         # not sender_name which may already be a backend-resolved default.
         display_name = self._nicks.resolve_name(msg["sender_id"])
@@ -557,6 +606,7 @@ class MessageRouter:
                 bot_name=self._config.bot_display_name,
                 group_name=msg.get("group_name", msg.get("chat_id", "群聊")),
                 group_memory=self._get_group_memory(msg["chat_id"]),
+                is_private=not is_group,
             )
             ai_reply = self._nicks.resolve_wxids(ai_reply)
             # Guard against empty AI reply — sending a bare @mention is confusing
@@ -566,10 +616,15 @@ class MessageRouter:
                     display_name, msg.get("group_name", msg["chat_id"][:20]),
                 )
                 return None
-            return f"@{display_name} {ai_reply}"
+            # Private chats have no @mention convention — reply plainly.
+            if is_group:
+                return f"@{display_name} {ai_reply}"
+            return ai_reply
         except Exception as e:
             logger.error("AI chat failed: %s", e)
-            return f"@{display_name} 大脑短路了，稍等再试～"
+            if is_group:
+                return f"@{display_name} 大脑短路了，稍等再试～"
+            return "大脑短路了，稍等再试～"
 
     # ── Image generation handler ────────────────────────────────
 

@@ -46,7 +46,7 @@ class AbstractSummarizer(ABC):
 
     # Chat prompt template — supports {placeholders}
     CHAT_SYSTEM_PROMPT = """\
-你是微信群「{group_name}」里的 AI 聊天助手，像一个普通群友一样自然地参与聊天。
+你是{chat_context}里的 AI 聊天助手，像一个普通聊天伙伴一样自然地参与聊天。
 
 ## 身份
 - 你是 AI 程序，不是真人。
@@ -95,12 +95,12 @@ class AbstractSummarizer(ABC):
 ## 禁止用词
 根据上下文、综上所述、首先其次最后、需要注意的是、值得一提的是、可谓是、不得不说、从某种角度来说、建议您、希望对你有所帮助
 
-## 你在这个群里的记忆
+## 你在这个聊天里的记忆
 {group_memory}
 
 ## 当前
-群：{group_name}  时间：{current_time}
-@你的人：{sender_name}
+{chat_target_label}：{group_name}  时间：{current_time}
+{sender_label}：{sender_name}
 
 {context_section}对方消息：
 {current_message}
@@ -112,16 +112,18 @@ class AbstractSummarizer(ABC):
              requester_name: str = "",
              bot_name: str = "群聊小助手",
              group_name: str = "群聊",
-             group_memory: str = "") -> str:
-        """Conversational AI response for @bot mentions.
+             group_memory: str = "",
+             is_private: bool = False) -> str:
+        """Conversational AI response for @bot mentions or friend chats.
 
         Args:
             message: The user's message content (without @bot prefix).
             context_messages: Chat history, only when user references prior chat.
             requester_name: Display name of the person asking.
             bot_name: Bot's display name.
-            group_name: WeChat group display name.
+            group_name: WeChat group display name or friend display name.
             group_memory: Group's long-term memory text (first-person diary).
+            is_private: True for a 1-on-1 friend chat (no @mention).
 
         Returns:
             AI response text.
@@ -141,10 +143,19 @@ class AbstractSummarizer(ABC):
         message = _esc(message)
 
         # ── 0. Memory display ────────────────────────────────────
-        memory_display = (
-            group_memory if group_memory
-            else "（你刚进这个群，还没有形成对这个群的印象）"
+        if group_memory:
+            memory_display = group_memory
+        elif is_private:
+            memory_display = "（你还没和这位好友聊过天，先自然打招呼吧）"
+        else:
+            memory_display = "（你刚进这个群，还没有形成对这个群的印象）"
+
+        chat_context = (
+            f"与好友「{group_name}」的微信私聊"
+            if is_private else f"微信群「{group_name}」"
         )
+        chat_target_label = "好友" if is_private else "群"
+        sender_label = "对方" if is_private else "@你的人"
 
         # ── 1. Build context section ───────────────────────────────
         context_section = ""
@@ -157,7 +168,7 @@ class AbstractSummarizer(ABC):
                     context_lines.append(f"{sender}: {content}")
             if context_lines:
                 context_section = (
-                    "最近群聊记录（网友提到了之前的内容，请参考）：\n"
+                    "最近聊天记录（提到了之前的内容，请参考）：\n"
                     + "\n".join(context_lines)
                     + "\n\n"
                 )
@@ -170,7 +181,10 @@ class AbstractSummarizer(ABC):
         system_prompt = self.CHAT_SYSTEM_PROMPT.format(
             bot_name=bot_name,
             group_name=group_name,
-            sender_name=requester_name or "群友",
+            chat_context=chat_context,
+            chat_target_label=chat_target_label,
+            sender_label=sender_label,
+            sender_name=requester_name or ("好友" if is_private else "群友"),
             current_time=datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
             context_section=context_section,
             current_message=message,
@@ -178,9 +192,14 @@ class AbstractSummarizer(ABC):
         )
 
         # ── 3. Build user message (just the trigger) ──────────────
-        user_prompt = (
-            f"{requester_name or '群友'} @了你，请回复：{message}"
-        )
+        if is_private:
+            user_prompt = (
+                f"{requester_name or '好友'} 发来消息，请回复：{message}"
+            )
+        else:
+            user_prompt = (
+                f"{requester_name or '群友'} @了你，请回复：{message}"
+            )
 
         # ── 4. Call AI API (backend-specific) ─────────────────────
         return self._retry_with_backoff(

@@ -27,6 +27,7 @@ from urllib import request as urlrequest
 # make the name a local — so it must be imported at module level too,
 # otherwise the first branch that references it raises UnboundLocalError.
 from src.config import (
+    _decode_wechat_friends,
     _decode_wechat_groups,
     get_webot_data_dir,
     resolve_webot_data_dir,
@@ -101,6 +102,7 @@ def _find_or_create_env() -> Path:
         "WECHAT_BACKEND=wcdb\n"
         "BOT_DISPLAY_NAME=\n"
         "WECHAT_GROUPS=\n"
+        "WECHAT_FRIENDS=\n"
         "WEBOT_DATA_DIR=\n",
         encoding="utf-8",
     )
@@ -576,6 +578,7 @@ _WEBOT_DATA_MIGRATION_ITEMS = (
     "send_failures.log",
     "group_members.json",
     "group_names.json",
+    "friend_names.json",
     "nicknames.json",
     "welcome_templates.json",
     "lots.json",
@@ -775,85 +778,6 @@ _RUNTIME_RESET_FILES = (
     "nicknames.json",
 )
 
-_FIRST_RUN_ENV_DEFAULTS = {
-    "AI_BACKEND": "openai_compatible",
-    "OPENAI_API_KEY": "",
-    "OPENAI_BASE_URL": OPENAI_COMPATIBLE_BASE_URL,
-    "OPENAI_MODEL": "",
-    "ANTHROPIC_API_KEY": "",
-    "ANTHROPIC_BASE_URL": "https://api.anthropic.com",
-    "SUMMARIZE_MODEL": "",
-    "DEEPSEEK_API_KEY": "",
-    "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
-    "DEEPSEEK_MODEL": "",
-    "WECHAT_DATA_DIR": "",
-    "WECHAT_BACKEND": "wcdb",
-    "WECHAT_GROUPS": "*",
-    "BOT_DISPLAY_NAME": "",
-    "TRIGGER_KEYWORDS": "总结一下,之前发了什么,错过了什么,summarize,what did i miss,聊天总结,帮我总结,前面说了什么,说了啥,发生了什么",
-    "DB_PATH": "data/messages.db",
-    "FUN_ENABLED": "true",
-    "SUMMARIZE_ENABLED": "true",
-    "FEISHU_EXPORT_ENABLED": "false",
-    "FEISHU_APP_ID": "",
-    "FEISHU_APP_SECRET": "",
-    "FEISHU_EXPORT_MODE": "knowledge",
-    "FEISHU_EXPORT_WINDOW_HOURS": "8",
-    "FEISHU_EXPORT_TRIGGER_KEYWORDS": _DEFAULT_FEISHU_TRIGGER_KEYWORDS,
-    "FEISHU_AUTO_SYNC_ENABLED": "false",
-    "FEISHU_AUTO_SYNC_MIN_MESSAGES": "20",
-    "FEISHU_AUTO_SYNC_COOLDOWN_SEC": "1800",
-    "FEISHU_KNOWLEDGE_BASE_NAME": "webot 群聊沉淀",
-    "FEISHU_KNOWLEDGE_FOLDER_TOKEN": "",
-    "FEISHU_SPREADSHEET_TOKEN": "",
-    "FEISHU_SPREADSHEET_RANGE": "Sheet1!A:H",
-    "FEISHU_BITABLE_APP_TOKEN": "",
-    "FEISHU_BITABLE_TABLE_ID": "",
-    "FEISHU_DOC_FOLDER_TOKEN": "",
-    "POLL_INTERVAL_SEC": "1.0",
-    "DEDUP_WINDOW_SEC": "60",
-    "MAX_MESSAGES_FOR_SUMMARY": "5000",
-    "CHUNK_SIZE": "400",
-    "FALLBACK_WINDOW_HOURS": "8",
-    "WELCOME_ENABLED": "false",
-    "PROACTIVE_ENABLED": "false",
-    "PROACTIVE_RATE_WINDOW_SEC": "120",
-    "PROACTIVE_RATE_QUIET": "1.5",
-    "PROACTIVE_RATE_CASUAL": "4.0",
-    "PROACTIVE_RATE_LIVELY": "6.5",
-    "PROACTIVE_RATE_BURST": "8.5",
-    "STICKY_MENTION_ENABLED": "true",
-    "STICKY_MENTION_TTL_SEC": "60",
-    "TODO_ENABLED": "true",
-    "TODO_GROUPS": "*",
-    "TODO_MAX_PER_GROUP": "50",
-    "TODO_COMPLETED_RETENTION_DAYS": "30",
-    "TODO_DELETED_RETENTION_DAYS": "30",
-    "TODO_ADD_KEYWORDS": _DEFAULT_TODO_ADD_KEYWORDS,
-    "TODO_COMPLETE_KEYWORDS": _DEFAULT_TODO_COMPLETE_KEYWORDS,
-    "TODO_DELETE_KEYWORDS": _DEFAULT_TODO_DELETE_KEYWORDS,
-    "LOG_LEVEL": "INFO",
-    "LOG_FILE": "data/bot.log",
-    "VOICE_ASR_ENABLED": "false",
-    "VOICE_ASR_BACKEND": "local_whisper",
-    "VOICE_ASR_LANGUAGE": "zh",
-    "VOICE_OPENAI_API_KEY": "",
-    "VOICE_OPENAI_BASE_URL": "",
-    "VOICE_LOCAL_MODEL": "small",
-    "VOICE_ASR_TO_SIMPLIFIED": "true",
-    "IMAGE_GEN_ENABLED": "false",
-    "IMAGE_GEN_PROTOCOL": "openai_images",
-    "IMAGE_GEN_API_KEY": "",
-    "IMAGE_GEN_BASE_URL": "",
-    "IMAGE_GEN_MODEL": "",
-    "IMAGE_GEN_SIZE": "",
-    "MAC_WEFLOW_DATA_DIR": "",
-    "MAC_WECHAT_SEND_SHORTCUT": "enter",
-    "ONBOARDING_DONE": "false",
-    "WCDB_KEY": "",
-    "WEBOT_DATA_DIR": "",
-}
-
 
 def _runtime_data_dir() -> Path:
     """Return the writable data directory used by runtime cache/log files."""
@@ -922,28 +846,17 @@ def _reset_in_memory_onboarding() -> None:
         _step1_state["result"] = None
 
 
-def _reset_app_config_to_first_run() -> dict:
-    """Delete persisted webot config and reset onboarding globals."""
-    from src.config import find_env_file
-
-    env_path = find_env_file()
-    removed_env = False
-    if env_path and env_path.exists():
-        env_path.unlink()
-        removed_env = True
-    for key in set(_FIRST_RUN_ENV_DEFAULTS) | _LEGACY_ONBOARDING_ENV_KEYS:
-        os.environ.pop(key, None)
-    _reset_in_memory_onboarding()
-    return {
-        "env_path": str(env_path) if env_path else "",
-        "removed_env": removed_env,
-        "cleared_keys": sorted(set(_FIRST_RUN_ENV_DEFAULTS) | _LEGACY_ONBOARDING_ENV_KEYS),
-        "onboarding_done": False,
-    }
-
-
 def _reset_runtime_data() -> dict:
-    """Clear local data and reset webot configuration to first-run state."""
+    """Clear local runtime data while keeping all persisted configuration.
+
+    Removed: message history, per-user cursors, trigger dedup log, group
+    memory, todos, plus generated caches and logs.
+
+    Kept: ``.env`` (AI/voice/image-gen model config, API keys, WCDB key,
+    bot identity, data paths, feature switches), onboarding progress, and
+    ``welcome_templates.json`` — otherwise the user would have to redo
+    first-run setup just to clear chat data.
+    """
     if _bot_control.is_running():
         return {
             "ok": False,
@@ -957,23 +870,7 @@ def _reset_runtime_data() -> dict:
 
     try:
         db_result = _reset_runtime_database(db_path)
-        _reset_onboarding_database(db_path)
         removed_files = _reset_runtime_files(data_dir)
-        config_result = _reset_app_config_to_first_run()
-
-        # WEBOT_DATA_DIR / DB_PATH may have just moved back to defaults. Clear
-        # that target too so an old default DB cannot mark onboarding completed.
-        default_db_path = _onboarding_db_path()
-        default_data_dir = _runtime_data_dir()
-        if default_db_path != db_path:
-            default_db_path.parent.mkdir(parents=True, exist_ok=True)
-            _reset_onboarding_database(default_db_path)
-            default_db_result = _reset_runtime_database(default_db_path)
-        else:
-            default_db_result = None
-        if default_data_dir != data_dir:
-            default_data_dir.mkdir(parents=True, exist_ok=True)
-            removed_files.extend(_reset_runtime_files(default_data_dir))
 
         update_status(
             running=False,
@@ -985,24 +882,20 @@ def _reset_runtime_data() -> dict:
             error="",
         )
         logger.info(
-            "First-run reset: db=%s, default_db=%s, tables=%s, files=%s, removed_env=%s",
+            "Runtime data reset: db=%s, tables=%s, files=%s",
             db_result["path"],
-            default_db_result["path"] if default_db_result else None,
             sorted(db_result["deleted"]),
             removed_files,
-            config_result["removed_env"],
         )
         return {
             "ok": True,
-            "message": "已重置为首次运行状态，请重新完成初始化。",
+            "message": "已清空本地数据，配置保持不变。",
             "database": db_result,
-            "default_database": default_db_result,
             "removed_files": removed_files,
-            "config": config_result,
-            "onboarding_done": False,
+            "config_preserved": True,
         }
     except (OSError, sqlite3.Error) as exc:
-        logger.exception("Failed to reset app data")
+        logger.exception("Failed to reset runtime data")
         return {"ok": False, "error": str(exc)}
 
 
@@ -1901,7 +1794,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
         # ── API: Load config ───────────────────────────────────────────
         if self.path == "/api/load-config":
-            from src.config import _decode_wechat_groups  # noqa: F811 - needed before use (scoping)
+            from src.config import (  # noqa: F811 - needed before use (scoping)
+                _decode_wechat_friends,
+                _decode_wechat_groups,
+            )
             env_path = _find_or_create_env()
             raw = {}
             if env_path.exists():
@@ -1915,6 +1811,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 "bot_display_name": raw.get("BOT_DISPLAY_NAME", ""),
                 "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                 "wechat_groups": _decode_wechat_groups(raw.get("WECHAT_GROUPS", "*")),
+                "wechat_friends": _decode_wechat_friends(raw.get("WECHAT_FRIENDS", "")),
                 "fun_enabled": raw.get("FUN_ENABLED", "true").lower() == "true",
                 "proactive_enabled": raw.get("PROACTIVE_ENABLED", "false").lower() == "true",
                 "proactive_rate_window_sec": int(raw.get("PROACTIVE_RATE_WINDOW_SEC", "120")),
@@ -1969,6 +1866,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "bot_display_name": raw.get("BOT_DISPLAY_NAME", ""),
                     "wechat_backend": raw.get("WECHAT_BACKEND", "wcdb"),
                     "wechat_groups": raw.get("WECHAT_GROUPS", "*"),
+                    "wechat_friends": raw.get("WECHAT_FRIENDS", ""),
                     "fun_enabled": raw.get("FUN_ENABLED", "true").lower() == "true",
                     "proactive_enabled": raw.get("PROACTIVE_ENABLED", "false").lower() == "true",
                     "proactive_rate_window_sec": int(raw.get("PROACTIVE_RATE_WINDOW_SEC", "120")),
@@ -2027,6 +1925,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "BOT_DISPLAY_NAME": config.get("bot_display_name"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
                     "WECHAT_GROUPS": config.get("wechat_groups") or "*",
+                    "WECHAT_FRIENDS": config.get("wechat_friends", ""),
                     "FUN_ENABLED": str(config.get("fun_enabled", True)).lower(),
                     "PROACTIVE_ENABLED": str(config.get("proactive_enabled", False)).lower(),
                     "PROACTIVE_RATE_WINDOW_SEC": str(config.get("proactive_rate_window_sec", 120)),
@@ -2124,6 +2023,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     "BOT_DISPLAY_NAME": config.get("bot_display_name"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
                     "WECHAT_GROUPS": config.get("wechat_groups") or "*",
+                    "WECHAT_FRIENDS": config.get("wechat_friends", ""),
                     "FUN_ENABLED": str(config.get("fun_enabled", True)).lower(),
                     "PROACTIVE_ENABLED": str(config.get("proactive_enabled", False)).lower(),
                     "PROACTIVE_RATE_WINDOW_SEC": str(config.get("proactive_rate_window_sec", 120)),
@@ -2219,6 +2119,30 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 })
             except Exception as e:
                 logger.exception("Failed to fetch AI models")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Get discovered friends (config checklist source) ────────
+        if self.path == "/api/friends":
+            try:
+                path = webot_data_path("friend_names.json")
+                friends = []
+                if path.exists():
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        for chat_id, val in raw.items():
+                            if isinstance(val, dict):
+                                name = str(val.get("name") or chat_id)
+                            else:
+                                name = str(val or chat_id)
+                            friends.append({
+                                "chat_id": str(chat_id),
+                                "name": name,
+                            })
+                friends.sort(key=lambda item: item["name"])
+                self.send_json({"ok": True, "friends": friends})
+            except Exception as e:
+                logger.exception("Failed to load friend list")
                 self.send_json({"ok": False, "error": str(e)})
             return
 

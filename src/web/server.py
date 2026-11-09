@@ -1743,7 +1743,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
     def handle_one_request(self):
         try:
             super().handle_one_request()
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
             # keep-alive 连接被客户端直接关闭时属于正常情况，静默结束
             self.close_connection = True
 

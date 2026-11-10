@@ -206,6 +206,25 @@ Function WriteWebotDataDirEnv
     FileClose $0
 FunctionEnd
 
+; 从旧版 webot 覆盖安装时，清掉旧 EXE 与旧快捷方式。
+; 否则桌面会有两个图标、「应用和功能」里会有两条卸载记录，
+; 且旧 webot.exe 仍可直接启动，看起来像是改名没生效。
+Function CleanLegacyWebotArtifacts
+  IfFileExists "$INSTDIR\webot.exe" 0 no_legacy_exe
+    DetailPrint "正在关闭旧版 webot..."
+    nsExec::ExecToStack '"$SYSDIR\taskkill.exe" /IM webot.exe /T /F'
+    Pop $0
+    Pop $1
+    Sleep 800
+    Delete "$INSTDIR\webot.exe"
+  no_legacy_exe:
+
+  Delete "$DESKTOP\webot.lnk"
+  Delete "$SMPROGRAMS\webot\webot.lnk"
+  Delete "$SMPROGRAMS\webot\卸载 webot.lnk"
+  RMDir "$SMPROGRAMS\webot"
+FunctionEnd
+
 Function PrepareWebotExeForUpdate
   IfFileExists "$INSTDIR\WeChatBot.exe" 0 done
 
@@ -254,6 +273,7 @@ Section "Install"
 
   ; Main executable
   Call PrepareWebotExeForUpdate
+  Call CleanLegacyWebotArtifacts
   File "dist\WeChatBot.exe"
   File ".env.example"
 
@@ -302,6 +322,9 @@ Section "Install"
     "Publisher" "${PRODUCT_PUBLISHER}"
   WriteRegStr HKCU "${REG_UNINSTALL_KEY}" \
     "URLInfoAbout" "${PRODUCT_URL}"
+
+  ; 旧版卸载项在新项写好后立即移除，避免「应用和功能」里出现两条记录
+  DeleteRegKey HKCU "${LEGACY_REG_UNINSTALL_KEY}"
 
   ; Size estimation
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2

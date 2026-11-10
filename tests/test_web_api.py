@@ -412,15 +412,15 @@ class TestConfig(unittest.TestCase):
         from src.config import _decode_wechat_groups
         self.assertEqual(_decode_wechat_groups("*"), "*")
 
-    def test_decode_wechat_groups_empty_returns_wildcard(self):
-        """Empty string returns '*'."""
+    def test_decode_wechat_groups_empty_returns_empty(self):
+        """空字符串表示不监控任何群聊（群聊名单改为显式选择）。"""
         from src.config import _decode_wechat_groups
-        self.assertEqual(_decode_wechat_groups(""), "*")
+        self.assertEqual(_decode_wechat_groups(""), "")
 
-    def test_decode_wechat_groups_whitespace_only_returns_wildcard(self):
-        """Whitespace-only returns '*'."""
+    def test_decode_wechat_groups_whitespace_only_returns_empty(self):
+        """仅空白同样表示不监控任何群聊。"""
         from src.config import _decode_wechat_groups
-        self.assertEqual(_decode_wechat_groups("   "), "*")
+        self.assertEqual(_decode_wechat_groups("   "), "")
 
     def test_decode_wechat_groups_single_url_encoded(self):
         """URL-encoded group name is decoded."""
@@ -1113,10 +1113,22 @@ class ApiStatusEndpointTests(unittest.TestCase):
         self.assertEqual(body["error"], "KEY_MISSING")
 
     def test_status_has_cors_headers(self):
-        """Status response includes CORS headers."""
-        handler, sock = _build_handler("/api/status")
+        """Status echoes CORS only for trusted (loopback) origins."""
+        handler, sock = _build_handler(
+            "/api/status",
+            headers={"Origin": "http://127.0.0.1:5173"},
+        )
         response = sock.get_response_text()
-        self.assertIn("Access-Control-Allow-Origin: *", response)
+        self.assertIn(
+            "Access-Control-Allow-Origin: http://127.0.0.1:5173", response,
+        )
+
+        handler, sock = _build_handler(
+            "/api/status",
+            headers={"Origin": "http://evil.example.com"},
+        )
+        response = sock.get_response_text()
+        self.assertNotIn("Access-Control-Allow-Origin", response)
 
 
 # ---------------------------------------------------------------------------
@@ -2397,6 +2409,59 @@ class OnboardingApiTests(unittest.TestCase):
         parts = sock.get_response_text().split("\r\n\r\n", 1)
         result = json.loads(parts[1])
         self.assertTrue(result["ok"])
+
+    def test_onboarding_step3_skip_keeps_existing_ai_config(self):
+        """POST /api/onboarding/step3 with skipped=True marks progress only."""
+        self.env_path.write_text("OPENAI_MODEL=existing-model\n", encoding="utf-8")
+        post_body = json.dumps({"skipped": True}).encode()
+        handler, sock = _build_handler(
+            "/api/onboarding/step3", method="POST",
+            body=post_body,
+            headers={"Content-Type": "application/json"},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["skipped"])
+        row = self._read_onboarding_row()
+        self.assertEqual(row["step3_done"], 1)
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn("OPENAI_MODEL=existing-model", saved)
+
+    def test_onboarding_step4_preserves_ai_config_when_llm_skipped(self):
+        """Step 4 must not overwrite existing LLM config when onboarding skipped it."""
+        from src.web import server
+
+        server._save_onboarding_state({
+            "step1_done": True,
+            "step2_done": True,
+            "step3_done": True,
+            "key": "d" * 64,
+            "bot_display_name": "SkipBot",
+            "wechat_groups": "*",
+        })
+        self.env_path.write_text(
+            "AI_BACKEND=claude\n"
+            "OPENAI_MODEL=keep-me\n",
+            encoding="utf-8",
+        )
+        post_body = json.dumps({
+            "fun_enabled": True,
+            "proactive_enabled": False,
+            "sticky_mention_enabled": True,
+        })
+        handler, sock = _build_handler(
+            "/api/onboarding/step4", method="POST",
+            body=post_body.encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        parts = sock.get_response_text().split("\r\n\r\n", 1)
+        result = json.loads(parts[1])
+        self.assertTrue(result["ok"])
+        saved = self.env_path.read_text(encoding="utf-8")
+        self.assertIn("AI_BACKEND=claude", saved)
+        self.assertIn("OPENAI_MODEL=keep-me", saved)
+        self.assertIn("ONBOARDING_DONE=true", saved)
 
     def test_onboarding_step4_posts_data(self):
         """POST /api/onboarding/step4 writes to .env and returns ok."""

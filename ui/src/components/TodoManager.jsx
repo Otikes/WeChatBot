@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { MagnifyingGlass, CheckCircle, Trash, ArrowUUpLeft, X, ListChecks, FloppyDisk, Info, Warning } from '@phosphor-icons/react'
+import { MagnifyingGlass, CheckCircle, Trash, ArrowUUpLeft, X, ListChecks, FloppyDisk, Info, Warning, Gear, UsersThree, Spinner } from '@phosphor-icons/react'
 import { Toggle, Input, Field } from './SharedComponents'
 
 const API = 'http://127.0.0.1:7327'
@@ -71,9 +71,11 @@ function KeywordChips({ keywords, update, minItems = 1 }) {
 
 export default function TodoManager() {
   // ── Todo config state ──────────────────────────────────────────
-  const [configLoaded, setConfigLoaded] = useState(false)
+  const [configOpen, setConfigOpen] = useState(false)
   const [configSaved, setConfigSaved] = useState(false)
+  const [configSaving, setConfigSaving] = useState(false)
   const [configSaveError, setConfigSaveError] = useState('')
+  const [groupQuery, setGroupQuery] = useState('')
   const [todoEnabled, setTodoEnabled] = useState(true)
   const [todoGroups, setTodoGroups] = useState(['*'])
   const [todoMaxPerGroup, setTodoMaxPerGroup] = useState(50)
@@ -95,45 +97,76 @@ export default function TodoManager() {
   const [availableGroups, setAvailableGroups] = useState([])  // {chat_id, group_name, member_count}[]
   const [tabCounts, setTabCounts] = useState({ active: 0, completed: 0, deleted: 0 })
 
-  // ── Load todo config on mount ─────────────────────────────────
-  useEffect(() => {
-    async function loadConfig() {
-      try {
-        const res = await fetch(`${API}/api/load-config`)
-        const data = await res.json()
-        if (data.ok && data.config) {
-          const c = data.config
-          if (typeof c.todo_enabled === 'boolean') setTodoEnabled(c.todo_enabled)
-          if (c.todo_groups) setTodoGroups(Array.isArray(c.todo_groups) ? c.todo_groups : ['*'])
-          if (c.todo_max_per_group != null) setTodoMaxPerGroup(c.todo_max_per_group)
-          if (c.todo_completed_retention_days != null) setTodoCompletedRetention(c.todo_completed_retention_days)
-          if (c.todo_deleted_retention_days != null) setTodoDeletedRetention(c.todo_deleted_retention_days)
-          if (c.todo_add_keywords) setTodoAddKeywords(Array.isArray(c.todo_add_keywords) ? c.todo_add_keywords : String(c.todo_add_keywords).split(','))
-          if (c.todo_complete_keywords) setTodoCompleteKeywords(Array.isArray(c.todo_complete_keywords) ? c.todo_complete_keywords : String(c.todo_complete_keywords).split(','))
-          if (c.todo_delete_keywords) setTodoDeleteKeywords(Array.isArray(c.todo_delete_keywords) ? c.todo_delete_keywords : String(c.todo_delete_keywords).split(','))
-        }
-      } catch {}
-      setConfigLoaded(true)
-    }
-    loadConfig()
-  }, [])
+  // ── 待办配置：加载与回滚 ──────────────────────────────────────
+  /** 从服务端重新加载待办配置（弹窗取消时也用它丢弃未保存的改动） */
+  async function loadConfig() {
+    try {
+      const res = await fetch(`${API}/api/load-config`)
+      const data = await res.json()
+      if (data.ok && data.config) {
+        const c = data.config
+        if (typeof c.todo_enabled === 'boolean') setTodoEnabled(c.todo_enabled)
+        if (c.todo_groups) setTodoGroups(Array.isArray(c.todo_groups) ? c.todo_groups : ['*'])
+        if (c.todo_max_per_group != null) setTodoMaxPerGroup(c.todo_max_per_group)
+        if (c.todo_completed_retention_days != null) setTodoCompletedRetention(c.todo_completed_retention_days)
+        if (c.todo_deleted_retention_days != null) setTodoDeletedRetention(c.todo_deleted_retention_days)
+        if (c.todo_add_keywords) setTodoAddKeywords(Array.isArray(c.todo_add_keywords) ? c.todo_add_keywords : String(c.todo_add_keywords).split(','))
+        if (c.todo_complete_keywords) setTodoCompleteKeywords(Array.isArray(c.todo_complete_keywords) ? c.todo_complete_keywords : String(c.todo_complete_keywords).split(','))
+        if (c.todo_delete_keywords) setTodoDeleteKeywords(Array.isArray(c.todo_delete_keywords) ? c.todo_delete_keywords : String(c.todo_delete_keywords).split(','))
+      }
+    } catch {}
+  }
 
-  // ── Load available groups for dropdown ──────────────────────────
+  /** 关闭配置弹窗，并丢弃未保存的改动 */
+  function closeConfig() {
+    setConfigOpen(false)
+    loadConfig()
+  }
+
+  // 首次进入时加载配置
+  useEffect(() => { loadConfig() }, [])
+
+  // 弹窗关闭时清空搜索与保存提示
   useEffect(() => {
-    async function loadGroups() {
-      try {
-        const res = await fetch(`${API}/api/nicknames/groups`)
-        const data = await res.json()
-        if (data.ok) setAvailableGroups(data.groups || [])
-      } catch {}
+    if (!configOpen) {
+      setGroupQuery('')
+      setConfigSaved(false)
+      setConfigSaveError('')
     }
-    loadGroups()
-  }, [])
+  }, [configOpen])
+
+  // 弹窗打开时支持 Esc 关闭，并锁定页面滚动
+  useEffect(() => {
+    if (!configOpen) return
+    const onKeyDown = e => { if (e.key === 'Escape') closeConfig() }
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [configOpen])
+
+  // ── 可选群聊（配置弹窗与筛选下拉共用） ───────────────────────────
+  async function loadAvailableGroups() {
+    try {
+      const res = await fetch(`${API}/api/groups`)
+      const data = await res.json()
+      if (data.ok) setAvailableGroups(data.groups || [])
+    } catch {}
+  }
+
+  useEffect(() => { loadAvailableGroups() }, [])
+
+  // 每次打开配置弹窗时同步最新群列表，新建群后无需刷新页面
+  useEffect(() => { if (configOpen) loadAvailableGroups() }, [configOpen])
 
   // ── Save todo config ──────────────────────────────────────────
   async function handleSaveConfig() {
     setConfigSaved(false)
     setConfigSaveError('')
+    setConfigSaving(true)
     try {
       const res = await fetch(`${API}/api/config`, {
         method: 'POST',
@@ -153,25 +186,47 @@ export default function TodoManager() {
       if (data.ok) { setConfigSaved(true); setTimeout(() => setConfigSaved(false), 3000) }
       else { setConfigSaveError(data.error || '保存失败'); setTimeout(() => setConfigSaveError(''), 5000) }
     } catch { setConfigSaveError('无法连接到服务器，请确认机器人已启动'); setTimeout(() => setConfigSaveError(''), 5000) }
+    setConfigSaving(false)
   }
 
-  function addGroup(chatId) {
-    if (!chatId) return
-    if (todoGroups.includes('*')) {
-      setTodoGroups([chatId])
-    } else if (!todoGroups.includes(chatId)) {
-      const next = [...todoGroups, chatId]
-      // 所有群聊都已被选中 → 等同于"全部群聊"
-      if (availableGroups.length > 0 && next.length >= availableGroups.length) {
-        setTodoGroups(['*'])
-      } else {
-        setTodoGroups(next)
-      }
-    }
+  // ── 待办群聊开关 ──────────────────────────────────────────────
+  const todoAllGroups = todoGroups.includes('*')
+
+  /** 合并「已发现群聊」与配置中残留的群，历史配置也能正常展示 */
+  const configGroups = (() => {
+    const list = [...availableGroups]
+    todoGroups
+      .filter(id => id !== '*' && !list.some(g => g.chat_id === id))
+      .forEach(id => list.push({ chat_id: id, group_name: id, member_count: 0 }))
+    return list
+  })()
+
+  const visibleConfigGroups = configGroups.filter(g => {
+    const q = groupQuery.trim().toLowerCase()
+    if (!q) return true
+    return (g.group_name || '').toLowerCase().includes(q)
+      || (g.chat_id || '').toLowerCase().includes(q)
+  })
+
+  function isTodoGroupEnabled(chatId) {
+    return todoAllGroups || todoGroups.includes(chatId)
   }
-  function removeGroup(index) {
-    const next = todoGroups.filter((_, i) => i !== index)
-    setTodoGroups(next.length === 0 ? ['*'] : next)
+
+  function toggleAllGroups(on) {
+    setConfigSaved(false)
+    setTodoGroups(on ? ['*'] : [])
+  }
+
+  function toggleTodoGroup(chatId) {
+    setConfigSaved(false)
+    if (todoAllGroups) {
+      // 从「全部群聊」切换为显式名单，仅排除当前群
+      setTodoGroups(configGroups.filter(g => g.chat_id !== chatId).map(g => g.chat_id))
+    } else if (todoGroups.includes(chatId)) {
+      setTodoGroups(todoGroups.filter(id => id !== chatId))
+    } else {
+      setTodoGroups([...todoGroups, chatId])
+    }
   }
 
   // ── Todo management ────────────────────────────────────────────
@@ -264,147 +319,34 @@ export default function TodoManager() {
 
   return (
     <div className="max-w-3xl">
-      {/* ================================================================ */}
-      {/* Part (a): Todo Feature Toggle + Configuration                    */}
-      {/* ================================================================ */}
-      <div className="bg-bg-card border border-border-main rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none p-7 mb-8">
-        <div className="flex items-center gap-2.5 mb-5 pl-1">
-          <div className="w-1.5 h-4.5 rounded-full shadow-sm" style={{ backgroundColor: '#e8794b' }} />
-          <h3 className="text-sm font-semibold tracking-tight text-text-main">功能开关与配置</h3>
-        </div>
 
-        {/* Toggle row */}
-        <div className="flex items-center justify-between mb-5">
-          <div className="flex-1 mr-8">
-            <p className="text-[15px] text-text-main font-medium">群聊待办</p>
-            <p className="text-sm text-text-muted mt-1.5">@机器人发送触发词，管理群聊待办事项。支持添加、完成、删除、恢复。</p>
-          </div>
-          <Toggle enabled={todoEnabled} onChange={v => setTodoEnabled(v)} />
-        </div>
-
-        <AnimatePresence>
-          {todoEnabled && (
-            <motion.div variants={configPanel} initial="initial" animate="animate" exit="exit"
-              className="p-4 bg-bg-raised rounded-lg space-y-5">
-
-              {/* 生效群聊范围 */}
-              <div>
-                <p className="text-[14px] text-text-main font-medium">生效群聊范围</p>
-                <p className="text-xs text-text-muted mt-0.5 mb-2">选择哪些群聊启用待办功能，未选中的群不响应待办命令</p>
-                <div className="flex flex-wrap gap-2 mb-2">
-                  {(todoGroups || []).map((g, i) => {
-                    const info = availableGroups.find(ag => ag.chat_id === g)
-                    const label = g === '*' ? '全部群聊' : (info?.group_name || g)
-                    return (
-                      <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-brand-green-light border border-brand-green/20 rounded-lg text-[13px] text-brand-green-hover dark:text-brand-green">
-                        {label}
-                        <button type="button"
-                          onClick={() => removeGroup(i)}
-                          disabled={todoGroups.length === 1 && todoGroups[0] === '*'}
-                          className={`ml-0.5 leading-none text-base transition-colors ${(todoGroups.length === 1 && todoGroups[0] === '*') ? 'text-text-muted cursor-not-allowed' : 'text-brand-green-hover/60 hover:text-[#d45656] cursor-pointer'}`}>&times;</button>
-                      </span>
-                    )
-                  })}
-                </div>
-                <select value=""
-                  onChange={e => { if (e.target.value) { addGroup(e.target.value); e.target.value = '' } }}
-                  className="w-full bg-bg-raised border border-border-main rounded-lg px-3 py-2 text-[14px] text-text-main focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all cursor-pointer">
-                  <option value="">{availableGroups.length === 0 ? '加载群聊列表...' : '选择群聊...'}</option>
-                  {availableGroups.filter(ag => !todoGroups.includes(ag.chat_id)).map(ag => (
-                    <option key={ag.chat_id} value={ag.chat_id}>
-                      {ag.group_name} — {ag.member_count}人
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* 参数设置 */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <ParamRow label="每群待办上限" hint="单个群最多待办数（1-200）">
-                  <Input type="number" value={String(todoMaxPerGroup)}
-                    onChange={v => setTodoMaxPerGroup(Math.max(1, Math.min(200, parseInt(v) || 50)))} />
-                </ParamRow>
-                <ParamRow label="已完成保留天数" hint="超期自动清理（0=永久）">
-                  <Input type="number" value={String(todoCompletedRetention)}
-                    onChange={v => setTodoCompletedRetention(Math.max(0, parseInt(v) || 0))} />
-                </ParamRow>
-                <ParamRow label="已删除保留天数" hint="超期自动清理（0=永久）">
-                  <Input type="number" value={String(todoDeletedRetention)}
-                    onChange={v => setTodoDeletedRetention(Math.max(0, parseInt(v) || 0))} />
-                </ParamRow>
-              </div>
-
-              {/* 添加待办触发词 */}
-              <div>
-                <p className="text-[14px] text-text-main font-medium">添加待办触发词</p>
-                <p className="text-xs text-text-muted mt-0.5 mb-2">群成员 @机器人后发送触发词 + 待办内容，即可添加</p>
-                <KeywordChips keywords={todoAddKeywords} update={setTodoAddKeywords} />
-              </div>
-
-              {/* 完成待办触发词 */}
-              <div>
-                <p className="text-[14px] text-text-main font-medium">完成待办触发词</p>
-                <p className="text-xs text-text-muted mt-0.5 mb-2">群成员 @机器人后发送触发词 + 编号，即可标记完成</p>
-                <KeywordChips keywords={todoCompleteKeywords} update={setTodoCompleteKeywords} />
-              </div>
-
-              {/* 删除待办触发词 */}
-              <div>
-                <p className="text-[14px] text-text-main font-medium">删除待办触发词</p>
-                <p className="text-xs text-text-muted mt-0.5 mb-2">群成员 @机器人后发送触发词 + 编号，即可移至已删除</p>
-                <KeywordChips keywords={todoDeleteKeywords} update={setTodoDeleteKeywords} />
-              </div>
-
-              {/* 使用提示 */}
-              <div className="p-3 bg-bg-main/60 border border-border-main rounded-xl">
-                <p className="text-xs text-text-muted leading-relaxed">
-                  💡 <strong>群内使用提示：</strong><br />
-                  @机器人 <code>查看待办</code> · <code>记一下 xxx</code> · <code>搞定 N</code>
-                  · <code>删掉 N</code> · <code>恢复待办 N</code>（管理员）<br />
-                  <span className="text-text-muted/60">查看待办、已完成列表、已删除列表、清空等命令为固定触发词，无需配置。</span>
-                </p>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* Save button + messages */}
-        <div className="mt-6 flex items-center gap-4">
-          <AnimatePresence>
-            {configSaved && (
-              <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-                className="flex items-center gap-2 px-5 py-2.5 bg-brand-green-light border border-brand-green/20 rounded-full text-sm text-brand-green-hover dark:text-brand-green font-medium shadow-sm">
-                <CheckCircle size={18} weight="fill" /> 配置已保存。需要重启机器人才能生效。
-              </motion.div>
-            )}
-            {configSaveError && (
-              <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
-                className="flex items-center gap-2 px-5 py-2.5 bg-[#d45656]/5 border border-[#d45656]/20 rounded-full text-sm text-[#d45656] font-medium shadow-sm">
-                <Warning size={18} weight="fill" /> {configSaveError}
-              </motion.div>
-            )}
-          </AnimatePresence>
-          {!configSaved && !configSaveError && (
-            <motion.button whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }} onClick={handleSaveConfig}
-              className="w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide shadow-sm transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer bg-[#0d0d0d] dark:bg-white text-white dark:text-[#0d0d0d] border border-[#0d0d0d] dark:border-border-main hover:opacity-90">
-              <FloppyDisk size={18} /> 保存配置
-            </motion.button>
-          )}
-          {configSaved && (
-            <span className="flex items-center gap-1.5 text-xs text-[#c37d0d] bg-[#c37d0d]/10 border border-[#c37d0d]/20 px-4 py-1.5 rounded-full font-medium">
-              <Info size={14} /> 配置已更新，重启机器人后生效
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* ================================================================ */}
-      {/* Part (b): Todo List Management                                   */}
-      {/* ================================================================ */}
+      {/* ── 待办管理 ─────────────────────────────────────────────── */}
       <div className="bg-bg-card border border-border-main rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none p-7">
-        <div className="flex items-center gap-2.5 mb-5 pl-1">
-          <div className="w-1.5 h-4.5 rounded-full shadow-sm" style={{ backgroundColor: '#18E299' }} />
-          <h3 className="text-sm font-semibold tracking-tight text-text-main">待办管理</h3>
+        <div className="flex items-center justify-between gap-3 mb-5 pl-1">
+          <div className="flex items-center gap-2.5">
+            <div className="w-1.5 h-4.5 rounded-full shadow-sm" style={{ backgroundColor: '#18E299' }} />
+            <h3 className="text-sm font-semibold tracking-tight text-text-main">待办管理</h3>
+            <span className={`text-[10.5px] px-2 py-0.5 rounded-full border font-medium ${
+              todoEnabled
+                ? 'bg-brand-green-light border-brand-green/20 text-brand-green-hover dark:text-brand-green'
+                : 'bg-bg-raised border-border-main text-text-muted'
+            }`}>
+              {todoEnabled
+                ? todoAllGroups
+                  ? '已开启 · 全部群聊'
+                  : todoGroups.length > 0
+                    ? `已开启 · ${todoGroups.length} 个群`
+                    : '已开启 · 未选群聊'
+                : '已关闭'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setConfigOpen(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 bg-bg-raised border border-border-main rounded-full text-[12.5px] font-medium text-text-main hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer"
+          >
+            <Gear size={15} /> 配置
+          </button>
         </div>
 
         {/* Action message toast */}
@@ -599,6 +541,223 @@ export default function TodoManager() {
           </AnimatePresence>
         </div>
       </div>
+
+      {/* ── 群聊待办配置弹窗 ─────────────────────────────────────── */}
+      <AnimatePresence>
+        {configOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={closeConfig}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ opacity: 0, y: 16, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 16, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              onClick={e => e.stopPropagation()}
+              className="w-full max-w-lg max-h-[85vh] flex flex-col bg-bg-card border border-border-main rounded-2xl shadow-2xl overflow-hidden"
+            >
+              {/* 弹窗标题 */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-border-main shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <Gear size={18} className="text-brand-green-hover dark:text-brand-green" />
+                  <div>
+                    <h3 className="text-[15px] font-semibold text-text-main">群聊待办配置</h3>
+                    <p className="text-[11px] text-text-muted mt-0.5">开启功能并选择生效的群聊</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeConfig}
+                  title="关闭"
+                  className="p-1.5 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
+                >
+                  <X size={16} weight="bold" />
+                </button>
+              </div>
+
+              {/* 弹窗内容 */}
+              <div className="px-6 py-5 overflow-y-auto space-y-5">
+                {/* 功能总开关 */}
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-[14px] text-text-main font-medium">启用群聊待办</p>
+                    <p className="text-[11.5px] text-text-muted mt-0.5">关闭后所有群都不再响应待办命令</p>
+                  </div>
+                  <Toggle enabled={todoEnabled} onChange={v => { setTodoEnabled(v); setConfigSaved(false) }} />
+                </div>
+
+                {todoEnabled && (
+                  <>
+                    {/* 生效群聊 */}
+                    <div>
+                      <div className="flex items-center justify-between gap-3 mb-1.5">
+                        <p className="text-[14px] text-text-main font-medium">开启待办的群聊</p>
+                        <span className="text-[10.5px] font-mono text-text-muted">
+                          {todoAllGroups ? '全部群聊' : `已选 ${todoGroups.length} 个`}
+                        </span>
+                      </div>
+                      <p className="text-xs text-text-muted mb-2">未开启的群不会响应任何待办命令</p>
+
+                      <div className="rounded-xl border border-border-main bg-bg-raised overflow-hidden">
+                        {/* 全部群聊 */}
+                        <div className="flex items-center justify-between gap-3 px-3.5 py-2.5 border-b border-border-main/70">
+                          <div className="flex items-center gap-2">
+                            <UsersThree size={15} className="text-text-muted" />
+                            <span className="text-[13px] text-text-main font-medium">全部群聊</span>
+                          </div>
+                          <Toggle enabled={todoAllGroups} onChange={toggleAllGroups} />
+                        </div>
+
+                        {configGroups.length > 4 && (
+                          <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-main/70">
+                            <MagnifyingGlass size={13} className="text-text-muted/70 shrink-0" />
+                            <input
+                              type="text"
+                              value={groupQuery}
+                              onChange={e => setGroupQuery(e.target.value)}
+                              placeholder="搜索群聊"
+                              className="flex-1 min-w-0 bg-transparent text-[12.5px] text-text-main placeholder:text-text-muted/60 focus:outline-none"
+                            />
+                          </div>
+                        )}
+
+                        <div className="max-h-56 overflow-y-auto divide-y divide-border-main/40">
+                          {configGroups.length === 0 ? (
+                            <p className="px-3.5 py-3 text-[12px] text-text-muted">
+                              暂无群聊，启动机器人同步后再来配置
+                            </p>
+                          ) : visibleConfigGroups.length === 0 ? (
+                            <p className="px-3.5 py-3 text-[12px] text-text-muted">没有匹配的群聊</p>
+                          ) : visibleConfigGroups.map(g => (
+                            <div
+                              key={g.chat_id}
+                              className="flex items-center justify-between gap-3 px-3.5 py-2 hover:bg-bg-card transition-colors"
+                            >
+                              <span className="flex-1 min-w-0">
+                                <span
+                                  className="block text-[13px] text-text-main truncate"
+                                  title={g.group_name || g.chat_id}
+                                >
+                                  {g.group_name || g.chat_id}
+                                </span>
+                                {g.chat_id !== g.group_name && (
+                                  <span className="block text-[10.5px] text-text-muted/70 truncate font-mono">
+                                    {g.chat_id}
+                                  </span>
+                                )}
+                              </span>
+                              <Toggle
+                                enabled={isTodoGroupEnabled(g.chat_id)}
+                                onChange={() => toggleTodoGroup(g.chat_id)}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {!todoAllGroups && todoGroups.length === 0 ? (
+                        <p className="flex items-center gap-1.5 text-[10.5px] text-[#c37d0d] mt-1.5">
+                          <Warning size={12} weight="fill" />
+                          当前没有开启任何群，待办功能不会生效
+                        </p>
+                      ) : (
+                        <p className="text-[10.5px] text-text-muted/70 mt-1.5">
+                          关闭「全部群聊」后可以逐个群开启；一个都不选则等同于不生效。
+                        </p>
+                      )}
+                    </div>
+
+                    {/* 参数设置 */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <ParamRow label="每群待办上限" hint="1-200">
+                        <Input type="number" value={String(todoMaxPerGroup)}
+                          onChange={v => { setTodoMaxPerGroup(Math.max(1, Math.min(200, parseInt(v) || 50))); setConfigSaved(false) }} />
+                      </ParamRow>
+                      <ParamRow label="已完成保留天数" hint="0 = 永久">
+                        <Input type="number" value={String(todoCompletedRetention)}
+                          onChange={v => { setTodoCompletedRetention(Math.max(0, parseInt(v) || 0)); setConfigSaved(false) }} />
+                      </ParamRow>
+                      <ParamRow label="已删除保留天数" hint="0 = 永久">
+                        <Input type="number" value={String(todoDeletedRetention)}
+                          onChange={v => { setTodoDeletedRetention(Math.max(0, parseInt(v) || 0)); setConfigSaved(false) }} />
+                      </ParamRow>
+                    </div>
+
+                    {/* 触发词配置 */}
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-[13.5px] text-text-main font-medium">添加待办触发词</p>
+                        <p className="text-[11.5px] text-text-muted mt-0.5 mb-2">@机器人 + 触发词 + 内容</p>
+                        <KeywordChips keywords={todoAddKeywords} update={v => { setTodoAddKeywords(v); setConfigSaved(false) }} />
+                      </div>
+                      <div>
+                        <p className="text-[13.5px] text-text-main font-medium">完成待办触发词</p>
+                        <p className="text-[11.5px] text-text-muted mt-0.5 mb-2">@机器人 + 触发词 + 编号</p>
+                        <KeywordChips keywords={todoCompleteKeywords} update={v => { setTodoCompleteKeywords(v); setConfigSaved(false) }} />
+                      </div>
+                      <div>
+                        <p className="text-[13.5px] text-text-main font-medium">删除待办触发词</p>
+                        <p className="text-[11.5px] text-text-muted mt-0.5 mb-2">@机器人 + 触发词 + 编号</p>
+                        <KeywordChips keywords={todoDeleteKeywords} update={v => { setTodoDeleteKeywords(v); setConfigSaved(false) }} />
+                      </div>
+                    </div>
+
+                    <div className="p-3 bg-bg-main/60 border border-border-main rounded-xl">
+                      <p className="text-[11px] text-text-muted leading-relaxed">
+                        💡 群内使用：@机器人 <code>查看待办</code> · <code>记一下 xxx</code> · <code>搞定 N</code>
+                        · <code>删掉 N</code> · <code>恢复待办 N</code>（管理员）
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* 弹窗底部操作 */}
+              <div className="flex items-center justify-between gap-3 px-6 py-4 border-t border-border-main bg-bg-raised/40 shrink-0">
+                <div className="min-w-0 text-[11.5px]">
+                  {configSaved ? (
+                    <span className="flex items-center gap-1.5 text-brand-green-hover dark:text-brand-green font-medium">
+                      <CheckCircle size={15} weight="fill" /> 已保存，重启机器人后生效
+                    </span>
+                  ) : configSaveError ? (
+                    <span className="flex items-center gap-1.5 text-[#d45656]">
+                      <Warning size={15} weight="fill" /> {configSaveError}
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1.5 text-text-muted">
+                      <Info size={14} /> 保存后需重启机器人生效
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={closeConfig}
+                    className="px-4 py-2 rounded-full text-[12.5px] font-medium text-text-muted border border-border-main hover:text-text-main hover:border-text-muted/40 transition-colors cursor-pointer"
+                  >
+                    取消
+                  </button>
+                  <motion.button
+                    whileTap={{ scale: 0.97 }}
+                    onClick={handleSaveConfig}
+                    disabled={configSaved || configSaving}
+                    className="px-5 py-2 rounded-full text-[12.5px] font-semibold bg-[#0d0d0d] dark:bg-white text-white dark:text-[#0d0d0d] hover:opacity-90 transition-opacity cursor-pointer disabled:opacity-60 flex items-center gap-1.5"
+                  >
+                    {configSaving ? (
+                      <><Spinner size={15} weight="bold" className="animate-spin" /> 保存中…</>
+                    ) : (
+                      <><FloppyDisk size={15} /> 保存配置</>
+                    )}
+                  </motion.button>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

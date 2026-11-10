@@ -46,6 +46,13 @@ from src.imagegen.generator import (
     normalize_dashscope_base_url,
     normalize_google_gemini_base_url,
 )
+from src.mcp_server.server import (
+    describe_server as _describe_mcp_server,
+    handle_http as _handle_mcp_http,
+    is_trusted_origin as _is_trusted_web_origin,
+    is_trusted_request as _is_trusted_mcp_request,
+    update_settings as _update_mcp_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -422,7 +429,11 @@ def _todo_updates_from_config(config: dict) -> dict[str, str | None]:
     """Convert todo config dict to .env lines."""
     return {
         "TODO_ENABLED": str(config.get("todo_enabled", True)).lower(),
-        "TODO_GROUPS": ",".join(config.get("todo_groups", ["*"])) if config.get("todo_groups") else "*",
+        # 群聊待办名单：空列表表示不开启任何群，不再回退为「全部群聊」
+        "TODO_GROUPS": (
+            ",".join(config.get("todo_groups"))
+            if config.get("todo_groups") is not None else None
+        ),
         "TODO_MAX_PER_GROUP": str(config.get("todo_max_per_group", 50)),
         "TODO_COMPLETED_RETENTION_DAYS": str(config.get("todo_completed_retention_days", 30)),
         "TODO_DELETED_RETENTION_DAYS": str(config.get("todo_deleted_retention_days", 30)),
@@ -697,6 +708,100 @@ def _onboarding_db_path() -> Path:
         os.getenv("DB_PATH", "data/messages.db"),
         "data/messages.db",
     )
+
+
+def _known_group_candidates() -> list[dict]:
+    """返回机器人已知的全部群聊，供「群聊配置」与昵称编辑共用。
+
+    数据来源：
+    1. group_names.json —— WcdbBackend 扫描微信数据库后写入的 chat_id -> 群名缓存；
+    2. messages 表 —— 只有消息记录、尚未写入缓存的群。
+
+    返回结构：[{chat_id, group_name, member_count, active}]
+    ``active=False`` 表示该群已退出 / 已解散，仅用于前端展示标记。
+    """
+    import sqlite3
+
+    # 让正在运行的机器人先刷新一次群缓存，避免刚刚新建的群不显示
+    backend = _bot_control.get_backend()
+    refresh = getattr(backend, "refresh_group_cache", None)
+    if callable(refresh):
+        try:
+            refresh(force=True)
+        except Exception as e:
+            logger.warning("Group cache refresh failed: %s", e)
+
+    # ── 读取持久化的 chat_id -> 群信息 ────────────────────────────────
+    group_info: dict[str, dict] = {}
+    group_names_path = webot_data_path("group_names.json")
+    if group_names_path.exists():
+        try:
+            raw = json.loads(group_names_path.read_text(encoding="utf-8"))
+            for chat_id, val in raw.items():
+                if isinstance(val, dict):
+                    active = val.get("active", True)
+                    if isinstance(active, str):
+                        active = active.strip().lower() not in ("0", "false", "no", "off")
+                    group_info[chat_id] = {
+                        "name": val.get("name", chat_id),
+                        "member_count": int(val.get("member_count", 0) or 0),
+                        "active": bool(active),
+                    }
+                else:
+                    # 旧格式：chat_id -> 群名
+                    group_info[chat_id] = {
+                        "name": str(val), "member_count": 0, "active": True,
+                    }
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    conn = sqlite3.connect(_onboarding_db_path())
+    conn.row_factory = sqlite3.Row
+    try:
+        groups: list[dict] = []
+
+        for chat_id, info in group_info.items():
+            member_count = info["member_count"]
+            if not member_count:
+                # WCDB 没有提供人数时，退化为按发言人数量估算
+                row = conn.execute(
+                    "SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id=?",
+                    (chat_id,),
+                ).fetchone()
+                member_count = row[0] if row else 0
+            groups.append({
+                "chat_id": chat_id,
+                "group_name": info["name"],
+                "member_count": member_count,
+                "active": info["active"],
+            })
+
+        # 补充只在 messages 表中出现过的群
+        if _messages_table_exists(conn):
+            known_ids = set(group_info.keys())
+            rows = conn.execute(
+                "SELECT DISTINCT chat_id FROM messages "
+                "WHERE chat_id LIKE '%@chatroom%' ORDER BY chat_id"
+            ).fetchall()
+            for row in rows:
+                chat_id = row["chat_id"]
+                if chat_id in known_ids:
+                    continue
+                count_row = conn.execute(
+                    "SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id=?",
+                    (chat_id,),
+                ).fetchone()
+                groups.append({
+                    "chat_id": chat_id,
+                    "group_name": chat_id,
+                    "member_count": count_row[0] if count_row else 0,
+                    "active": True,
+                })
+        # 已退出的群排在后面，但仍保留展示
+        groups.sort(key=lambda item: (not item["active"], item["group_name"]))
+        return groups
+    finally:
+        conn.close()
 
 
 def _read_onboarding_state() -> dict | None:
@@ -997,18 +1102,6 @@ def _write_onboarding_to_env(env_path):
         data = dict(_onboarding_data)
 
     env_map = {
-        "AI_BACKEND": _normalize_ai_backend(data.get("ai_backend", "openai_compatible")),
-        "DEEPSEEK_API_KEY": data.get("deepseek_api_key", ""),
-        "DEEPSEEK_BASE_URL": data.get("deepseek_base_url", "https://api.deepseek.com"),
-        "DEEPSEEK_MODEL": data.get("deepseek_model", ""),
-        "OPENAI_API_KEY": data.get("openai_api_key", ""),
-        "OPENAI_BASE_URL": normalize_openai_base_url(
-            data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
-        ),
-        "OPENAI_MODEL": data.get("openai_model", ""),
-        "ANTHROPIC_API_KEY": data.get("anthropic_api_key", ""),
-        "ANTHROPIC_BASE_URL": data.get("anthropic_base_url", "https://api.anthropic.com"),
-        "SUMMARIZE_MODEL": data.get("summarize_model", ""),
         "WECHAT_BACKEND": data.get("wechat_backend", "wcdb"),
         "WECHAT_GROUPS": data.get("wechat_groups", "*") or "*",
         "BOT_DISPLAY_NAME": data.get("bot_display_name", "群聊小助手"),
@@ -1018,6 +1111,25 @@ def _write_onboarding_to_env(env_path):
         "WCDB_KEY": data.get("key", ""),
         "ONBOARDING_DONE": "true",
     }
+    # 用户跳过 LLM 配置时保留 .env 中已有的模型配置，避免被空值覆盖
+    if any(
+        (data.get(key) or "").strip()
+        for key in ("openai_model", "summarize_model", "deepseek_model")
+    ):
+        env_map.update({
+            "AI_BACKEND": _normalize_ai_backend(data.get("ai_backend", "openai_compatible")),
+            "DEEPSEEK_API_KEY": data.get("deepseek_api_key", ""),
+            "DEEPSEEK_BASE_URL": data.get("deepseek_base_url", "https://api.deepseek.com"),
+            "DEEPSEEK_MODEL": data.get("deepseek_model", ""),
+            "OPENAI_API_KEY": data.get("openai_api_key", ""),
+            "OPENAI_BASE_URL": normalize_openai_base_url(
+                data.get("openai_base_url", OPENAI_COMPATIBLE_BASE_URL)
+            ),
+            "OPENAI_MODEL": data.get("openai_model", ""),
+            "ANTHROPIC_API_KEY": data.get("anthropic_api_key", ""),
+            "ANTHROPIC_BASE_URL": data.get("anthropic_base_url", "https://api.anthropic.com"),
+            "SUMMARIZE_MODEL": data.get("summarize_model", ""),
+        })
     _write_env_updates(env_path, env_map)
     _remove_env_keys(env_path, _LEGACY_ONBOARDING_ENV_KEYS)
     logger.info("Onboarding complete — wrote .env")
@@ -1569,6 +1681,24 @@ _step1_thread = None
 _step1_lock = threading.Lock()
 
 
+def _start_step1_extraction() -> tuple[bool, str]:
+    """启动密钥提取后台线程（不修改 onboarding 状态）。"""
+    global _step1_thread
+    with _step1_lock:
+        if _step1_state["running"]:
+            return False, "正在提取中..."
+        _step1_state["running"] = True
+        _step1_state["phase"] = "idle"
+        _step1_state["message"] = ""
+        _step1_state["result"] = None
+
+    thread = threading.Thread(target=_run_step1_extraction, daemon=True)
+    thread.start()
+    with _step1_lock:
+        _step1_thread = thread
+    return True, "提取已启动"
+
+
 # ── Public API wrappers (delegate to thread-safe classes) ─────────────
 
 
@@ -1762,17 +1892,35 @@ class _UIHandler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def do_OPTIONS(self):
+        path = self.path.split("?", 1)[0]
+        is_mcp = path.startswith("/mcp") or path == "/api/mcp"
+        if is_mcp and not _is_trusted_mcp_request(self):
+            self.send_response(403)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        origin = (self.headers.get("Origin") or "").strip()
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        if is_mcp:
+            if origin:
+                self.send_header("Access-Control-Allow-Origin", origin)
+                self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "Content-Type, Authorization, X-API-Key, Accept, "
+            "Mcp-Session-Id, MCP-Protocol-Version",
+        )
         self.send_header("Access-Control-Max-Age", "86400")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_POST(self):
         # Only delegate specific API paths; return 405 for unknown POST paths
-        if self.path in ("/api/config", "/api/config/import", "/api/start", "/api/stop",
+        request_path = self.path.split("?", 1)[0]
+        if request_path in ("/api/config", "/api/config/import", "/api/start", "/api/stop",
                          "/api/runtime/reset",
                          "/api/nicknames",
                          "/api/welcome/templates",
@@ -1783,10 +1931,15 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/onboarding/step3", "/api/onboarding/step4",
                          "/api/ai/models",
                          "/api/friends/selection",
+                         "/api/groups/selection",
                          "/api/sandbox/test",
                          "/api/lots",
                          "/api/todos/action",
+                         "/api/token-stats/clear",
                          "/api/voice/download-model",
+                         "/api/mcp",
+                         "/mcp", "/mcp/messages",
+                         "/api/wechat/sync", "/api/wechat/extract-key",
                          "/api/wechat-data-dir/detect"):
             self.do_GET()
         else:
@@ -1835,6 +1988,10 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     self.end_headers()
                     self.close_connection = True
                     return
+
+        # ── MCP server (Streamable HTTP / legacy SSE) ─────────────────
+        if _handle_mcp_http(self):
+            return
 
         # ── API: Start bot ────────────────────────────────────────────
         if self.path == "/api/start":
@@ -1992,8 +2149,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     **_ai_updates_from_config(config),
                     "BOT_DISPLAY_NAME": config.get("bot_display_name"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
-                    "WECHAT_GROUPS": config.get("wechat_groups") or "*",
-                    "WECHAT_FRIENDS": config.get("wechat_friends", ""),
+                    # 不再回退为 "*"：空字符串表示不监控任何群聊，由「群聊配置」页显式维护
+                    "WECHAT_GROUPS": config.get("wechat_groups"),
+                    "WECHAT_FRIENDS": config.get("wechat_friends"),
                     "GROUP_CHAT_ENABLED": str(config.get("group_chat_enabled", True)).lower(),
                     "FRIEND_CHAT_ENABLED": str(config.get("friend_chat_enabled", True)).lower(),
                     "FUN_ENABLED": str(config.get("fun_enabled", True)).lower(),
@@ -2092,8 +2250,9 @@ class _UIHandler(SimpleHTTPRequestHandler):
                     **_ai_updates_from_config(config),
                     "BOT_DISPLAY_NAME": config.get("bot_display_name"),
                     "WECHAT_BACKEND": config.get("wechat_backend"),
-                    "WECHAT_GROUPS": config.get("wechat_groups") or "*",
-                    "WECHAT_FRIENDS": config.get("wechat_friends", ""),
+                    # 不再回退为 "*"：空字符串表示不监控任何群聊，由「群聊配置」页显式维护
+                    "WECHAT_GROUPS": config.get("wechat_groups"),
+                    "WECHAT_FRIENDS": config.get("wechat_friends"),
                     "GROUP_CHAT_ENABLED": str(config.get("group_chat_enabled", True)).lower(),
                     "FRIEND_CHAT_ENABLED": str(config.get("friend_chat_enabled", True)).lower(),
                     "FUN_ENABLED": str(config.get("fun_enabled", True)).lower(),
@@ -2197,6 +2356,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
         # ── API: Get discovered friends (config checklist source) ────────
         if self.path == "/api/friends":
             try:
+                # 运行中的机器人先重新扫描联系人，新加的好友才能出现在列表里
+                try:
+                    backend = _bot_control.get_backend()
+                    if backend is not None and hasattr(backend, "refresh_friend_cache"):
+                        backend.refresh_friend_cache(force=True)
+                except Exception:
+                    logger.exception("Failed to refresh friend cache")
                 path = webot_data_path("friend_names.json")
                 friends = []
                 if path.exists():
@@ -2211,15 +2377,23 @@ class _UIHandler(SimpleHTTPRequestHandler):
                             if isinstance(val, dict):
                                 name = str(val.get("name") or chat_id)
                                 alias = str(val.get("alias") or "")
+                                active = val.get("active", True)
+                                if isinstance(active, str):
+                                    active = active.strip().lower() not in (
+                                        "0", "false", "no", "off",
+                                    )
                             else:
                                 name = str(val or chat_id)
                                 alias = ""
+                                active = True
                             friends.append({
                                 "chat_id": str(chat_id),
                                 "name": name,
                                 "alias": alias,
+                                "active": bool(active),
                             })
-                friends.sort(key=lambda item: item["name"])
+                # 已不是好友的条目排在后面，但仍保留展示
+                friends.sort(key=lambda item: (not item["active"], item["name"]))
                 self.send_json({"ok": True, "friends": friends})
             except Exception as e:
                 logger.exception("Failed to load friend list")
@@ -2242,110 +2416,71 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 logger.info(
                     "Saved friend chat selection: %s", value or "(none)"
                 )
+                backend = _bot_control.get_backend()
+                if backend is not None and hasattr(backend, "set_friend_selection"):
+                    # .env 中存的是 URL 编码后的名字，运行时匹配需要先解码
+                    from urllib.parse import unquote
+                    names = [
+                        unquote(part.strip())
+                        for part in value.split(",")
+                        if part.strip()
+                    ]
+                    try:
+                        backend.set_friend_selection(names)
+                    except Exception:
+                        logger.exception(
+                            "Failed to apply friend selection to running bot; "
+                            "restart the bot to pick it up"
+                        )
                 self.send_json({"ok": True, "wechat_friends": value})
             except Exception as e:
                 logger.exception("Failed to save friend chat selection")
                 self.send_json({"ok": False, "error": str(e)})
             return
 
-        # ── API: Get nickname groups ─────────────────────────────────────
-        if self.path == "/api/nicknames/groups":
+        # ── API: 群聊列表（「群聊配置」与昵称编辑共用） ──────────────────
+        if self.path in ("/api/groups", "/api/nicknames/groups"):
             try:
-                from src.config import find_env_file, _decode_wechat_groups
-                env_path = find_env_file()
-                import sqlite3
-
-                # Resolve group names same way as wcdb_backend: read env, match sessions
-                groups_raw = "*"
-                if env_path and env_path.exists():
-                    for line in env_path.read_text(encoding="utf-8").splitlines():
-                        if line.strip().startswith("WECHAT_GROUPS="):
-                            groups_raw = line.strip().split("=", 1)[1].strip().strip('"').strip("'")
-                            break
-                groups_raw = _decode_wechat_groups(groups_raw)
-
-                conn = sqlite3.connect(_onboarding_db_path())
-                conn.row_factory = sqlite3.Row
-
-                # Refresh the WCDB group cache first so a group created while
-                # the bot is running shows up without restarting the bot.
-                backend = _bot_control.get_backend()
-                refresh = getattr(backend, "refresh_group_cache", None)
-                if callable(refresh):
-                    try:
-                        refresh(force=True)
-                    except Exception as e:
-                        logger.warning("Group cache refresh failed: %s", e)
-
-                # ── Load persisted chat_id -> group info ─────────────────
-                # Written by WcdbBackend._save_group_names() when the bot
-                # resolves group names from WeChat's session DB via WCDB DLL.
-                # New format: {chat_id: {name, member_count}}
-                # Old format: {chat_id: "name"} (backward compatible)
-                group_names_path = webot_data_path("group_names.json")
-                group_info: dict[str, dict] = {}
-                if group_names_path.exists():
-                    try:
-                        raw = json.loads(group_names_path.read_text(encoding="utf-8"))
-                        for chat_id, val in raw.items():
-                            if isinstance(val, dict):
-                                group_info[chat_id] = {
-                                    "name": val.get("name", chat_id),
-                                    "member_count": int(val.get("member_count", 0)),
-                                }
-                            else:
-                                # Old format: plain string → name only, no member count
-                                group_info[chat_id] = {
-                                    "name": str(val),
-                                    "member_count": 0,
-                                }
-                    except (json.JSONDecodeError, OSError):
-                        pass
-                # ──────────────────────────────────────────────────────────
-
-                groups = []
-
-                # Primary source: group_names.json (from WCDB session scan)
-                if group_info:
-                    for chat_id, info in group_info.items():
-                        mc = info["member_count"]
-                        if not mc:
-                            # Fall back to message-sender count if WCDB didn't provide one
-                            cnt_row = conn.execute(
-                                "SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id=?",
-                                (chat_id,),
-                            ).fetchone()
-                            mc = cnt_row[0] if cnt_row else 0
-                        groups.append({
-                            "chat_id": chat_id,
-                            "group_name": info["name"],
-                            "member_count": mc,
-                        })
-
-                # Secondary source: messages table (groups not yet in group_names.json)
-                if _messages_table_exists(conn):
-                    existing_ids = set(group_info.keys())
-                    rows = conn.execute(
-                        "SELECT DISTINCT chat_id FROM messages WHERE chat_id LIKE '%@chatroom%' ORDER BY chat_id"
-                    ).fetchall()
-                    for row in rows:
-                        chat_id = row["chat_id"]
-                        if chat_id in existing_ids:
-                            continue
-                        cnt_row = conn.execute(
-                            "SELECT COUNT(DISTINCT sender_id) FROM messages WHERE chat_id=?",
-                            (chat_id,),
-                        ).fetchone()
-                        groups.append({
-                            "chat_id": chat_id,
-                            "group_name": chat_id,
-                            "member_count": cnt_row[0] if cnt_row else 0,
-                        })
-
-                conn.close()
-                self.send_json({"ok": True, "groups": groups})
+                self.send_json({"ok": True, "groups": _known_group_candidates()})
             except Exception as e:
-                logger.exception("Failed to list nickname groups")
+                logger.exception("Failed to list groups")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: 保存参与群聊的名单（写入 WECHAT_GROUPS） ────────────────
+        if self.path == "/api/groups/selection":
+            if self.command != "POST":
+                self.send_json({"ok": False, "error": "Method not allowed"})
+                return
+            content_len = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_len) if content_len else b"{}"
+            try:
+                payload = json.loads(body)
+                # 空字符串 = 不监控任何群；"*" = 全部群；否则为 URL 编码的群名列表
+                value = str(payload.get("groups", "") or "").strip()
+                env_path = _find_or_create_env()
+                _write_env_updates(env_path, {"WECHAT_GROUPS": value})
+                logger.info("Saved group chat selection: %s", value or "(none)")
+
+                # 运行中的机器人即时生效；未运行时下次启动读取 .env 生效
+                backend = _bot_control.get_backend()
+                if backend is not None and hasattr(backend, "set_group_selection"):
+                    from urllib.parse import unquote
+                    names = [
+                        unquote(part.strip())
+                        for part in value.split(",")
+                        if part.strip()
+                    ]
+                    try:
+                        backend.set_group_selection(names)
+                    except Exception:
+                        logger.exception(
+                            "Failed to apply group selection to running bot; "
+                            "restart the bot to pick it up"
+                        )
+                self.send_json({"ok": True, "wechat_groups": value})
+            except Exception as e:
+                logger.exception("Failed to save group chat selection")
                 self.send_json({"ok": False, "error": str(e)})
             return
 
@@ -2396,21 +2531,27 @@ class _UIHandler(SimpleHTTPRequestHandler):
                         group_members = json.loads(gm_path.read_text(encoding="utf-8"))
                         chat_members = group_members.get(chat_id, {})
                         for wxid, display_name in chat_members.items():
-                            if wxid not in seen:
-                                seen.add(wxid)
+                            seen.add(wxid)
+                            # messages 里 sender_name 为空时，用群成员表里的昵称补全
+                            if not member_map.get(wxid):
                                 member_map[wxid] = display_name
                     except (json.JSONDecodeError, OSError):
                         pass
 
-                # 3) Build response
+                # 3) Build response（有备注/昵称的排前面，匿名成员排最后）
                 members = [
                     {
                         "wxid": wxid,
-                        "display_name": member_map.get(wxid, wxid),
+                        "display_name": member_map.get(wxid, ""),
                         "nickname": overrides.get(wxid, ""),
                     }
                     for wxid in seen
                 ]
+                members.sort(key=lambda m: (
+                    not (m["nickname"] or m["display_name"]),
+                    (m["nickname"] or m["display_name"] or "").lower(),
+                    m["wxid"],
+                ))
 
                 self.send_json({"ok": True, "members": members})
             except Exception as e:
@@ -2468,6 +2609,66 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 except Exception as e:
                     logger.exception("Failed to save lots config")
                     self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Token usage statistics ────────────────────────────────
+        if self.path.startswith("/api/token-stats"):
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(self.path)
+            route = parsed.path
+            params = {
+                k: v[0] if v else ""
+                for k, v in parse_qs(parsed.query).items()
+            }
+
+            if route == "/api/token-stats/clear":
+                if self.command != "POST":
+                    self.send_json({"ok": False, "error": "Method not allowed"})
+                    return
+                try:
+                    from src.token_stats import clear_usage
+                    self.send_json({"ok": True, "deleted": clear_usage()})
+                except Exception as e:
+                    logger.exception("Failed to clear token usage")
+                    self.send_json({"ok": False, "error": str(e)})
+                return
+
+            try:
+                from src.token_stats import (
+                    get_logs,
+                    get_summary,
+                    get_timeseries,
+                    normalize_range,
+                )
+                range_key = normalize_range(params.get("range", "today"))
+                if route == "/api/token-stats/summary":
+                    self.send_json({"ok": True, **get_summary(range_key)})
+                elif route == "/api/token-stats/timeseries":
+                    self.send_json({
+                        "ok": True,
+                        **get_timeseries(
+                            range_key,
+                            params.get("granularity", "hour"),
+                        ),
+                    })
+                elif route == "/api/token-stats/logs":
+                    self.send_json({
+                        "ok": True,
+                        **get_logs(
+                            range_key,
+                            page=int(params.get("page", "1") or 1),
+                            page_size=int(params.get("page_size", "20") or 20),
+                            model=params.get("model", ""),
+                            status=params.get("status", ""),
+                        ),
+                    })
+                else:
+                    self.send_json({"ok": False, "error": "not found"})
+            except (ValueError, TypeError) as e:
+                self.send_json({"ok": False, "error": str(e)})
+            except Exception as e:
+                logger.exception("Failed to load token statistics")
+                self.send_json({"ok": False, "error": str(e)})
             return
 
         # ── API: Todo management ───────────────────────────────────────
@@ -2667,7 +2868,82 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 })
             return
 
-        # ── API: Get status ───────────────────────────────────────────
+        # ── API: 手动同步微信通讯录缓存（机器人未启动也可用） ─────────
+        if self.path == "/api/wechat/sync":
+            if self.command != "POST":
+                self.send_json({"ok": False, "error": "请使用 POST 请求"})
+                return
+            try:
+                from src.wechat.cache_sync import cache_counts, sync_wechat_caches
+
+                backend = _bot_control.get_backend()
+                if backend is not None:
+                    backend.refresh_group_cache(force=True)
+                    backend.refresh_friend_cache(force=True)
+                    groups, friends = cache_counts()
+                    result = {"groups": groups, "friends": friends}
+                else:
+                    result = sync_wechat_caches()
+                self.send_json({"ok": True, **result})
+            except Exception as e:
+                message = str(e or e.__class__.__name__)
+                logger.warning("WeChat cache sync failed: %s", message)
+                self.send_json({
+                    "ok": False,
+                    "need_key": "KEY_MISSING" in message or "密钥" in message,
+                    "error": message,
+                })
+            return
+
+        # ── API: MCP 服务配置（地址/密钥/开关） ───────────────────────
+        if self.path == "/api/mcp":
+            if not _is_trusted_mcp_request(self):
+                body = json.dumps({
+                    "ok": False,
+                    "error": "拒绝访问：仅允许本机控制台页面读取 MCP 配置",
+                }, ensure_ascii=False).encode()
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            host = (self.headers.get("Host") or "127.0.0.1:7327").strip()
+            base_url = f"http://{host}"
+            if self.command == "POST":
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_len) if content_len else b"{}"
+                try:
+                    payload = json.loads(body)
+                    enabled = payload.get("enabled") if "enabled" in payload else None
+                    api_key = payload.get("api_key")
+                    if api_key is not None and not str(api_key).strip():
+                        api_key = None
+                    scope_groups = payload.get("groups")
+                    scope_friends = payload.get("friends")
+                    _update_mcp_settings(
+                        enabled=bool(enabled) if enabled is not None else None,
+                        api_key=api_key,
+                        regenerate=bool(payload.get("regenerate")),
+                        groups=scope_groups if isinstance(scope_groups, str) else None,
+                        friends=scope_friends if isinstance(scope_friends, str) else None,
+                    )
+                    data = _describe_mcp_server(base_url)
+                    data["saved"] = True
+                    self.send_json(data)
+                except Exception as e:
+                    logger.exception("Failed to update MCP settings")
+                    self.send_json({"ok": False, "error": str(e)})
+                return
+            try:
+                self.send_json(_describe_mcp_server(base_url))
+            except Exception as e:
+                logger.exception("Failed to describe MCP server")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Status ───────────────────────────────────────────────
         if self.path == "/api/status":
             self.send_json(_status.snapshot())
             return
@@ -2787,22 +3063,22 @@ class _UIHandler(SimpleHTTPRequestHandler):
 
         # ── API: Onboarding step 1 - start extraction (async) ─────────
         if self.path == "/api/onboarding/step1":
-            with _step1_lock:
-                if _step1_state["running"]:
-                    self.send_json({"ok": False, "phase": "busy", "message": "正在提取中..."})
-                    return
-                _step1_state["running"] = True
-                _step1_state["phase"] = "idle"
-                _step1_state["message"] = ""
-                _step1_state["result"] = None
+            ok, message = _start_step1_extraction()
+            self.send_json({
+                "ok": ok,
+                "phase": "started" if ok else "busy",
+                "message": message,
+            })
+            return
 
-            # Start background thread
-            t = threading.Thread(target=_run_step1_extraction, daemon=True)
-            t.start()
-            with _step1_lock:
-                _step1_thread = t
-
-            self.send_json({"ok": True, "phase": "started", "message": "提取已启动"})
+        # ── API: 独立获取密钥（不改 onboarding 状态，机器人未启动可用） ──
+        if self.path == "/api/wechat/extract-key":
+            ok, message = _start_step1_extraction()
+            self.send_json({
+                "ok": ok,
+                "phase": "started" if ok else "busy",
+                "message": message,
+            })
             return
 
         # ── API: Onboarding step 1 - poll status ──────────────────────
@@ -2904,6 +3180,13 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 data = json.loads(body)
+                if data.get("skipped"):
+                    # 跳过 LLM 配置：只标记进度，保留已有 AI 配置
+                    with _onboarding_lock:
+                        _onboarding_data["step3_done"] = True
+                    _save_onboarding_state({"step3_done": True})
+                    self.send_json({"ok": True, "skipped": True})
+                    return
                 ai = _normalize_ai_backend(data.get("ai_backend", "openai_compatible"))
                 ai_updates = _ai_updates_from_config({
                     **data,
@@ -3191,7 +3474,11 @@ class _UIHandler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # 只对可信来源回显 CORS，避免任意网页跨站读取本机控制台数据
+        origin = (self.headers.get("Origin") or "").strip()
+        if origin and _is_trusted_web_origin(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()

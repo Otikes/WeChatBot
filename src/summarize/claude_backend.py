@@ -4,8 +4,11 @@ Uses the Anthropic Python SDK with native structured output (Pydantic parse).
 """
 
 import logging
+import time
 
 import anthropic
+
+from src.token_stats import record_usage
 
 from .base import AbstractSummarizer
 from .models import SummaryResult
@@ -56,12 +59,44 @@ class ClaudeSummarizer(AbstractSummarizer):
         self.chunk_size = chunk_size
         self.max_retries = max_retries
 
+    # ── 请求与 token 统计 ────────────────────────────────────────
+
+    def _execute(self, call_type: str, method: str, **kwargs):
+        """发起一次 Anthropic 请求，并记录 token 用量/请求日志。"""
+        started = time.time()
+        try:
+            response = getattr(self.client.messages, method)(**kwargs)
+        except Exception as exc:
+            record_usage(
+                provider="claude",
+                model=self.model,
+                call_type=call_type,
+                duration_ms=int((time.time() - started) * 1000),
+                status="error",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+
+        usage = getattr(response, "usage", None)
+        record_usage(
+            provider="claude",
+            model=self.model,
+            call_type=call_type,
+            prompt_tokens=getattr(usage, "input_tokens", 0) or 0,
+            completion_tokens=getattr(usage, "output_tokens", 0) or 0,
+            duration_ms=int((time.time() - started) * 1000),
+            status="success",
+        )
+        return response
+
     # ── Conversational chat API call (called by base class) ─────
 
     def _call_chat_api(self, system_prompt: str,
-                        messages: list[dict]) -> str:
+                        messages: list[dict],
+                        purpose: str = "chat") -> str:
         """Claude-specific: uses client.messages.create() with system param."""
-        response = self.client.messages.create(
+        response = self._execute(
+            purpose, "create",
             model=self.model,
             max_tokens=400,
             system=system_prompt,
@@ -77,7 +112,8 @@ class ClaudeSummarizer(AbstractSummarizer):
         user_prompt = build_summary_prompt(messages, requester_name)
 
         def call():
-            response = self.client.messages.parse(
+            response = self._execute(
+                "summarize", "parse",
                 model=self.model,
                 max_tokens=8192,
                 system=SYSTEM_PROMPT,
@@ -98,7 +134,8 @@ class ClaudeSummarizer(AbstractSummarizer):
         )
 
         def call():
-            response = self.client.messages.create(
+            response = self._execute(
+                "summarize_chunk", "create",
                 model=self.model,
                 max_tokens=1024,
                 system=CHUNK_SYSTEM_PROMPT,
@@ -114,7 +151,8 @@ class ClaudeSummarizer(AbstractSummarizer):
         user_prompt = build_merge_prompt(chunk_summaries, requester_name)
 
         def call():
-            response = self.client.messages.parse(
+            response = self._execute(
+                "summarize_merge", "parse",
                 model=self.model,
                 max_tokens=8192,
                 system=MERGE_SYSTEM_PROMPT,
@@ -170,7 +208,8 @@ class ClaudeSummarizer(AbstractSummarizer):
         )
 
         def call():
-            response = self.client.messages.create(
+            response = self._execute(
+                "memory", "create",
                 model=self.model,
                 max_tokens=2048,
                 system=system_prompt,

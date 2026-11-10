@@ -140,6 +140,16 @@ def _is_malformed(exc) -> bool:
     return isinstance(exc, sqlite3.DatabaseError) and "malformed" in str(exc).lower()
 
 
+def _like_escape(value: str) -> str:
+    """转义 LIKE 通配符，避免用户输入里的 % / _ 被当模式。"""
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
 def _row_get(r, key, default=None):
     """从 sqlite3.Row 或 dict 取一列，缺列时给默认值。
 
@@ -569,7 +579,7 @@ class WeChatDB:
     # ------------------------------------------------------------------
     # 账号与数据库文件
     # ------------------------------------------------------------------
-    def _pick_account(self) -> str:
+    def _pick_account(self, prefer_marker: bool = True) -> str:
         candidates = []
         for d in _find_account_dirs(self.db_dir):
             if os.path.isdir(os.path.join(d, "db_storage")):
@@ -588,9 +598,11 @@ class WeChatDB:
         candidates.sort(reverse=True)
         # 上次用进程内存密钥确认过的登录账号优先于 mtime 启发式：
         # 微信账号目录的 .db 可能被备份/同步工具触碰，mtime 并不可靠。
-        last = self._read_last_account_marker()
-        if last and any(name == last for _, name in candidates):
-            return last
+        # 账号切换检测需要看实时 mtime，可传 prefer_marker=False 跳过。
+        if prefer_marker:
+            last = self._read_last_account_marker()
+            if last and any(name == last for _, name in candidates):
+                return last
         return candidates[0][1]
 
     def _last_account_marker_path(self) -> str:
@@ -1910,6 +1922,209 @@ class WeChatDB:
         rows.sort(key=lambda r: r["sort_seq"], reverse=True)
         return [self._msg_row_to_dict(r, maps) for r in rows[offset:offset + limit]]
 
+    def query_messages(
+        self,
+        user: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        order: str = "desc",
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        sender: str = "",
+        keyword: str = "",
+    ) -> Tuple[List[dict], bool]:
+        """按时间 / 发送者 / 关键词分页读取会话消息（跨分片合并）。
+
+        与 :meth:`get_messages` 的区别：过滤条件先落到 SQL（create_time、
+        real_sender_id、message_content），因此可以低成本翻到很早以前的
+        历史，而不是只取最近 N 条再在 Python 里丢弃。
+
+        关键词说明：微信 4.x 的文本消息绝大多数以 TEXT 存储，直接走
+        ``LIKE``；少量文本被 zstd 压成 BLOB，SQL 匹配不到，这里额外把窗口
+        内的 BLOB 文本行取回解码后二次过滤，避免漏搜。
+
+        Returns:
+            ``(messages, has_more)``；``messages`` 最多 ``limit`` 条，
+            按 ``order`` 排序（desc 表示最新在前）。
+        """
+        want = int(limit)
+        offset = int(offset)
+        if want <= 0 or offset < 0:
+            return [], False
+
+        ascending = str(order or "desc").lower() == "asc"
+        order_ext = self._MSG_ORDER_ASC if ascending else self._MSG_ORDER_DESC
+        cap = want + offset + 1  # 多取一条用于判断 has_more
+        sender = str(sender or "").strip()
+        keyword = str(keyword or "").strip()
+        like = "%" + _like_escape(keyword) + "%" if keyword else ""
+        cols = ("local_id, local_type, real_sender_id, create_time, "
+                "message_content, source, packed_info_data, compress_content, "
+                "server_id, sort_seq, ? AS shard")
+
+        def _where(clauses: list[str]) -> str:
+            return (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        def build(tables):
+            rows: list[sqlite3.Row] = []
+            maps = self._shard_maps(tables)
+            for conn, table in tables:
+                shard = self._shard_label(conn)
+                clauses: list[str] = []
+                params: list = []
+                if since is not None:
+                    clauses.append("create_time >= ?")
+                    params.append(int(since))
+                if until is not None:
+                    clauses.append("create_time <= ?")
+                    params.append(int(until))
+                if sender:
+                    # real_sender_id 是各分片自己的 Name2Id 编号，必须先在本
+                    # 分片解析出发送者的编号集合，不能跨分片共用。
+                    ids = [
+                        rid for rid, username
+                        in (maps.get(shard) or {}).items()
+                        if username == sender
+                    ]
+                    if not ids:
+                        continue
+                    clauses.append(
+                        "real_sender_id IN (%s)" % ",".join("?" * len(ids))
+                    )
+                    params.extend(ids)
+                sql_ext = _where(clauses)
+                try:
+                    if keyword:
+                        kw_ext = _where(clauses + [
+                            "typeof(message_content)='text'",
+                            "message_content LIKE ? ESCAPE '\\'",
+                        ])
+                        rows += conn.execute(
+                            "SELECT %s FROM %s %s %s LIMIT %d"
+                            % (cols, table, kw_ext, order_ext, cap),
+                            (shard, *params, like),
+                        ).fetchall()
+                        # 压缩文本补充窗口（解码后由下面的 Python 过滤判定）
+                        blob_ext = _where(clauses + [
+                            "local_type=1",
+                            "typeof(message_content)='blob'",
+                        ])
+                        rows += conn.execute(
+                            "SELECT %s FROM %s %s %s LIMIT %d"
+                            % (cols, table, blob_ext, order_ext, cap),
+                            (shard, *params),
+                        ).fetchall()
+                    else:
+                        rows += conn.execute(
+                            "SELECT %s FROM %s %s %s LIMIT %d"
+                            % (cols, table, sql_ext, order_ext, cap),
+                            (shard, *params),
+                        ).fetchall()
+                except sqlite3.DatabaseError as exc:
+                    if _is_malformed(exc):
+                        raise
+                    self._warn_once(
+                        ("query", shard, type(exc).__name__),
+                        "分片 %s 历史查询失败(%s: %s)，本轮结果不含该分片",
+                        shard or "?", type(exc).__name__, str(exc)[:120],
+                    )
+                    continue
+            return rows, maps
+
+        got = self._run_msg_query(user, build)
+        if not got:
+            return [], False
+        rows, maps = got
+        if not rows:
+            return [], False
+        rows.sort(key=lambda r: r["sort_seq"], reverse=not ascending)
+        messages = [self._msg_row_to_dict(r, maps) for r in rows]
+        if keyword:
+            needle = keyword.casefold()
+            messages = [
+                m for m in messages
+                if needle in str(m.get("content") or "").casefold()
+            ]
+        has_more = len(messages) > offset + want
+        return messages[offset:offset + want], has_more
+
+    def sender_stats(
+        self,
+        user: str,
+        *,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+    ) -> List[dict]:
+        """会话内按发送者聚合消息数（跨分片合并）。
+
+        只做 COUNT/MIN/MAX，不读取消息正文，适合在完整历史上做活跃统计。
+        """
+        def build(tables):
+            out: list[dict] = []
+            maps = self._shard_maps(tables)
+            for conn, table in tables:
+                shard = self._shard_label(conn)
+                clauses: list[str] = []
+                params: list = []
+                if since is not None:
+                    clauses.append("create_time >= ?")
+                    params.append(int(since))
+                if until is not None:
+                    clauses.append("create_time <= ?")
+                    params.append(int(until))
+                sql_ext = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+                try:
+                    rows = conn.execute(
+                        "SELECT real_sender_id, COUNT(*) AS message_count, "
+                        "MIN(create_time) AS first_ts, MAX(create_time) AS last_ts "
+                        "FROM %s%s GROUP BY real_sender_id" % (table, sql_ext),
+                        tuple(params),
+                    ).fetchall()
+                except sqlite3.DatabaseError as exc:
+                    if _is_malformed(exc):
+                        raise
+                    self._warn_once(
+                        ("stats", shard, type(exc).__name__),
+                        "分片 %s 活跃统计失败(%s: %s)，本轮结果不含该分片",
+                        shard or "?", type(exc).__name__, str(exc)[:120],
+                    )
+                    continue
+                id_map = maps.get(shard) or {}
+                for row in rows:
+                    sid = row["real_sender_id"]
+                    try:
+                        username = id_map.get(int(sid), "") if sid else ""
+                    except (TypeError, ValueError):
+                        username = ""
+                    out.append({
+                        "sender_username": username or "",
+                        "real_sender_id": sid,
+                        "message_count": int(row["message_count"] or 0),
+                        "first_ts": int(row["first_ts"] or 0),
+                        "last_ts": int(row["last_ts"] or 0),
+                    })
+            return out
+
+        merged: dict[str, dict] = {}
+        for item in self._run_msg_query(user, build) or []:
+            # 解析不到 wxid 时按分片内编号聚合，至少不会把不同人合并错
+            key = item["sender_username"] or "id:%s" % item["real_sender_id"]
+            current = merged.get(key)
+            if current is None:
+                merged[key] = dict(item)
+                continue
+            current["message_count"] += item["message_count"]
+            firsts = [v for v in (current["first_ts"], item["first_ts"]) if v]
+            lasts = [v for v in (current["last_ts"], item["last_ts"]) if v]
+            current["first_ts"] = min(firsts) if firsts else 0
+            current["last_ts"] = max(lasts) if lasts else 0
+        return sorted(
+            merged.values(),
+            key=lambda item: item["message_count"],
+            reverse=True,
+        )
+
     def get_voice_rows(self, user: str, limit: int = 500,
                        local_id: Optional[int] = None) -> List[dict]:
         """语音消息（``local_type=34``）的原始行，额外带 ``download_status``。
@@ -2127,6 +2342,84 @@ class WeChatDB:
             "shard": _row_get(row, "shard", ""),
         }
 
+    def get_media_rows(self, user: str, types: set,
+                       since: Optional[int] = None, until: Optional[int] = None,
+                       limit: int = 200, offset: int = 0) -> List[dict]:
+        """按消息类型读取会话媒体行（降序），供 MCP 媒体列表使用。
+
+        与 ``get_messages`` 不同，这里只筛媒体类型，不受常规分页窗口限制；
+        每行带 ``shard``，可原样传给 ``get_message_row`` 回读唯一行。
+        """
+        wanted = sorted({int(t) for t in (types or ()) if int(t) > 0})
+        if not wanted:
+            return []
+        clauses = ["(local_type & 4294967295) IN (%s)" % ",".join("?" * len(wanted))]
+        params: List = list(wanted)
+        if since is not None:
+            clauses.append("create_time>=?")
+            params.append(int(since))
+        if until is not None:
+            clauses.append("create_time<=?")
+            params.append(int(until))
+        sql_ext = "WHERE " + " AND ".join(clauses)
+        want = max(0, int(limit))
+        skip = max(0, int(offset))
+        if want <= 0:
+            return []
+        rows = self._run_msg_query(
+            user,
+            lambda tables: self._shard_rows(
+                tables, sql_ext, tuple(params),
+                order_ext=self._MSG_ORDER_DESC,
+                per_shard_limit=want + skip,
+            ),
+        )
+        if not rows:
+            return []
+        rows.sort(key=lambda r: (-int(r["sort_seq"] or 0), int(r["local_id"] or 0)))
+        out = []
+        for r in rows[skip: skip + want]:
+            out.append({
+                "local_id": r["local_id"],
+                "local_type": r["local_type"],
+                "server_id": r["server_id"],
+                "sender_id": r["real_sender_id"],
+                "create_time": r["create_time"],
+                "content": r["message_content"],
+                "packed_info": r["packed_info_data"],
+                "sort_seq": r["sort_seq"],
+                "shard": _row_get(r, "shard", ""),
+            })
+        return out
+
+    def get_emoticon_meta(self, md5: str) -> Optional[dict]:
+        """查询 ``emoticon.db`` 的表情元数据（md5 → aes_key / CDN 地址）。"""
+        target = str(md5 or "").strip().lower()
+        if not target:
+            return None
+        for rel, path, _ in self._db_files:
+            if os.path.basename(path).lower() != "emoticon.db":
+                continue
+            try:
+                conn = self._open(rel)
+            except Exception:
+                return None
+            try:
+                row = conn.execute(
+                    "SELECT md5, aes_key, cdn_url, encrypt_url, extern_url "
+                    "FROM kNonStoreEmoticonTable WHERE md5=?",
+                    (target,),
+                ).fetchone()
+            except sqlite3.Error:
+                row = None
+            finally:
+                conn.close()
+            if not row:
+                return None
+            keys = ("md5", "aes_key", "cdn_url", "encrypt_url", "extern_url")
+            return {k: (row[i] or "") for i, k in enumerate(keys)}
+        return None
+
     def _find_media_rows(self, user: str, types: set) -> List[int]:
         """按 local_type 直接查该会话全部媒体 local_id（降序），不受总消息分页限制。
 
@@ -2201,6 +2494,9 @@ class WeChatDB:
                 sender_username = mp.get(int(sender_id), "") or ""
             except (TypeError, ValueError):
                 sender_username = ""
+        # 自己发出的消息（包括手机端发送）：发送者就是当前登录账号。
+        # 轮询侧据此跳过，避免把自己的消息当成对方发来的去回复。
+        is_self = bool(sender_username) and sender_username == self.wxid
         return {
             "local_id": r["local_id"],
             "local_type": r["local_type"],
@@ -2208,6 +2504,7 @@ class WeChatDB:
             "type": mtype,
             "sender_id": sender_id,
             "sender_username": sender_username,
+            "is_self": is_self,
             "create_time": r["create_time"],
             "content": content,
             "sort_seq": r["sort_seq"],

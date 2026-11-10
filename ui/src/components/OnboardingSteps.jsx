@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { CheckCircle, ArrowRight, Spinner, XCircle, Warning } from '@phosphor-icons/react'
+import { CheckCircle, ArrowRight, Spinner, XCircle, Warning, Info } from '@phosphor-icons/react'
 import { Field, Toggle, Select, Input, spring } from './SharedComponents'
 
 const API = window.location.port === '5173' ? 'http://127.0.0.1:7327' : ''
@@ -528,13 +528,9 @@ export function Step2WeChatConfig({ data, updateData, onDone }) {
           />
         </Field>
 
-        <Field label="目标群聊" hint="输入 * 表示监控所有群聊，指定群名可用逗号分隔">
-          <Input
-            value={data.wechat_groups || '*'}
-            onChange={v => updateData({ wechat_groups: v })}
-            placeholder="* = 所有群聊"
-          />
-        </Field>
+        <p className="text-xs text-text-muted -mt-2 leading-relaxed">
+          默认监听全部群聊；需要限定范围时，可稍后在控制台「群聊配置」中按群勾选。
+        </p>
 
         <motion.button
           whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
@@ -565,6 +561,15 @@ function normalizeProtocol(value) {
   return value || 'openai_compatible'
 }
 
+/** LLM 是否已可用：OpenAI 兼容协议只需模型，Claude 还需要有效 Key */
+function isLlmConfigured(data) {
+  if (normalizeProtocol(data.ai_backend) === 'openai_compatible') {
+    return (data.openai_model || '').trim().length > 0
+  }
+  return (data.anthropic_api_key || '').trim().length >= 8
+    && (data.summarize_model || '').trim().length > 0
+}
+
 export function Step3AIConfig({ data, updateData, onDone }) {
   const [busy, setBusy] = useState(false)
   const [modelBusy, setModelBusy] = useState(false)
@@ -576,9 +581,7 @@ export function Step3AIConfig({ data, updateData, onDone }) {
   const baseUrl = isOpenAI ? data.openai_base_url : data.anthropic_base_url
   const modelKey = isOpenAI ? 'openai_model' : 'summarize_model'
   const model = data[modelKey] || ''
-  const valid = isOpenAI
-    ? (model || '').trim().length > 0
-    : (apiKey || '').trim().length >= 8 && (model || '').trim().length > 0
+  const valid = isLlmConfigured(data)
   const modelSelectOptions = (() => {
     const seen = new Set()
     const rows = modelOptions.map(m => ({
@@ -657,11 +660,26 @@ export function Step3AIConfig({ data, updateData, onDone }) {
     setBusy(false)
   }
 
+  async function handleSkip() {
+    setBusy(true)
+    try {
+      await fetchWithRetry(`${API}/api/onboarding/step3`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipped: true }),
+      })
+      onDone()
+    } catch {
+      // Retry exhausted — let user try again
+    }
+    setBusy(false)
+  }
+
   return (
     <div>
       <div className="flex items-center gap-2 mb-6">
         <div className="w-1.5 h-4.5 rounded-full bg-[#3772cf]" />
         <h3 className="text-base font-semibold tracking-tight text-text-main">LLM模型配置</h3>
+        <span className="text-[10px] font-mono text-text-muted border border-border-main rounded-full px-2 py-0.5">可跳过</span>
       </div>
 
       <div className="space-y-6 mt-4">
@@ -719,18 +737,32 @@ export function Step3AIConfig({ data, updateData, onDone }) {
           </>
         )}
 
-        <motion.button
-          whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
-          onClick={handleNext}
-          disabled={!valid || busy}
-          className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
-            valid
-              ? 'bg-[#0d0d0d] dark:bg-white text-white dark:text-[#0d0d0d] hover:opacity-95'
-              : 'bg-bg-raised text-text-muted/65 border border-border-main cursor-not-allowed'
-          }`}
-        >
-          {busy ? <Spinner size={18} weight="bold" className="animate-spin" /> : <><ArrowRight size={18} /> 下一步</>}
-        </motion.button>
+        <div className="flex items-center gap-3">
+          <motion.button
+            whileTap={{ scale: 0.97 }} whileHover={{ scale: 1.02 }}
+            onClick={handleNext}
+            disabled={!valid || busy}
+            className={`w-48 py-2.5 rounded-full text-[14px] font-semibold tracking-wide transition-all duration-300 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
+              valid
+                ? 'bg-[#0d0d0d] dark:bg-white text-white dark:text-[#0d0d0d] hover:opacity-95'
+                : 'bg-bg-raised text-text-muted/65 border border-border-main cursor-not-allowed'
+            }`}
+          >
+            {busy ? <Spinner size={18} weight="bold" className="animate-spin" /> : <><ArrowRight size={18} /> 下一步</>}
+          </motion.button>
+          <button
+            type="button"
+            onClick={handleSkip}
+            disabled={busy}
+            className="px-6 py-2.5 rounded-full text-[14px] font-semibold text-text-muted border border-border-main hover:text-text-main hover:border-text-muted/30 transition-colors cursor-pointer disabled:opacity-50"
+          >
+            跳过
+          </button>
+        </div>
+
+        <p className="text-xs text-text-muted leading-relaxed -mt-2">
+          跳过不影响进入控制台：只使用 MCP 服务时无需配置 LLM；机器人相关功能需稍后在「系统配置 → LLM模型配置」中补全。
+        </p>
       </div>
     </div>
   )
@@ -783,6 +815,15 @@ export function Step4Features({ data, updateData, onComplete }) {
       </div>
 
       <div className="space-y-4 mt-4">
+        {!isLlmConfigured(data) && (
+          <div className="flex items-start gap-3 bg-bg-raised border border-border-main rounded-2xl p-4">
+            <Info size={18} className="text-text-muted shrink-0 mt-0.5" />
+            <p className="text-xs text-text-muted leading-relaxed">
+              未配置 LLM 模型：机器人启动前需在「系统配置 → LLM模型配置」中补全；只使用 MCP 服务则无需配置。
+            </p>
+          </div>
+        )}
+
         <div className="divide-y divide-border-main/40">
           <ToggleRow label="趣味抽签" desc={'@机器人说「抽签」，随机返回运势签文（大吉/中吉/小吉/末吉/凶）'} enabled={data.fun_enabled ?? true}
             onChange={v => updateData({ fun_enabled: v })} />

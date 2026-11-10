@@ -373,6 +373,7 @@ class AbstractSummarizer(ABC):
                 lambda: self._call_chat_api(
                     system_prompt,
                     [{"role": "user", "content": user_prompt}],
+                    purpose="proactive",
                 ),
                 "proactive chat",
             )
@@ -387,12 +388,16 @@ class AbstractSummarizer(ABC):
 
     @abstractmethod
     def _call_chat_api(self, system_prompt: str,
-                        messages: list[dict]) -> str:
+                        messages: list[dict],
+                        purpose: str = "chat") -> str:
         """Execute the chat API call. Backend-specific.
 
         Claude backend: uses client.messages.create() with system param.
         OpenAI-compatible backends: use client.chat.completions.create()
                                     with system role in messages list.
+
+        Args:
+            purpose: Call type (chat / proactive) for token statistics.
         """
         ...
 

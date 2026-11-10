@@ -5,11 +5,17 @@ PyInstaller spec for webot Desktop.
 Build: pyinstaller build.spec
 Output: dist/webot.exe
 """
+import os
 import sys
 import site
 from pathlib import Path
 
 PROJECT_ROOT = Path(SPECPATH)
+
+# Snapshot the built UI before packaging so a concurrent `vite build`
+# cannot swap hashed asset filenames mid-build (PyInstaller reads the
+# files at pack time, minutes after Analysis).
+UI_DIST = os.environ.get("WEBOT_UI_DIST", "ui/dist")
 
 # ── Resolve webview runtime DLLs dynamically ───────────────────────────
 def _find_webview_runtime_dir():
@@ -49,7 +55,7 @@ a = Analysis(
         (str(PROJECT_ROOT / 'native' / 'windows' / 'wx_key.dll'), 'native/windows'),
     ],
     datas=[
-        ('ui/dist', 'ui/dist'),
+        (UI_DIST, 'ui/dist'),
         ('.env.example', '.'),
         # data/ is runtime-generated — do NOT bundle into read-only _MEIPASS
     ],
@@ -70,11 +76,15 @@ a = Analysis(
         'src.integrations.feishu.knowledge',
         'src.wechat', 'src.wechat.base', 'src.wechat.wcdb_backend',
         'src.wechat.local_wcdb_client', 'src.wechat.wxdb_reader',
+        'src.wechat.cache_sync',
         'src.wechat.mac_hybrid_backend',
         'src.wechat.mac_ui_backend', 'src.wechat.window_controller',
         'src.wechat.keyboard', 'src.wechat.helpers', 'src.wechat.extract_key',
+        'src.wechat.dat2img', 'src.wechat.forward', 'src.wechat.media',
         'src.wechat.native', 'src.wechat.native.injector',
         'src.web', 'src.web.server',
+        'src.mcp_server', 'src.mcp_server.server', 'src.mcp_server.data',
+        'src.mcp_server.history',
         'src.router', 'src.welcome',
         'src.todo', 'src.todo.store', 'src.todo.handler',
         'src.nickname', 'src.admin', 'src.fun',
@@ -84,6 +94,7 @@ a = Analysis(
         'cryptography.hazmat.primitives.ciphers.algorithms',
         'cryptography.hazmat.primitives.ciphers.modes',
         'zstandard',
+        'av',
         'uiautomation',
         'webview', 'webview.platforms', 'webview.platforms.edgechromium',
         'PIL', 'PIL.Image', 'PIL.ImageDraw',
@@ -95,7 +106,7 @@ a = Analysis(
     runtime_hooks=[],
     excludes=['tkinter', 'matplotlib', 'scipy', 'jedi', 'IPython',
               'faster_whisper', 'ctranslate2', 'numpy', 'onnxruntime',
-              'pysilk', 'av', 'sounddevice', 'soundfile'],
+              'pysilk', 'sounddevice', 'soundfile'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=None,

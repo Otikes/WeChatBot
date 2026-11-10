@@ -112,6 +112,24 @@
 
 ---
 
+### 9. MCP 服务
+
+把已采集的群聊、群成员、好友与消息通过标准 [MCP](https://modelcontextprotocol.io) 协议暴露给 Codex、Trae 等智能体，可用于写周报、群活跃分析、联系人盘点、客户跟进等。
+
+**怎么用**
+
+1. 打开控制台左侧「MCP 服务」，点「一键复制全部配置」，即可拿到请求地址（默认 `http://127.0.0.1:7327/mcp`）、API Key 和各客户端配置
+2. 直接粘贴到 Trae / Codex / Claude Code 等智能体的 MCP 配置中；仅支持 stdio 的客户端（如 Claude Desktop）用面板里的 `mcp-remote` 桥接配置
+3. 让智能体先调用 `get_data_overview` 了解数据范围，再用 `find_new_senders` 追踪新成员、`get_contact_profile` 查看联系人画像，配合 `list_groups`、`list_group_members`、`list_friends`、`search_messages`、`get_group_activity` 等工具做周报汇总、运营复盘或客户跟进
+
+只要控制台程序在运行，**不需要启动微信机器人**也能查询数据。`get_messages`、`search_messages`（指定 `chat` 时）和 `get_member_activity` 默认优先读取**微信本地数据库的完整历史**，翻页可以一直读到微信保留的最早消息；当微信未登录、密钥失效或本地库不可用时，会自动回退到机器人采集的 `messages.db`，返回里的 `source` / `note` 会标明实际数据源。可用环境变量 `MCP_HISTORY_SOURCE=messages` 强制只用采集库。面板里可以直接「测试连接」，也提供 Trae / 通用 JSON、Claude Desktop、Codex TOML、旧版 SSE 和 curl 五种配置示例。
+
+**数据范围**：在「MCP 服务 → 数据范围」中可分别按「群聊 / 好友」Tab 勾选允许智能体读取的会话，默认全部可见；关闭「全部可见」后，未勾选的群聊/好友不会出现在任何工具结果中（搜索、统计、总览同样会被过滤），保存后智能体下次调用立即生效。对应 `.env` 的 `MCP_GROUPS` / `MCP_FRIENDS`，留空或 `*` 为全部，`none` 为全部禁止。
+
+安全默认值：MCP 只监听本机、只接受回环 Host/Origin，请求需 API Key；外部网页无法读取控制台里的密钥。若密钥泄露，在「MCP 服务」面板点「轮换密钥」即可立即生成一组新的随机密钥，旧密钥马上失效，新密钥会自动复制到剪贴板。通过隧道/反向代理访问时，需要在 `.env` 配置 `MCP_ALLOWED_HOSTS`。
+
+---
+
 ## 控制台一览
 
 打开 EXE 后会自动弹出网页控制台，左侧菜单依次是：
@@ -122,6 +140,7 @@
 - **群聊待办**：待办功能配置 + 所有群的待办列表
 - **群友昵称**：给群成员取别名
 - **运行日志**：查看机器人运行记录
+- **MCP 服务**：查看请求地址与密钥，接入 Codex、Trae 等智能体
 
 所有配置改完后点「保存配置」，重启机器人就生效。
 

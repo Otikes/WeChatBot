@@ -475,11 +475,11 @@ class TestFriendChatConfig:
         friend_btn = page.locator("button:has-text('好友私聊')")
         if friend_btn.count() > 0:
             friend_btn.first.click()
-            # 好友列表可能很大，懒加载面板 + 渲染需要时间，等待提示文案出现
-            page.wait_for_selector("text=未勾选任何好友", timeout=15000)
+            # 好友列表可能很大，懒加载面板 + 渲染需要时间，等待穿梭列表工具栏出现
+            page.wait_for_selector("text=清空勾选", timeout=15000)
         page_text = page.inner_text("body")
         assert "好友私聊" in page_text
-        assert "未勾选任何好友" in page_text
+        assert "清空勾选" in page_text
 
     def test_save_selection_only_updates_friends(self, server):
         project_root = Path(__file__).resolve().parent.parent
@@ -554,6 +554,8 @@ class TestLogViewer:
             page.locator("button:has-text('运行日志')").first.click()
             page.wait_for_selector("text=Persisted browser log", timeout=5000)
             page.locator('button[title="清空日志文件"]').click()
+            # 清空操作现在有二次确认弹窗
+            page.get_by_role("button", name="清空日志", exact=True).click()
             page.wait_for_selector("text=Terminal Cleared", timeout=5000)
 
             assert log_path.read_text(encoding="utf-8") == ""

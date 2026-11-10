@@ -146,12 +146,12 @@ class DecodeWeChatGroupsTests(unittest.TestCase):
 
         self.assertEqual(_decode_wechat_groups("*"), "*")
 
-    def test_empty_returns_wildcard(self):
-        """Empty string or None → '*'."""
+    def test_empty_returns_empty(self):
+        """空字符串 / None → 空（不监控任何群聊）。"""
         from src.config import _decode_wechat_groups
 
-        self.assertEqual(_decode_wechat_groups(""), "*")
-        self.assertEqual(_decode_wechat_groups(None), "*")
+        self.assertEqual(_decode_wechat_groups(""), "")
+        self.assertEqual(_decode_wechat_groups(None), "")
 
     def test_single_encoded_group_decoded(self):
         """Single URL-encoded group name should be decoded."""

@@ -12,6 +12,8 @@ pyperclip>=1.8
 # WCDB pure-Python decryption (SQLCipher 4) + zstd long-text messages
 cryptography>=41.0.0
 zstandard>=0.23.0
+# 微信 wxgf 原图解码（Annex B HEVC）
+av>=14.0
 
 # Voice recognition — SILK decode + local/cloud ASR
 silk-python>=0.2.8

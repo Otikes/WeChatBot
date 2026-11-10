@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare, ChatCircleDots } from '@phosphor-icons/react'
+import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare, ChatCircleDots, Coins, PlugsConnected } from '@phosphor-icons/react'
 import Dashboard from './components/Dashboard'
 
 // 非首屏面板按需加载，避免启动时解析全部面板代码
@@ -8,9 +8,11 @@ import Dashboard from './components/Dashboard'
 const ConfigPanel = memo(lazy(() => import('./components/ConfigPanel')))
 const FeaturesPanel = memo(lazy(() => import('./components/FeaturesPanel')))
 const FriendChatPanel = memo(lazy(() => import('./components/FriendChatPanel')))
-const NicknameEditor = memo(lazy(() => import('./components/NicknameEditor')))
+const GroupChatPanel = memo(lazy(() => import('./components/GroupChatPanel')))
 const LogViewer = memo(lazy(() => import('./components/LogViewer')))
 const TodoManager = memo(lazy(() => import('./components/TodoManager')))
+const TokenStats = memo(lazy(() => import('./components/TokenStats')))
+const McpPanel = memo(lazy(() => import('./components/McpPanel')))
 const Onboarding = memo(lazy(() => import('./components/Onboarding')))
 
 function PanelFallback() {
@@ -28,6 +30,8 @@ const iconVariants = {
 
 const TABS = [
   { id: 'dashboard', label: '运行状态', icon: ChartLine },
+  { id: 'token-stats', label: 'Token 统计', icon: Coins },
+  { id: 'mcp', label: 'MCP 服务', icon: PlugsConnected },
   {
     id: 'config', label: '系统配置', icon: Gear,
     subs: [
@@ -53,7 +57,7 @@ const TABS = [
     ],
   },
   { id: 'friend-chat', label: '好友私聊', icon: ChatCircleDots },
-  { id: 'nicknames', label: '群友昵称', icon: Users },
+  { id: 'nicknames', label: '群聊配置', icon: Users },
   { id: 'todo-manager', label: '群聊待办', icon: CheckSquare },
   { id: 'logs', label: '运行日志', icon: Scroll },
 ]
@@ -148,6 +152,11 @@ export default function App() {
     error: '',
   }
 
+  const activeTabMeta = TABS.find(t => t.id === activeTab)
+  const activeSubMeta = activeTabMeta?.subs?.find(
+    sub => sub.id === (activeTab === 'config' ? configSection : featuresSection)
+  )
+
   function handleResetComplete() {
     setBotStatus(null)
     setActiveTab('dashboard')
@@ -184,9 +193,8 @@ export default function App() {
 
       {/* Sidebar */}
       <div className="fixed left-0 top-0 h-full w-56 bg-bg-main border-r border-border-main z-40">
-        <div className="p-5 flex flex-col h-full justify-between">
-          <div>
-            <div className="flex items-center gap-3 mb-8">
+        <div className="p-5 flex flex-col h-full">
+          <div className="flex items-center gap-3 mb-8 shrink-0">
               <div className="relative">
                 <img src="/logo-128.png" alt="webot" className="w-9 h-9 rounded-full border border-border-main" />
                 <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-bg-main transition-colors duration-300 ${!wsConnected ? 'bg-[#d45656] animate-pulse' : (status.running ? 'bg-brand-green' : 'bg-slate-500')}`} />
@@ -197,7 +205,7 @@ export default function App() {
               </div>
             </div>
 
-            <nav className="space-y-1">
+            <nav className="space-y-1 flex-1 min-h-0 overflow-y-auto pr-1 -mr-2">
               {TABS.map(({ id, label, icon: Icon, subs }) => (
                 <div key={id}>
                   <motion.button
@@ -260,9 +268,8 @@ export default function App() {
                 </div>
               ))}
             </nav>
-          </div>
 
-          <div className="border-t border-border-main pt-4 mt-auto">
+          <div className="border-t border-border-main pt-4 mt-4 shrink-0">
             <div className="flex items-center gap-2.5 px-4 py-2 bg-bg-raised/80 rounded-full border border-border-main">
               <div className={`w-2 h-2 rounded-full relative ${!wsConnected ? 'bg-[#d45656]' : (status.running ? 'bg-brand-green' : 'bg-slate-500')}`}>
                 {!wsConnected && <span className="absolute inset-0 rounded-full bg-[#d45656] animate-ping opacity-75" />}
@@ -279,8 +286,14 @@ export default function App() {
       {/* Main content */}
       <div className="ml-56">
         <div className="sticky top-0 z-30 bg-bg-main/80 backdrop-blur-md px-8 py-4 flex items-center justify-between border-b border-border-main transition-colors duration-300">
-          <h2 className="text-sm font-semibold tracking-tight text-text-main">
-            {TABS.find(t => t.id === activeTab)?.label}
+          <h2 className="text-sm font-semibold tracking-tight text-text-main flex items-center gap-2">
+            {activeTabMeta?.label}
+            {activeSubMeta && (
+              <>
+                <span className="text-text-muted/35 font-normal">/</span>
+                <span className="text-text-muted font-normal">{activeSubMeta.label}</span>
+              </>
+            )}
           </h2>
           <div className="flex items-center gap-3">
             {/* Theme switcher toggle button */}
@@ -324,10 +337,12 @@ export default function App() {
           >
             <Suspense fallback={<PanelFallback />}>
             {activeTab === 'dashboard' && <Dashboard status={status} onResetComplete={handleResetComplete} />}
+            {activeTab === 'token-stats' && <TokenStats />}
+            {activeTab === 'mcp' && <McpPanel />}
             {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
             {activeTab === 'features' && <FeaturesPanel activeSection={featuresSection} onNavigate={setFeaturesSection} />}
             {activeTab === 'friend-chat' && <FriendChatPanel />}
-            {activeTab === 'nicknames' && <NicknameEditor />}
+            {activeTab === 'nicknames' && <GroupChatPanel />}
             {activeTab === 'todo-manager' && <TodoManager />}
             {activeTab === 'logs' && <LogViewer />}
             </Suspense>

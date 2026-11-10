@@ -101,6 +101,31 @@ class WcdbBackendGroupResolutionTests(unittest.TestCase):
 
         self.assertEqual(backend._talker_ids, {"缓存群": "654321@chatroom"})
 
+    def test_cached_group_missing_from_live_db_is_marked_exited(self):
+        client = FakeWcdbClient(
+            sessions=[{"username": "wxid_friend"}],
+            contacts=[{"userName": "111111@chatroom", "nickName": "现存群"}],
+        )
+        backend = _backend(["*"], client)
+        cached = {
+            "111111@chatroom": {"name": "现存群", "member_count": 3},
+            "222222@chatroom": {"name": "已退出的群", "member_count": 5},
+        }
+        saved: dict = {}
+
+        with (
+            patch.object(WcdbBackend, "_load_cached_group_names", return_value=cached),
+            patch.object(WcdbBackend, "_save_group_names", side_effect=lambda data: saved.update(data)),
+            patch.object(WcdbBackend, "_save_group_members"),
+        ):
+            backend._resolve_groups()
+
+        # 已退出的群不参与匹配，但仍保留在缓存里并标记 active=False
+        self.assertEqual(backend._talker_ids, {"现存群": "111111@chatroom"})
+        self.assertTrue(backend._chatrooms["111111@chatroom"]["active"])
+        self.assertFalse(backend._chatrooms["222222@chatroom"]["active"])
+        self.assertFalse(saved["222222@chatroom"]["active"])
+
     def test_accepts_configured_direct_chatroom_id_without_session_record(self):
         client = FakeWcdbClient(sessions=[], names={"999999@chatroom": "直连群"})
         backend = _backend(["999999@chatroom"], client)
@@ -172,6 +197,37 @@ class WcdbBackendGroupResolutionTests(unittest.TestCase):
             {"666666@chatroom": "666666@chatroom"},
         )
         self.assertEqual(backend._groups, ["666666@chatroom"])
+
+    def test_refresh_marks_group_exited_when_it_disappears(self):
+        client = FakeWcdbClient(
+            sessions=[],
+            contacts=[
+                {"userName": "123456@chatroom", "nickName": "测试群"},
+                {"userName": "654321@chatroom", "nickName": "遗留群"},
+            ],
+        )
+        backend = _backend(["*"], client)
+
+        with (
+            patch.object(WcdbBackend, "_load_cached_group_names", return_value={}),
+            patch.object(WcdbBackend, "_save_group_names"),
+            patch.object(WcdbBackend, "_save_group_members"),
+        ):
+            backend._resolve_groups()
+        self.assertEqual(
+            backend._talker_ids,
+            {"测试群": "123456@chatroom", "遗留群": "654321@chatroom"},
+        )
+
+        # 退群后实时数据源里不再有「遗留群」
+        client.contacts = [{"userName": "123456@chatroom", "nickName": "测试群"}]
+        client.groups = []
+        backend._last_group_refresh = 0.0
+        with patch.object(WcdbBackend, "_save_group_names"):
+            self.assertTrue(backend.refresh_group_cache(force=True))
+
+        self.assertEqual(backend._talker_ids, {"测试群": "123456@chatroom"})
+        self.assertFalse(backend._chatrooms["654321@chatroom"]["active"])
 
 
 @unittest.skipIf(WcdbBackend is None, f"wcdb_backend unavailable: {IMPORT_ERROR}")
@@ -253,6 +309,43 @@ class WcdbBackendPollingTests(unittest.TestCase):
         )
 
         self.assertEqual(seen, [])
+
+    def test_poll_group_skips_messages_sent_by_the_account_itself(self):
+        # Messages typed on the phone also land in the local WCDB with the
+        # account itself as sender; they must never be treated as incoming.
+        messages = [
+            {
+                "server_id": 0,
+                "local_id": 2,
+                "sender_username": "wxid_self",
+                "is_self": True,
+                "message_content": "我手机上发的",
+                "localType": 1,
+                "create_time": 200,
+            },
+            {
+                "server_id": 0,
+                "local_id": 1,
+                "sender_username": "wxid_alice",
+                "is_self": False,
+                "message_content": "在吗",
+                "localType": 1,
+                "create_time": 100,
+            },
+        ]
+        backend = self._polling_backend(messages)
+        seen = []
+
+        backend._poll_group(
+            "Alice", "wxid_alice",
+            lambda msg: seen.append(msg) or None, is_group=False,
+        )
+        backend._poll_group(
+            "Alice", "wxid_alice",
+            lambda msg: seen.append(msg) or None, is_group=False,
+        )
+
+        self.assertEqual([m["content"] for m in seen], ["在吗"])
 
     def test_standardize_keeps_empty_image_message_as_placeholder(self):
         backend = self._polling_backend([])
@@ -498,18 +591,29 @@ class WcdbBackendFriendResolutionTests(unittest.TestCase):
 
         self.assertEqual(backend._talker_to_name("wxid_alice"), "Alice")
 
-    def test_contacts_without_remark_or_nickname_are_skipped(self):
+    def test_contacts_without_remark_or_nickname_fall_back_to_alias(self):
         client = FakeWcdbClient(
             contacts=[
                 {"username": "wxid_named", "remark": "有备注", "nick_name": ""},
-                {"username": "wxid_noname", "remark": "", "nick_name": ""},
+                {"username": "wxid_nickless", "remark": "", "nick_name": "\xa0",
+                 "alias": "YY_25408"},
+                {"username": "wxid_bare", "remark": "", "nick_name": ""},
             ],
         )
         backend = self._friend_backend(["*"], client)
 
         self._resolve(backend)
 
-        self.assertEqual(backend._friend_ids, {"有备注": "wxid_named"})
+        # 无备注/昵称的好友用微信号兜底，微信号也没有时退回 wxid，
+        # 保证真实好友一个都不会从勾选列表中消失。
+        self.assertEqual(
+            backend._friend_ids,
+            {
+                "有备注": "wxid_named",
+                "YY_25408": "wxid_nickless",
+                "wxid_bare": "wxid_bare",
+            },
+        )
 
     def test_system_service_accounts_are_skipped(self):
         client = FakeWcdbClient(
@@ -569,6 +673,31 @@ class WcdbBackendFriendResolutionTests(unittest.TestCase):
         self._resolve(backend)
 
         self.assertEqual(backend._friend_ids, {})
+
+    def test_cached_friend_missing_from_contacts_is_marked_removed(self):
+        client = FakeWcdbClient(
+            contacts=[{"username": "wxid_alice", "remark": "爱丽丝"}],
+        )
+        backend = self._friend_backend(["爱丽丝", "已删好友"], client)
+        cached = {
+            "wxid_alice": {"name": "爱丽丝"},
+            "wxid_gone": {"name": "已删好友"},
+        }
+        saved: dict = {}
+
+        with (
+            patch.object(WcdbBackend, "_load_cached_friend_names", return_value=cached),
+            patch.object(
+                WcdbBackend, "_save_friend_names",
+                side_effect=lambda data: saved.update(data),
+            ),
+        ):
+            backend._resolve_friends()
+
+        # 已删好友不参与匹配，但仍保留缓存并标记 active=False
+        self.assertEqual(backend._friend_ids, {"爱丽丝": "wxid_alice"})
+        self.assertFalse(saved["wxid_gone"]["active"])
+        self.assertTrue(saved["wxid_alice"]["active"])
 
     def test_cached_friends_from_another_account_are_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:

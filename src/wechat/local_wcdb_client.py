@@ -288,6 +288,54 @@ class LocalWcdbClient:
             return []
         db = self._require_db()
         rows = db.get_messages(who, limit=max(1, int(limit)), offset=max(0, int(offset)))
+        return self._normalize_messages(rows)
+
+    def query_messages(
+        self,
+        talker: str,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+        order: str = "desc",
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+        sender: str = "",
+        keyword: str = "",
+    ) -> tuple[list[dict], bool]:
+        """Filtered history query (time / sender / keyword) with pagination."""
+        who = str(talker or "").strip()
+        if not who:
+            return [], False
+        db = self._require_db()
+        rows, has_more = db.query_messages(
+            who,
+            limit=max(1, int(limit)),
+            offset=max(0, int(offset)),
+            order=order,
+            since=since,
+            until=until,
+            sender=sender,
+            keyword=keyword,
+        )
+        return self._normalize_messages(rows), has_more
+
+    def sender_stats(
+        self,
+        talker: str,
+        *,
+        since: Optional[int] = None,
+        until: Optional[int] = None,
+    ) -> list[dict]:
+        """Per-sender message counts over the full local history."""
+        who = str(talker or "").strip()
+        if not who:
+            return []
+        db = self._require_db()
+        return db.sender_stats(who, since=since, until=until)
+
+    @staticmethod
+    def _normalize_messages(rows) -> list[dict]:
+        """Map WeChatDB rows to the field names used by WcdbBackend."""
         out: list[dict] = []
         for row in rows:
             content = row.get("content") or ""
@@ -303,6 +351,7 @@ class LocalWcdbClient:
                 "shard": row.get("shard"),
                 "sender_id": row.get("sender_id"),
                 "sender_username": sender,
+                "is_self": bool(row.get("is_self")),
                 "message_content": content,
                 "content": content,
                 "local_type": row.get("local_type") or 0,

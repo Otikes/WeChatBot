@@ -24,9 +24,14 @@ def _decode_wechat_groups(raw: str) -> str:
     .env format or our comma-separated delimiter.  This function reverses that encoding
     with a fallback: if decoding a chunk doesn't change it (or raises), the original
     is kept — for backward compatibility with old unencoded .env files.
+
+    "*" still means every group (legacy configs), while an empty value means
+    no groups at all — group participation is an explicit checklist in the UI.
     """
-    if not raw or raw.strip() == "*":
-        return raw.strip() if raw else "*"
+    if not raw or not raw.strip():
+        return ""
+    if raw.strip() == "*":
+        return "*"
     decoded = []
     for chunk in raw.split(","):
         chunk = chunk.strip()

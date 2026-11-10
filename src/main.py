@@ -38,7 +38,7 @@ def _print_config_summary(config: BotConfig) -> None:
         print(f"  Anthropic API Key:       {_mask(config.anthropic_api_key)}")
         print(f"  Anthropic Base URL:      {config.anthropic_base_url}")
     print(f"  WeChat Backend:          {config.wechat_backend}")
-    print(f"  WeChat Groups:           {config.wechat_groups or '(all)'}")
+    print(f"  WeChat Groups:           {config.wechat_groups or '(none)'}")
     print(f"  Bot Display Name:        {config.bot_display_name}")
     print(f"  Admin wxid:              {config.admin_wxid or '(not set)'}")
     print(f"  Trigger Keywords:        {config.trigger_keywords}")

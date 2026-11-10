@@ -11,6 +11,8 @@ import re
 from typing import Any
 import xml.etree.ElementTree as ET
 
+from src.wechat.forward import appmsg_type, parse_forward, parse_reference
+
 logger = logging.getLogger(__name__)
 
 # ── Message type mapping ──────────────────────────────────────────
@@ -154,6 +156,19 @@ def _format_app_message(raw_content: str) -> str:
     root = _parse_wechat_xml(raw_content)
     if root is None:
         return _format_plain_app_content(raw_content)
+
+    kind = appmsg_type(raw_content)
+    if kind == 19:
+        data = parse_forward(raw_content)
+        if not data:
+            return "[合并转发]"
+        title = str(data.get("title") or "").strip()
+        count = data.get("count") or len(data.get("items") or [])
+        return f"[合并转发: {title} ({count}条)]" if title else f"[合并转发 ({count}条)]"
+    if kind == 57:
+        data = parse_reference(raw_content) or {}
+        title = str(data.get("title") or "").strip()
+        return f"[引用: {title}]" if title else "[引用]"
 
     title = _first_xml_text(root, ("title", "filename", "fileName"))
     desc = _first_xml_text(root, ("des", "description"))

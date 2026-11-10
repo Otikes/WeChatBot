@@ -34,6 +34,7 @@ DEFAULT_POLL_SEC = 1.0
 MAX_DEDUP_SIZE = 5000
 MAX_CONSECUTIVE_ERRORS = 5   # trigger reinit after this many consecutive failures
 GROUP_REFRESH_SEC = 60.0     # re-scan WCDB for newly created groups
+FRIEND_REFRESH_SEC = 60.0    # re-scan WCDB contacts for newly added friends
 ACCOUNT_CHECK_SEC = 30.0     # detect WeChat logout/login account switch
 
 
@@ -84,6 +85,7 @@ class WcdbBackend(AbstractWeChatBackend):
         self._chatrooms: dict[str, dict] = {}
         self._auto_discover = True
         self._last_group_refresh = 0.0
+        self._last_friend_refresh = 0.0
         self._last_account_check = 0.0
         # Callback thread pool — fire-and-forget AI calls so the poll loop
         # never blocks on a slow summarization.
@@ -147,8 +149,10 @@ class WcdbBackend(AbstractWeChatBackend):
         else:
             logger.warning("WeChat window not found — will retry on first send")
 
+        # 8 workers: AI calls for different chats (and friend replies) can run
+        # in parallel instead of queueing behind each other during bursts.
         self._pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=4, thread_name_prefix="bot-cb-",
+            max_workers=8, thread_name_prefix="bot-cb-",
         )
         self._running = True
         consecutive_errors = 0
@@ -325,6 +329,20 @@ class WcdbBackend(AbstractWeChatBackend):
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _cache_entry_active(info) -> bool:
+        """读取缓存条目的有效性标记（旧缓存没有该字段时视为有效）。
+
+        ``active=False`` 表示该好友已不在通讯录 / 该群已退出或解散，
+        仅用于前端展示「已退出」标记，不参与轮询与匹配。
+        """
+        if not isinstance(info, dict):
+            return True
+        value = info.get("active", True)
+        if isinstance(value, str):
+            return value.strip().lower() not in ("0", "false", "no", "off")
+        return bool(value)
 
     @staticmethod
     def _merge_chatrooms(target: dict[str, dict], source: dict[str, dict]) -> int:
@@ -509,13 +527,20 @@ class WcdbBackend(AbstractWeChatBackend):
             chatrooms[username] = {
                 "name": display or username,
                 "member_count": member_count,
+                "active": WcdbBackend._cache_entry_active(info),
             }
         if chatrooms:
             logger.info("Loaded %d cached group-name mappings from %s", len(chatrooms), path)
         return chatrooms
 
-    def _add_configured_chatroom_ids(self, chatrooms: dict[str, dict]) -> int:
-        """Accept explicit WECHAT_GROUPS entries like 123456@chatroom."""
+    def _add_configured_chatroom_ids(
+        self, chatrooms: dict[str, dict], live_ids: set[str] | None = None,
+    ) -> int:
+        """Accept explicit WECHAT_GROUPS entries like 123456@chatroom.
+
+        ``live_ids`` 是本次实时扫描到的群；当它非空且配置的群不在其中时，
+        说明该群已退出 / 已解散，标记为 ``active=False``。
+        """
         added = 0
         for group_name in self._groups:
             username = str(group_name or "").strip()
@@ -530,6 +555,7 @@ class WcdbBackend(AbstractWeChatBackend):
             chatrooms[username] = {
                 "name": display,
                 "member_count": 0,
+                "active": (not live_ids) or username in live_ids,
             }
             added += 1
         return added
@@ -543,18 +569,20 @@ class WcdbBackend(AbstractWeChatBackend):
         """
         with self._groups_lock:
             self._talker_ids.clear()
+        # Only "*" means "monitor every group".  An empty list is a valid
+        # configuration now (group participation is an explicit checklist),
+        # so it must NOT fall back to auto-discovery.
         self._auto_discover = (
-            not self._groups
-            or (len(self._groups) == 1 and self._groups[0].strip() in ("*", "all", ""))
+            len(self._groups) == 1
+            and self._groups[0].strip().lower() in ("*", "all")
         )
         sessions = self._client.get_sessions()
         self._session_cache = sessions
 
-        # Build a map of all known @chatroom entries:
-        # username -> {name, member_count}.
-        all_chatrooms = self._chatrooms_from_records(sessions)
-        if all_chatrooms:
-            logger.info("Found %d group chats in WCDB sessions", len(all_chatrooms))
+        # 本次实时扫描到的群（会话 / 通讯录 / chat_room 三个来源取并集）。
+        live_chatrooms = self._chatrooms_from_records(sessions)
+        if live_chatrooms:
+            logger.info("Found %d group chats in WCDB sessions", len(live_chatrooms))
         else:
             logger.warning(
                 "No @chatroom sessions found in WCDB (total sessions: %d); "
@@ -564,7 +592,7 @@ class WcdbBackend(AbstractWeChatBackend):
 
         contact_chatrooms = self._chatrooms_from_contacts()
         if contact_chatrooms:
-            added = self._merge_chatrooms(all_chatrooms, contact_chatrooms)
+            added = self._merge_chatrooms(live_chatrooms, contact_chatrooms)
             logger.info(
                 "Loaded %d group chats from contacts (%d new)",
                 len(contact_chatrooms), added,
@@ -574,21 +602,40 @@ class WcdbBackend(AbstractWeChatBackend):
         # including new groups that have no session row yet.
         room_chatrooms = self._chatrooms_from_groups()
         if room_chatrooms:
-            added = self._merge_chatrooms(all_chatrooms, room_chatrooms)
+            added = self._merge_chatrooms(live_chatrooms, room_chatrooms)
             logger.info(
                 "Loaded %d group chats from chat_room table (%d new)",
                 len(room_chatrooms), added,
             )
 
+        live_ids = set(live_chatrooms)
+        all_chatrooms: dict[str, dict] = {
+            username: {**info, "active": True}
+            for username, info in live_chatrooms.items()
+        }
+
+        # 缓存里存在、实时库中已找不到的群 = 已退群 / 群已解散。
+        # 保留条目（前端显示「已退出」），但不再参与匹配与轮询。
         cached_chatrooms = self._load_cached_group_names()
+        stale_count = 0
+        for username, info in cached_chatrooms.items():
+            if username in all_chatrooms:
+                continue
+            entry = dict(info)
+            if live_ids:
+                entry["active"] = False
+                stale_count += 1
+            else:
+                # 实时数据源没有返回任何群，无法判断有效性，沿用上次状态
+                entry["active"] = self._cache_entry_active(info)
+            all_chatrooms[username] = entry
         if cached_chatrooms:
-            added = self._merge_chatrooms(all_chatrooms, cached_chatrooms)
             logger.info(
-                "Loaded %d group chats from cache (%d new)",
-                len(cached_chatrooms), added,
+                "Loaded %d cached group mappings (%d no longer in WeChat)",
+                len(cached_chatrooms), stale_count,
             )
 
-        direct_count = self._add_configured_chatroom_ids(all_chatrooms)
+        direct_count = self._add_configured_chatroom_ids(all_chatrooms, live_ids)
         if direct_count:
             logger.info("Accepted %d configured direct @chatroom IDs", direct_count)
 
@@ -602,11 +649,22 @@ class WcdbBackend(AbstractWeChatBackend):
             )
             return
 
+        # 已退出 / 已解散的群不再匹配，避免继续被轮询。
+        matchable_chatrooms = {
+            username: info
+            for username, info in all_chatrooms.items()
+            if info.get("active", True)
+        }
+        if all_chatrooms and not matchable_chatrooms:
+            logger.warning(
+                "All cached groups are no longer in WeChat — no group will be polled"
+            )
+
         auto_discover = self._auto_discover
 
         talker_ids: dict[str, str] = {}
         if auto_discover:
-            for username, info in all_chatrooms.items():
+            for username, info in matchable_chatrooms.items():
                 talker_ids[info["name"]] = username
             logger.info(
                 "Auto-discovered %d group chats: %s",
@@ -617,16 +675,16 @@ class WcdbBackend(AbstractWeChatBackend):
             for group_name in self._groups:
                 found = None
                 # Direct lookup: maybe group_name IS a username like 20968749111@chatroom
-                if group_name in all_chatrooms:
+                if group_name in matchable_chatrooms:
                     found = group_name
                 if not found:
-                    for username, info in all_chatrooms.items():
+                    for username, info in matchable_chatrooms.items():
                         display = info["name"]
                         if group_name.lower() == display.lower():
                             found = username
                             break
                 if not found:
-                    for username, info in all_chatrooms.items():
+                    for username, info in matchable_chatrooms.items():
                         display = info["name"]
                         if group_name.lower() in display.lower() or display.lower() in group_name.lower():
                             found = username
@@ -651,11 +709,12 @@ class WcdbBackend(AbstractWeChatBackend):
         self._last_group_refresh = time.monotonic()
 
         # Persist chat_id -> display_name so the web UI can show
-        # human-readable group names in the nickname dropdown.
+        # human-readable group names in the nickname dropdown.  Exited
+        # groups are kept with active=False so the UI can mark them.
         if all_chatrooms:
             self._save_group_names(all_chatrooms)
 
-        self._resolve_group_members(all_chatrooms)
+        self._resolve_group_members(matchable_chatrooms)
 
     def _resolve_group_members(self, chatrooms: dict[str, dict]) -> None:
         """Resolve and persist member display names for the given chatrooms."""
@@ -729,27 +788,73 @@ class WcdbBackend(AbstractWeChatBackend):
                 info["name"] != before_names.get(username)
                 for username, info in self._chatrooms.items()
             )
-            if self._auto_discover and (new_chatrooms or renamed):
+            # 实时库里已经找不到的群 = 已退出 / 已解散，标记为失效。
+            # discovered 为空时（数据库暂时读不到）不做任何降级判断。
+            status_changed = False
+            if discovered:
+                for username, info in self._chatrooms.items():
+                    active = username in discovered
+                    if bool(info.get("active", True)) != active:
+                        info["active"] = active
+                        status_changed = True
+            if self._auto_discover and (new_chatrooms or renamed or status_changed):
                 # Rebuild so newly discovered groups start being polled and
                 # renamed groups are looked up by their current title.
                 self._talker_ids = {
                     info["name"]: username
                     for username, info in self._chatrooms.items()
+                    if info.get("active", True)
                 }
                 self._groups = list(self._talker_ids.keys())
+            # 手动名单里已退出的群同样停止轮询（重新入群需重启/保存名单）
+            for group_name, username in list(self._talker_ids.items()):
+                info = self._chatrooms.get(username)
+                if info is not None and not info.get("active", True):
+                    self._talker_ids.pop(group_name, None)
+                    logger.info(
+                        "Group '%s' (%s) is no longer in WeChat; stopped polling",
+                        group_name, username,
+                    )
             snapshot = dict(self._chatrooms)
 
-        if not added and not renamed:
+        if not added and not renamed and not status_changed:
             return False
-        logger.info(
-            "Discovered %d new group chat(s): %s",
-            len(new_chatrooms),
-            [f"{info['name']} ({username})" for username, info in new_chatrooms.items()],
-        )
+        if new_chatrooms:
+            logger.info(
+                "Discovered %d new group chat(s): %s",
+                len(new_chatrooms),
+                [f"{info['name']} ({username})" for username, info in new_chatrooms.items()],
+            )
+        if status_changed:
+            logger.info(
+                "Updated group status: %d active / %d exited",
+                sum(1 for info in snapshot.values() if info.get("active", True)),
+                sum(1 for info in snapshot.values() if not info.get("active", True)),
+            )
         self._save_group_names(snapshot)
         if new_chatrooms:
             self._resolve_group_members(new_chatrooms)
         return True
+
+    def refresh_friend_cache(self, force: bool = False) -> bool:
+        """重新扫描联系人并刷新 friend_names.json，让新加好友出现在 Web UI。
+
+        与 refresh_group_cache 一样，UI 调用时传 force=True，最短间隔 5 秒，
+        避免频繁扫描联系人表。返回 True 表示本次真正执行了扫描。
+        """
+        now = time.monotonic()
+        min_gap = 5.0 if force else FRIEND_REFRESH_SEC
+        if now - self._last_friend_refresh < min_gap:
+            return False
+        if self._client is None:
+            return False
+        self._last_friend_refresh = now
+        try:
+            self._resolve_friends()
+            return True
+        except Exception as exc:
+            logger.warning("Friend cache refresh failed: %s", exc)
+            return False
 
     def _save_group_members(self, chat_members: dict[str, dict[str, str]]) -> None:
         """Persist chat_id -> {wxid: display_name} to group_members.json.
@@ -898,19 +1003,24 @@ class WcdbBackend(AbstractWeChatBackend):
                     display = str(self._client.resolve_nickname(username) or "").strip()
                 except Exception:
                     display = ""
-            if not display or display == username:
-                # Strangers, deleted contacts and system accounts have no
-                # remark/nickname — never surface raw wxids in the checklist.
-                continue
 
             alias = str(record.get("alias") or "").strip()
+            if alias == username:
+                alias = ""
+            if not display or display == username:
+                # Friends without remark/nickname (WeChat stores a NBSP
+                # placeholder like '\xa0' in nick_name) still appear in the
+                # contact list with their微信号 (alias).  Fall back to it,
+                # then to the wxid, so such friends are not dropped.
+                display = alias or username
+
             current = friends.get(username)
             if current is None:
                 current = {"name": display}
                 friends[username] = current
             elif current["name"] in ("", username) and display != username:
                 current["name"] = display
-            if alias and alias != username:
+            if alias:
                 current.setdefault("alias", alias)
         return friends
 
@@ -1008,6 +1118,7 @@ class WcdbBackend(AbstractWeChatBackend):
                 alias = str(info.get("alias") or "").strip()
                 if alias and alias != username:
                     entry["alias"] = alias
+            entry["active"] = WcdbBackend._cache_entry_active(info)
             friends[username] = entry
         if friends:
             logger.info(
@@ -1036,6 +1147,37 @@ class WcdbBackend(AbstractWeChatBackend):
         except Exception as e:
             logger.warning("Failed to persist friend_names.json: %s", e)
 
+    def set_group_selection(self, groups) -> None:
+        """应用 Web UI 提交的群聊名单（运行中的机器人即时生效，无需重启）。
+
+        传入空列表表示「不监控任何群聊」；传入 ["*"] 表示监控全部群聊。
+        """
+        self._groups = [
+            str(item).strip() for item in (groups or []) if str(item).strip()
+        ]
+        logger.info(
+            "Group selection updated at runtime: %s",
+            ", ".join(self._groups) or "(none)",
+        )
+        # 重新解析群名 -> chat_id，并刷新群缓存供前端列表使用
+        self._resolve_groups()
+
+    def set_friend_selection(self, friends) -> None:
+        """Apply a new friend checklist from the Web UI without restarting.
+
+        Saving the checklist used to only rewrite .env, so a running bot kept
+        polling the old (often empty) friend list and silently ignored every
+        message until it was restarted.
+        """
+        self._friends = [
+            str(item).strip() for item in (friends or []) if str(item).strip()
+        ]
+        logger.info(
+            "Friend selection updated at runtime: %s",
+            ", ".join(self._friends) or "(none)",
+        )
+        self._resolve_friends()
+
     def _resolve_friends(self) -> None:
         """Map selected friends to chat IDs and persist the full friend list.
 
@@ -1051,10 +1193,21 @@ class WcdbBackend(AbstractWeChatBackend):
         # previous WeChat login, so neither is merged into live contacts.
         contact_friends = self._friends_from_contacts()
         if contact_friends:
-            all_friends = contact_friends
+            # 通讯录里不再存在的缓存好友 = 已删除 / 已不是好友。
+            # 保留缓存条目并标记 active=False，供前端显示「已不是好友」。
+            for info in contact_friends.values():
+                info["active"] = True
+            cached_friends = self._load_cached_friend_names()
+            all_friends = {
+                username: {**info, "active": False}
+                for username, info in cached_friends.items()
+                if username not in contact_friends
+            }
+            all_friends.update(contact_friends)
             logger.info(
-                "Loaded %d friends from contacts of current WeChat account",
-                len(all_friends),
+                "Loaded %d friends from contacts of current WeChat account "
+                "(%d cached entries are no longer friends)",
+                len(contact_friends), len(all_friends) - len(contact_friends),
             )
         else:
             all_friends = self._load_cached_friend_names()
@@ -1066,6 +1219,18 @@ class WcdbBackend(AbstractWeChatBackend):
                     "Found %d friend chats in WCDB sessions (%d new)",
                     len(session_friends), added,
                 )
+
+        # 已不是好友 / 已删除的条目只做展示，不参与匹配与轮询。
+        matchable_friends = {
+            username: info
+            for username, info in all_friends.items()
+            if info.get("active", True)
+        }
+        if all_friends and not matchable_friends:
+            logger.warning(
+                "All cached friends are no longer in the contact list — "
+                "no friend chat will be polled"
+            )
 
         # Persist every discovered friend so the web UI can offer a checklist.
         if all_friends:
@@ -1081,7 +1246,7 @@ class WcdbBackend(AbstractWeChatBackend):
         )
 
         if auto_discover:
-            for username, info in all_friends.items():
+            for username, info in matchable_friends.items():
                 self._register_friend(info["name"], username)
             logger.info(
                 "Auto-discovered %d friend chats: %s",
@@ -1093,12 +1258,12 @@ class WcdbBackend(AbstractWeChatBackend):
             wanted = str(friend_name or "").strip()
             if not wanted:
                 continue
-            found = wanted if wanted in all_friends else None
+            found = wanted if wanted in matchable_friends else None
             if not found:
                 # The checklist may store either the wxid or the visible
                 # WeChat ID (alias) — accept both.
                 alias_matches = [
-                    username for username, info in all_friends.items()
+                    username for username, info in matchable_friends.items()
                     if str(info.get("alias") or "").lower() == wanted.lower()
                 ]
                 if len(alias_matches) == 1:
@@ -1106,7 +1271,7 @@ class WcdbBackend(AbstractWeChatBackend):
             if not found:
                 lowered = wanted.lower()
                 exact = [
-                    username for username, info in all_friends.items()
+                    username for username, info in matchable_friends.items()
                     if info["name"].lower() == lowered
                 ]
                 if len(exact) == 1:
@@ -1120,7 +1285,7 @@ class WcdbBackend(AbstractWeChatBackend):
             if not found:
                 lowered = wanted.lower()
                 partial = [
-                    username for username, info in all_friends.items()
+                    username for username, info in matchable_friends.items()
                     if lowered in info["name"].lower()
                     or info["name"].lower() in lowered
                 ]
@@ -1135,7 +1300,7 @@ class WcdbBackend(AbstractWeChatBackend):
                         wanted, len(partial),
                     )
             if found:
-                display = all_friends[found]["name"]
+                display = matchable_friends[found]["name"]
                 self._register_friend(display, found)
                 logger.info(
                     "Resolved friend '%s' -> %s (display='%s')",
@@ -1154,6 +1319,15 @@ class WcdbBackend(AbstractWeChatBackend):
         if not self._friend_ids:
             logger.warning(
                 "No selected friends resolved — friend chat replies disabled."
+            )
+        else:
+            logger.info(
+                "Polling %d friend chat(s): %s",
+                len(self._friend_ids),
+                "、".join(
+                    f"{name} ({username})"
+                    for name, username in self._friend_ids.items()
+                ),
             )
 
     def _register_friend(self, display: str, username: str) -> None:
@@ -1232,21 +1406,8 @@ class WcdbBackend(AbstractWeChatBackend):
         self._check_account_switch()
         # Pick up groups created after startup (throttled internally).
         self.refresh_group_cache()
-        with self._groups_lock:
-            groups = list(self._groups)
-            group_ids = dict(self._talker_ids)
-        for group_name in groups:
-            if not self._running:
-                break
-            talker = group_ids.get(group_name)
-            if not talker:
-                continue
-            self._poll_group(group_name, talker, callback)
-
-        # Friend chats: only selected friends are in _friend_ids, so
-        # unselected friends are never polled and never get AI replies.
-        # When friend chat is switched off, skip polling entirely so those
-        # conversations are neither stored nor answered.
+        # Friend chats are polled FIRST so a wall of group traffic (or the
+        # cold-start backlog of ~30 groups) never delays private replies.
         friend_chat_enabled = getattr(
             getattr(self, "_voice_config", None), "friend_chat_enabled", True,
         )
@@ -1258,6 +1419,23 @@ class WcdbBackend(AbstractWeChatBackend):
                 if not talker:
                     continue
                 self._poll_group(friend_name, talker, callback, is_group=False)
+        elif not getattr(self, "_friend_disabled_logged", False):
+            self._friend_disabled_logged = True
+            logger.info(
+                "Friend chat switch is OFF — %d selected friend(s) are not polled.",
+                len(self._friend_ids),
+            )
+
+        with self._groups_lock:
+            groups = list(self._groups)
+            group_ids = dict(self._talker_ids)
+        for group_name in groups:
+            if not self._running:
+                break
+            talker = group_ids.get(group_name)
+            if not talker:
+                continue
+            self._poll_group(group_name, talker, callback)
 
         # Check shutdown signal before sleeping so stop() is responsive
         if not self._running:
@@ -1287,6 +1465,19 @@ class WcdbBackend(AbstractWeChatBackend):
             # were re-processed — and re-logged — once per second forever.
             raw_key = self._raw_message_key(msg, talker)
             if raw_key in self._known_ids:
+                continue
+
+            # Self-sent messages: the account itself sent them (our own reply,
+            # or a message typed on the phone).  They are not incoming chat and
+            # must never trigger an AI reply — in 1-on-1 chats the blank
+            # sender column used to resolve to the friend's name, which made
+            # the bot reply to its own messages.
+            if msg.get("is_self"):
+                self._known_ids.add(raw_key)
+                logger.debug(
+                    "Skip self message: chat='%s' content=%r",
+                    group_name, str(msg.get("message_content", ""))[:40],
+                )
                 continue
 
             standardized = self._standardize(
@@ -1327,8 +1518,9 @@ class WcdbBackend(AbstractWeChatBackend):
                     standardized["new_member_id"], group_name[:20],
                 )
             logger.info(
-                "New message: group='%s' sender='%s' at=%s content=%r",
-                group_name, standardized["sender_name"],
+                "New %s message: chat='%s' sender='%s' type=%s at=%s content=%r",
+                "group" if is_group else "friend",
+                group_name, standardized["sender_name"], standardized.get("msg_type"),
                 standardized["is_at_mentioned"], standardized["content"][:60],
             )
 
@@ -1339,16 +1531,17 @@ class WcdbBackend(AbstractWeChatBackend):
             if self._pool:
                 self._pool.submit(
                     self._handle_message,
-                    group_name, talker, standardized, callback,
+                    group_name, talker, standardized, callback, is_group,
                 )
             else:
                 # Fallback (pool already shut down): run inline
                 self._handle_message(
-                    group_name, talker, standardized, callback,
+                    group_name, talker, standardized, callback, is_group,
                 )
 
     def _handle_message(self, group_name: str, talker: str,
-                        standardized: dict, callback: MessageCallback) -> None:
+                        standardized: dict, callback: MessageCallback,
+                        is_group: bool = True) -> None:
         """Execute callback and send reply (runs in thread pool worker)."""
         if not self._running:
             return
@@ -1402,6 +1595,15 @@ class WcdbBackend(AbstractWeChatBackend):
                         "Reply FAILED: group='%s' — check WeChat window",
                         group_name,
                     )
+            elif not is_group:
+                # Friend chats are expected to always answer; make a miss
+                # explicit so the reason is visible in the Web UI log instead
+                # of looking like the message was never received.
+                logger.warning(
+                    "No reply for friend chat: friend='%s' sender='%s' — "
+                    "check friend-chat switch, AI config or message type",
+                    group_name, standardized["sender_name"],
+                )
         except Exception:
             logger.exception(
                 "Unhandled error in callback worker (group='%s', sender='%s')",
@@ -1530,7 +1732,19 @@ class WcdbBackend(AbstractWeChatBackend):
             ts = int(time.time())
 
         # Resolve sender display name
-        sender_name = self._client.resolve_nickname(sender)
+        if is_group:
+            sender_name = self._client.resolve_nickname(sender)
+        else:
+            # 1-on-1: WeChat often leaves the sender column blank (' ' /
+            # '\xa0'); the conversation itself is the friend, and group_name
+            # already carries remark → nickname → 微信号 → wxid.
+            resolved = self._client.resolve_nickname(sender) if sender.strip() else ""
+            if resolved.strip() and resolved.strip() != sender.strip():
+                sender_name = resolved
+            else:
+                sender_name = group_name or (talker if talker else sender)
+            if not sender.strip():
+                sender = talker or sender
 
         # Fallback: if WCDB DLL can't resolve (user not in contacts),
         # try the messages table for a previously seen display name
@@ -1623,9 +1837,41 @@ class WcdbBackend(AbstractWeChatBackend):
         on failure, and polling WCDB adds 3s of latency for marginal gain.
         """
         success = self._window.send_to_chat(group_name, content)
-        if success:
+        if not success:
+            return False
+
+        if self._confirm_sent_message(talker, content):
             self._recent_sends.append((talker, content, time.time()))
-        return success
+            return True
+
+        logger.error(
+            "Reply verification FAILED: text not found in chat '%s' (%s) — "
+            "the message was most likely sent to the wrong conversation "
+            "(e.g. 文件传输助手). Check the WeChat window.",
+            group_name, talker,
+        )
+        return False
+
+    def _confirm_sent_message(self, talker: str, content: str,
+                              timeout: float = 8.0) -> bool:
+        """Poll WCDB until the outgoing text shows up in ``talker``'s chat."""
+        needle = (content or "").strip()
+        if not needle:
+            return False
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and self._running:
+            try:
+                messages = self._client.get_messages(talker=talker, limit=5)
+            except Exception as exc:
+                logger.debug("Reply verification read failed: %s", exc)
+                messages = []
+            for msg in messages:
+                text = str(msg.get("message_content") or "").strip()
+                if text and (needle in text or text in needle):
+                    return True
+            time.sleep(1.0)
+        return False
 
     def _send_image_and_confirm(self, group_name: str, talker: str,
                                 image_path: str) -> bool:

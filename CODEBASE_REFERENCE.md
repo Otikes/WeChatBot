@@ -162,6 +162,12 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `WEBOT_ENV_FILE` | `str` | `""` | `src/config.py:find_env_file()` | `src/config.py` (显式指定 .env 路径) |
 | `ONBOARDING_DONE` | `bool` | `False` | `.env` 写入 | `src/config.py:is_onboarding_done()`, `src/web/server.py`, `desktop.py`；步骤草稿存入 SQLite `onboarding_state` |
 | `WCDB_KEY` | `str` | `""` | `.env` / 引导流程写入 | 兼容字段；纯 Python 读取器从微信内存自动取密钥，不再依赖该值；引导草稿副本存入 SQLite `onboarding_state.wcdb_key` |
+| `MCP_ENABLED` | `bool` | `True` | `src/mcp_server/server.py:get_settings()` | `src/mcp_server/server.py:_check_access()`；关闭后 `/mcp`、`/mcp/sse` 返回 403 |
+| `MCP_API_KEY` | `str` | `""` (空时由控制台生成) | `src/mcp_server/server.py:ensure_api_key()` / `update_settings()` | `src/mcp_server/server.py:verify_api_key()`；所有 MCP 请求需 `Authorization: Bearer <key>` 或 `X-API-Key`（`?key=` 仅限旧版 SSE） |
+| `MCP_ALLOWED_HOSTS` | `str` (逗号分隔) | `""`（仅回环） | `src/mcp_server/server.py:_allowed_hosts()` | 追加可信 Host/Origin 域名（隧道、反向代理）；不配置时只允许 `127.0.0.1` / `localhost` / `::1` |
+| `MCP_GROUPS` | `str` | `""`（全部） | `src/mcp_server/server.py:update_settings()` | `src/mcp_server/data.py:_parse_scope()`；可读取的群聊，空或 `*` = 全部，`none` = 禁止，其余逗号分隔的群 ID |
+| `MCP_FRIENDS` | `str` | `""`（全部） | `src/mcp_server/server.py:update_settings()` | `src/mcp_server/data.py:_parse_scope()`；可读取的好友，空或 `*` = 全部，`none` = 禁止，其余逗号分隔的 wxid |
+| `MCP_HISTORY_SOURCE` | `str` | `"auto"` | 环境变量 | `src/mcp_server/history.py:enabled()`；`messages` 表示关闭微信本地完整历史读取，只查 `messages.db` |
 | `MAC_WECHAT_SEND_SHORTCUT` | `str` | `"enter"` | `desktop_mac.py` | `src/wechat/mac_ui_backend.py` |
 | `MAC_CHAT_TITLE_CACHE_FILE` | `str` | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
 | `MAC_CHAT_TITLE_MAP` | `str` (JSON) | `""` | 环境变量 | `src/wechat/mac_hybrid_backend.py` |
@@ -365,20 +371,20 @@ image_gen_keywords: list[str] = [
 | `_merge_chatrooms(target, source)` | 合并群聊元数据，优先保留真实群名 | `target: dict, source: dict` | `int` |
 | `_chatrooms_from_records(records)` | 从 session/contact 记录收集 `@chatroom` 群聊元数据 | `records` | `dict[str, dict]` |
 | `_chatrooms_from_contacts()` | 从联系人列表加载群聊，作为 session 缺失时的兜底 | 无 | `dict[str, dict]` |
-| `_load_cached_group_names()` | 读取 `<WEBOT_DATA_DIR>/group_names.json` 群名映射；仅当 `wechat_account.txt` 记录与当前账号一致时使用 | 无 | `dict[str, dict]` |
-| `_add_configured_chatroom_ids(chatrooms)` | 接受 `WECHAT_GROUPS` 中直接配置的 `@chatroom` ID | `chatrooms: dict` | `int` |
-| `_resolve_groups()` | 按 session → contacts → 缓存 → 直接 ID 解析群组名称到 talker ID | 无 | `None` |
+| `_load_cached_group_names()` | 读取 `<WEBOT_DATA_DIR>/group_names.json` 群名映射（含 `active` 失效标记）；仅当 `wechat_account.txt` 记录与当前账号一致时使用 | 无 | `dict[str, dict]` |
+| `_add_configured_chatroom_ids(chatrooms, live_ids=None)` | 接受 `WECHAT_GROUPS` 中直接配置的 `@chatroom` ID；不在 `live_ids` 中时标记 `active=False` | `chatrooms: dict, live_ids: set[str] \| None` | `int` |
+| `_resolve_groups()` | 按 session → contacts → chat_room → 缓存 → 直接 ID 解析群组；缓存中已不存在的群标记 `active=False`，且不参与匹配/轮询 | 无 | `None` |
 | `_prepare_account_caches()` | 启动/重初始化时比对账号标记；账号切换则清空旧群聊缓存并写入当前账号 | 无 | `None` |
 | `_save_group_names(chatrooms)` | 持久化群名映射并写入当前账号标记 | `chatrooms: dict` | `None` |
 | `_save_group_members(chat_members)` | 持久化群成员列表；仅在账号一致时合并旧缓存 | `chat_members: dict` | `None` |
 | `_is_friend_username(username)` | 判断 session/contact 用户名是否可作为好友私聊（排除 `@chatroom`、`gh_`、系统账号） | `username: str` | `bool` |
 | `_is_friend_contact(record)` | 按 `contact.db` 字段判定真实好友：`local_type=1` 且 `flag ∈ (1,3)`，排除 `delete_flag=1` | `record: dict` | `bool` |
-| `_friends_from_records(records)` | 从 session/contact 记录构建好友元数据 | `records` | `dict[str, dict]` |
+| `_friends_from_records(records)` | 从 session/contact 记录构建好友元数据；备注 → 昵称 → 微信号(`alias`) → wxid 依次兜底，无备注/昵称的好友不会被丢弃 | `records` | `dict[str, dict]` |
 | `_friends_from_contacts()` | 从联系人加载好友（contact.db 为权威来源，联系人备注优先） | 无 | `dict[str, dict]` |
-| `_load_cached_friend_names()` | 读取 `<WEBOT_DATA_DIR>/friend_names.json` 好友映射；账号不一致的缓存直接丢弃 | 无 | `dict[str, dict]` |
+| `_load_cached_friend_names()` | 读取 `<WEBOT_DATA_DIR>/friend_names.json` 好友映射（含 `active` 失效标记）；账号不一致的缓存直接丢弃 | 无 | `dict[str, dict]` |
 | `_save_friend_names(friends)` | 持久化好友映射（`{"account", "friends"}` 结构），供 Web UI 勾选列表使用 | `friends: dict` | `None` |
 | `_check_account_switch()` | 每 30 秒检测微信是否已换号登录；是则重初始化并刷新群聊/好友数据 | 无 | `bool` |
-| `_resolve_friends()` | 发现全部好友并写入缓存；仅解析 `WECHAT_FRIENDS` 勾选的好友到 `_friend_ids` | 无 | `None` |
+| `_resolve_friends()` | 发现全部好友并写入缓存；通讯录中已不存在的好友标记 `active=False` 且不参与匹配/轮询；仅解析 `WECHAT_FRIENDS` 勾选的好友到 `_friend_ids` | 无 | `None` |
 | `_poll_cycle(callback)` | 单次轮询周期；先群聊后好友私聊；`FRIEND_CHAT_ENABLED=false` 时完全跳过好友轮询（不存储、不回复） | `callback: MessageCallback` | `None` |
 | `_poll_group(group_name, talker, callback, is_group=True)` | 轮询单个聊天消息；用 `_raw_message_key()` 去重、自发内容按聊天排除后记录新消息/join 日志再提交线程池 | `group_name, talker, callback, is_group` | `None` |
 | `_handle_message(group_name, talker, standardized, callback)` | 处理单条消息(线程池)；回复为 `ImageReply` 时走 `_send_image_and_confirm()` 图片通道 | `group_name, talker, standardized, callback` | `None` |
@@ -774,6 +780,7 @@ image_gen_keywords: list[str] = [
 | `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 webot 数据目录与微信数据目录配置；webot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
 | `FriendChatPanel.jsx` | `FriendChatPanel` | 左侧“好友私聊”页：好友勾选列表/搜索/全选/清空，保存走 `/api/friends/selection`；好友总开关关闭时显示提示 |
 | `FeaturesPanel.jsx` | `ChatSection` | 功能开关 → AI 对话：群聊 AI 对话与好友私聊 AI 对话两个总开关 |
+| `McpPanel.jsx` | `McpPanel` | 「MCP 服务」页：展示请求地址/API Key、启停开关、一键轮换密钥（自动生成随机新密钥并复制）、一键复制全部配置、Trae/Claude Desktop/Codex/SSE/curl 客户端配置、真实连接测试、工具清单 |
 | `SharedComponents.jsx` | `Select` | 通用下拉选择；支持 `showValue=false` 避免协议显示重复 |
 
 ### 2.37 `src/imagegen/` (文生图)
@@ -800,6 +807,49 @@ image_gen_keywords: list[str] = [
 | `ImageGenerator._save_image(image_bytes)` | `generator.py` | 按魔数推断扩展名(png/jpg/webp)写入 images 目录(静态) | `image_bytes: bytes` | `Path` |
 | `create_image_generator(config)` | `generator.py` | 工厂：未启用或缺 model/base_url 时返回 `None` | `config: BotConfig` | `ImageGenerator \| None` |
 
+### 2.38 `src/mcp_server/` (MCP 服务)
+
+把已采集的微信数据通过标准 MCP 协议暴露给 Codex、Trae 等外部智能体。只读本地数据，**不依赖机器人运行**，只要 Web 控制台进程在运行即可查询历史数据；消息类工具默认优先读微信本地完整历史，失败时回退 `messages.db`。
+
+| 函数 | 所在文件 | 描述 | 参数 | 返回值 |
+|---|---|---|---|---|
+| `get_settings()` | `server.py` | 读取 `MCP_ENABLED`（默认开）、`MCP_API_KEY` 与数据范围 `MCP_GROUPS` / `MCP_FRIENDS` | 无 | `dict` |
+| `update_settings(enabled, api_key, regenerate, groups, friends)` | `server.py` | 更新开关/密钥/数据范围并原子写入 `.env`；`regenerate=True` 立即生成一组新的随机密钥（旧密钥失效），同时清空失败鉴权计数 | 关键字参数 | `dict` |
+| `ensure_api_key()` | `server.py` | 返回现有 Key，缺失时生成 `webot_...` 并写入 `.env` | 无 | `str` |
+| `describe_server(base_url)` | `server.py` | 控制台连接信息（地址、密钥、工具清单、协议版本、数据范围与候选列表） | `base_url: str \| None` | `dict` |
+| `verify_api_key(headers, query)` | `server.py` | 常量时间校验 Bearer / `X-API-Key` / `?key=` | 请求头与查询参数 | `bool` |
+| `is_trusted_request(handler)` | `server.py` | 校验 Host 是否可信、Origin 是否为可信来源（防 DNS rebinding / 跨站读取） | `handler` | `bool` |
+| `_allowed_hosts()` | `server.py` | 回环主机 + `MCP_ALLOWED_HOSTS` 追加的可信主机集合 | 无 | `set[str]` |
+| `_check_access(handler, query, allow_query_key)` | `server.py` | 来源校验 → 开关 → 失败限流（20 次/60 秒）→ API Key；失败直接写 403/429/401 | 关键字参数 | `bool` |
+| `handle_rpc(payload)` | `server.py` | JSON-RPC 2.0 分发（initialize / tools/list / tools/call / ping，支持批量，单批上限 20 条） | `payload: dict \| list` | `dict \| list \| None` |
+| `handle_http(handler)` | `server.py` | 挂载 `/mcp`、`/mcp/sse`、`/mcp/messages` 到现有 HTTP 服务；命中返回 `True`；SSE 会话上限 20 | `handler` | `bool` |
+| `get_scope()` | `data.py` | 读取数据范围原始配置（`*` 表示全部） | 无 | `dict` |
+| `allowed_group_ids()` / `allowed_friend_ids()` | `data.py` | 解析 `MCP_GROUPS` / `MCP_FRIENDS`：`None`=全部，空集合=禁止 | 无 | `set[str] \| None` |
+| `is_chat_allowed(chat_id)` | `data.py` | 判断群聊/好友是否在可访问范围内 | `chat_id: str` | `bool` |
+| `_scope_sql(column)` | `data.py` | 生成范围过滤 SQL 片段与参数（群 `@chatroom` 与好友分别判断） | `column: str` | `tuple[str, list]` |
+| `scope_options()` | `data.py` | 控制台数据范围候选：全部群聊（含成员数与 `active` 标记）与好友（含备注与 `active` 标记） | 无 | `dict` |
+| `list_groups(args)` | `data.py` | 群列表 + 成员数/消息数/活跃人数/最近消息时间；可刷新缓存，返回 `refreshed` 标记 | `args: dict` | `dict` |
+| `get_group(args)` | `data.py` | 单群基础信息与活跃概况 | `args: dict` | `dict` |
+| `list_group_members(args)` | `data.py` | 群成员 + 群内显示名 + 发言统计（可识别活跃客户） | `args: dict` | `dict` |
+| `list_friends(args)` | `data.py` | 好友列表 + 私聊消息数/最近互动时间 | `args: dict` | `dict` |
+| `get_messages(args)` | `data.py` | 指定群/好友的消息，支持时间、发送者、关键词、分页；默认微信本地完整历史（`source=auto\|wechat_db\|messages_db`），单条内容超 2000 字截断并标记 `content_truncated` | `args: dict` | `dict` |
+| `search_messages(args)` | `data.py` | 关键词搜索；指定 `chat` 时检索本地完整历史，否则跨会话搜已采集消息库（报价、联系方式等线索） | `args: dict` | `dict` |
+| `get_group_activity(args)` | `data.py` | 群活跃度报表：消息量、活跃人数、新发言人数、Top 成员 | `args: dict` | `dict` |
+| `get_member_activity(args)` | `data.py` | 成员发言排行与占比，默认基于本地完整历史 | `args: dict` | `dict` |
+| `search_contacts(args)` | `data.py` | 按关键词查找群/好友/群成员并关联所在群 | `args: dict` | `dict` |
+| `find_new_senders(args)` | `data.py` | 时间窗内首次发言的新联系人（群名、wxid、首条消息、发言数），支持 `min_messages` 过滤 | `args: dict` | `dict` |
+| `get_contact_profile(args)` | `data.py` | 单联系人画像：好友信息、所在群、跨群/私聊发言统计、最近消息 | `args: dict` | `dict` |
+| `get_data_overview(args)` | `data.py` | 数据总览（账号、群/好友/消息数、时间范围、近 7 天活跃、messages.db 更新时间/大小、本地历史数据源状态） | `args: dict` | `dict` |
+| `parse_time(value, end_of_day)` | `data.py` | 解析 unix 秒、日期时间、`7d`/`24h`/`today` | 时间值 | `int \| None` |
+| `_get_client()` | `history.py` | 懒加载微信本地库客户端；优先复用机器人已打开的实例，账号切换/失败时重建或退避 | 无 | `LocalWcdbClient` |
+| `query_messages(chat_id, ...)` | `history.py` | 完整历史查询入口（时间/发送者/关键词/分页），不可用时抛 `HistoryUnavailable` | 关键字参数 | `tuple[list[dict], bool]` |
+| `sender_stats(chat_id, ...)` | `history.py` | 按发送者聚合完整历史的发言数与首末时间 | 关键字参数 | `list[dict]` |
+| `status()` | `history.py` | 不触发初始化，返回本地历史数据源是否启用/就绪/当前账号/错误 | 无 | `dict` |
+| `reset()` | `history.py` | 清空缓存的本地库客户端（测试或账号切换后） | 无 | `None` |
+
+安全默认值：`/api/mcp` 与所有 MCP 端点仅接受回环 Host，Origin 若存在也必须是回环/`MCP_ALLOWED_HOSTS` 中的域名；流式端点不接受 `?key=`（避免密钥落日志）；失败鉴权按 IP 限流；工具调用仅记录工具名与来源 IP。
+
+
 ---
 
 ## 3. 模块间关系图
@@ -810,7 +860,11 @@ image_gen_keywords: list[str] = [
 desktop.py  (桌面入口)
     │
     ├── src/web/server.py  (Web UI + API + WebSocket, 守护线程)
-    │       └── ui/dist/  (React 前端)
+    │       ├── ui/dist/  (React 前端)
+    │       └── src/mcp_server/  (MCP 服务：只读微信本地完整历史 / messages.db / 群/好友缓存，机器人未启动也可用)
+    │             ├── server.py  (JSON-RPC / Streamable HTTP / SSE / API Key)
+    │             ├── history.py (微信本地完整历史数据源：懒加载、账号切换检测、失败回退)
+    │             └── data.py    (群聊、群成员、好友、消息、活跃统计工具)
     │
     └── src/bot.py  (Bot 主控)
             │
@@ -1316,6 +1370,11 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/nicknames` | 保存/删除昵称映射 | 无 |
 | `GET` | `/api/nicknames/groups` | 获取群组列表 | 无 |
 | `GET` | `/api/friends` | 获取已发现的好友列表 (`friend_names.json`)，供配置面板勾选 | 无 |
+| `GET` | `/api/mcp` | 获取 MCP 服务连接信息（请求地址、SSE 地址、API Key、工具清单、数据范围与候选项）；Key 缺失时自动生成；仅接受本机 Host/Origin | 无 |
+| `POST` | `/api/mcp` | 更新 MCP 开关 / API Key / 轮换密钥 / 数据范围，写入 `.env`；仅接受本机 Host/Origin | `{"enabled": bool, "api_key": "...", "regenerate": bool, "groups": "id1,id2｜*｜none", "friends": "wxid1,wxid2｜*｜none"}` |
+| `POST` | `/mcp` | MCP Streamable HTTP 端点（JSON-RPC 2.0）；不接受 `?key=` | `Authorization: Bearer <MCP_API_KEY>` 或 `X-API-Key` |
+| `GET` | `/mcp/sse` | 兼容旧版 MCP HTTP+SSE 传输，返回 endpoint 事件与消息流 | 同上（也支持 `?key=`） |
+| `POST` | `/mcp/messages?session_id=` | 旧版 SSE 会话的 JSON-RPC 提交端点 | 同上 |
 | `POST` | `/api/friends/selection` | 仅保存 `WECHAT_FRIENDS`（好友私聊勾选），不覆盖其它配置 | `{"friends": "URL编码逗号列表 / \\"*\\" / \\"\\""}` |
 | `GET` | `/api/welcome/templates` | 获取欢迎模板配置 | 无 |
 | `POST` | `/api/welcome/templates` | 保存欢迎模板配置 | 无 |
@@ -1332,6 +1391,8 @@ MessageRouter.handle(msg) → [无 @mention]
 | `GET` | `/api/onboarding/status` | 引导流程状态 + SQLite 草稿回填数据(兼容旧 `.env` 草稿读取) | 无 |
 | `GET` | `/api/onboarding/diagnose` | 系统环境诊断 | 无 |
 | `POST` | `/api/onboarding/step1` | 启动密钥提取(异步) | 无 |
+| `POST` | `/api/wechat/extract-key` | 独立获取微信数据库密钥（不修改 onboarding 状态，机器人未启动也可用） | 无 |
+| `POST` | `/api/wechat/sync` | 不启动机器人，打开微信数据库刷新群聊/群成员/好友缓存，返回同步数量；缺密钥时返回 `need_key` | 无 |
 | `GET` | `/api/onboarding/step1-status` | 轮询密钥提取状态 | 无 |
 | `POST` | `/api/onboarding/step1-manual` | 保存手动输入的 WCDB 密钥、wxid 和数据库路径到 SQLite，镜像 `WCDB_KEY` 到 `.env` | 无 |
 | `POST` | `/api/onboarding/step2` | 保存微信配置到 SQLite，并将运行时微信配置镜像到 `.env` | 无 |
@@ -1932,6 +1993,13 @@ DB_PATH=data/messages.db                        # 留空/保持 legacy 默认时
 # === 趣味功能 ===
 FUN_ENABLED=true
 
+# === MCP 服务（暴露给 Codex / Trae 等智能体）===
+MCP_ENABLED=true                               # 关闭后 /mcp、/mcp/sse 返回 403
+MCP_API_KEY=                                   # 留空时在控制台「MCP 服务」一键生成；请求需 Bearer / X-API-Key
+MCP_ALLOWED_HOSTS=                             # 可信 Host/Origin（默认仅回环，隧道/反代时追加域名）
+MCP_GROUPS=                                    # 可读取的群聊：空或 * = 全部，none = 禁止，其余逗号分隔的群 ID
+MCP_FRIENDS=                                   # 可读取的好友：空或 * = 全部，none = 禁止，其余逗号分隔的 wxid
+
 # === 语音识别 ===
 VOICE_ASR_ENABLED=false
 VOICE_ASR_BACKEND=local_whisper
@@ -2040,7 +2108,8 @@ WCDB_KEY=
 | `<WEBOT_DATA_DIR>/bot.log` | `src/utils/logging_config.py` | 运行日志 |
 | `<WEBOT_DATA_DIR>/bot_status.json` | `src/bot.py:HealthMonitor` | 状态 JSON (外部监控) |
 | `<WEBOT_DATA_DIR>/nicknames.json` | `src/nickname.py` | wxid → 昵称映射 |
-| `<WEBOT_DATA_DIR>/group_names.json` | `src/wechat/wcdb_backend.py` | chat_id → {name, member_count} |
+| `<WEBOT_DATA_DIR>/group_names.json` | `src/wechat/wcdb_backend.py` | chat_id → {name, member_count, active}（`active=False` 表示已退群/群解散） |
+| `<WEBOT_DATA_DIR>/friend_names.json` | `src/wechat/wcdb_backend.py` | `{"account", "friends"}`；friends 内 wxid → {name, alias, active}（`active=False` 表示已不是好友） |
 | `<WEBOT_DATA_DIR>/group_members.json` | `src/wechat/wcdb_backend.py` | chat_id → {wxid: display_name} |
 | `<WEBOT_DATA_DIR>/welcome_templates.json` | `src/welcome.py` | 欢迎模板 + 群映射 |
 | `<WEBOT_DATA_DIR>/lots.json` | `src/fun.py` | 自定义抽签配置 |

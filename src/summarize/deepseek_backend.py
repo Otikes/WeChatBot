@@ -16,6 +16,8 @@ class DeepSeekSummarizer(OpenAICompatibleSummarizer):
     # 1M context window -> 900K safe budget.
     token_budget = 900_000
 
+    provider_name = "deepseek"
+
     def __init__(self, api_key: str,
                  model: str = "",
                  base_url: str = DEEPSEEK_BASE_URL,

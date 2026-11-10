@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion } from 'framer-motion'
 import { ArrowDown, Trash, MagnifyingGlass } from '@phosphor-icons/react'
+import { ConfirmDialog } from './SharedComponents'
 
 const LEVEL_STYLES = {
   DEBUG:   { color: '#888888', bg: 'rgba(136, 136, 136, 0.12)' },
@@ -75,6 +76,7 @@ export default function LogViewer() {
   const [logs, setLogs] = useState([])
   const [clearedManually, setClearedManually] = useState(false)
   const [isClearing, setIsClearing] = useState(false)
+  const [confirmClear, setConfirmClear] = useState(false)
   const [clearError, setClearError] = useState('')
   const scrollRef = useRef(null)
   const seenRef = useRef(new Set())
@@ -129,6 +131,7 @@ export default function LogViewer() {
 
   async function clearLogs() {
     if (isClearing) return
+    setConfirmClear(false)
     requestGenerationRef.current += 1
     setIsClearing(true)
     setClearError('')
@@ -224,7 +227,7 @@ export default function LogViewer() {
             <ArrowDown size={16} />
           </button>
           <button
-            onClick={clearLogs}
+            onClick={() => setConfirmClear(true)}
             disabled={isClearing}
             title={isClearing ? '正在清空日志文件' : '清空日志文件'}
             className={`p-2 rounded-full border border-transparent transition-colors ${
@@ -238,7 +241,9 @@ export default function LogViewer() {
         </div>
       </div>
       {clearError && (
-        <div className="text-xs text-[#d45656] font-mono px-1">{clearError}</div>
+        <div className="flex items-center gap-2 px-4 py-3 rounded-xl bg-[#d45656]/10 border border-[#d45656]/20 text-[#d45656] text-xs">
+          <span className="font-medium">{clearError}</span>
+        </div>
       )}
 
       <motion.div
@@ -284,6 +289,17 @@ export default function LogViewer() {
           ))
         )}
       </motion.div>
+
+      <ConfirmDialog
+        open={confirmClear}
+        danger
+        busy={isClearing}
+        title="清空日志文件？"
+        description="bot.log 中的历史日志会被删除，且不可恢复。机器人继续运行后会重新写入新日志。"
+        confirmLabel="清空日志"
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={clearLogs}
+      />
     </div>
   )
 }

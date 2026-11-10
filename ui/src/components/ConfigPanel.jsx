@@ -590,120 +590,15 @@ function ImageGenSection({ form, update }) {
 }
 
 function IdentitySection({ form, update }) {
-  // Local editable groups array — source of truth for rendering
-  const [groups, setGroups] = useState([])
-
-  // Initialize from form.wechat_groups on mount only
-  useEffect(() => {
-    const raw = (form.wechat_groups || '').trim()
-    if (raw === '*' || raw === '') {
-      setGroups(['*'])
-    } else {
-      setGroups(raw.split(',').map(s => {
-        const trimmed = s.trim()
-        if (!trimmed) return ''
-        try { return decodeURIComponent(trimmed) } catch { return trimmed }
-      }).filter(Boolean))
-    }
-  }, [])
-
-  // Sync local groups array back to form.wechat_groups (comma-separated, URL-encoded)
-  function syncToForm(newGroups) {
-    const nonEmpty = newGroups.filter(g => g !== '')
-    if (nonEmpty.length === 0 || nonEmpty.includes('*')) {
-      update('wechat_groups', '*')
-    } else {
-      update('wechat_groups', nonEmpty.map(g => encodeURIComponent(g)).join(','))
-    }
-  }
-
-  const isAll = groups.length === 1 && groups[0] === '*'
-
-  function updateGroup(index, value) {
-    const next = [...groups]
-    next[index] = value
-    if (groups.length === 1 && groups[0] === '*') {
-      setGroups([value])
-      syncToForm([value])
-    } else {
-      setGroups(next)
-      syncToForm(next)
-    }
-  }
-
-  function removeGroup(index) {
-    const removed = groups[index]
-    const next = groups.filter((_, i) => i !== index)
-    if (next.length === 0) {
-      if (removed === '*') {
-        setGroups([''])
-        syncToForm([''])
-      } else {
-        setGroups(['*'])
-        syncToForm(['*'])
-      }
-    } else {
-      setGroups(next)
-      syncToForm(next)
-    }
-  }
-
-  function addGroup() {
-    const next = [...groups, '']
-    setGroups(next)
-    syncToForm(next)
-  }
-
-  function restoreAll() {
-    setGroups(['*'])
-    syncToForm(['*'])
-  }
-
   return (
     <div>
       <Field label="机器人微信昵称" hint="用于检测 @提及">
         <Input value={form.bot_display_name} onChange={v => update('bot_display_name', v)} placeholder="例如：群聊小助手" />
       </Field>
 
-      <Field label="目标群聊" hint={isAll ? '当前监控所有群聊。点击 × 删除「全部群聊」后可指定群名' : `监控 ${groups.filter(g => g !== '').length} 个群聊`}>
-        <div className="flex flex-wrap gap-2 mb-2">
-          {groups.map((name, i) => {
-            if (name === '') return null
-            return (
-              <span key={i} className="inline-flex items-center gap-1 px-2.5 py-1 bg-brand-green-light border border-brand-green/20 rounded-lg text-[13px] text-brand-green-hover dark:text-brand-green">
-                {name === '*' ? '全部群聊' : name}
-                <button type="button" onClick={() => removeGroup(i)}
-                  className="ml-0.5 text-brand-green-hover/60 hover:text-[#d45656] transition-colors leading-none text-base">&times;</button>
-              </span>
-            )
-          })}
-          {!isAll && (
-            <button type="button" onClick={addGroup}
-              className="inline-flex items-center gap-1 px-2.5 py-1 bg-bg-raised border border-dashed border-border-main rounded-lg text-[13px] text-text-muted hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer">
-              + 添加群聊
-            </button>
-          )}
-        </div>
-        {!isAll && (
-          <button type="button" onClick={restoreAll}
-            className="text-xs text-[#6E9FCF] hover:text-[#1F6C9F] transition-colors mb-2 cursor-pointer">
-            恢复监控所有群聊
-          </button>
-        )}
-        {!isAll && groups.map((name, i) => (
-          <input key={`input-${i}`} type="text" value={name}
-            onChange={e => updateGroup(i, e.target.value)}
-            onBlur={() => { if (!name.trim()) removeGroup(i) }}
-            placeholder={`群聊 ${i + 1} 的名称`}
-            className="w-full bg-bg-raised border border-border-main rounded-lg px-4 py-2 text-[15px] text-text-main placeholder:text-text-muted/65 focus:outline-none focus:border-brand-green focus:ring-1 focus:ring-brand-green/15 transition-all duration-200 hover:border-text-muted/30 mb-2" />
-        ))}
-        <p className="text-[11px] text-text-muted mt-1.5">
-          ⚠ 请先将目标群聊添加到微信通讯录，否则无法通过搜索进入
-        </p>
-        {!isAll && (
-          <p className="text-[11px] text-text-muted mt-1">💡 请输入微信中显示的完整群名，必须完全一致</p>
-        )}
-      </Field>
+      <p className="text-[11.5px] text-text-muted mb-5 leading-relaxed">
+        参与 AI 处理的群聊已迁移到左侧「群聊配置」页，通过左右穿梭统一维护，这里不再重复设置。
+      </p>
 
       <Field label="微信后端" hint="Windows 推荐 WCDB；macOS 推荐 WeFlow 直读并用辅助功能发送">
         <Select value={form.wechat_backend} onChange={v => update('wechat_backend', v)} options={[
@@ -2139,8 +2034,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
     openai_model: '',
     anthropic_api_key: '', anthropic_base_url: 'https://api.anthropic.com',
     summarize_model: '',
-    bot_display_name: '', wechat_backend: 'wcdb', wechat_groups: '*',
-    wechat_friends: '',
+    bot_display_name: '', wechat_backend: 'wcdb',
     group_chat_enabled: true, friend_chat_enabled: true,
     fun_enabled: true,
     proactive_enabled: false, proactive_rate_window_sec: 120,
@@ -2237,8 +2131,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           setForm(prev => ({
             ...prev,
             ...data.config,
-            wechat_groups: data.config.wechat_groups || '*',
-            wechat_friends: data.config.wechat_friends || '',
           }))
           if (data.detected_data_dir) {
             setDetectedDataDir(data.detected_data_dir)
@@ -2271,8 +2163,6 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
           summarize_model: form.summarize_model,
           bot_display_name: form.bot_display_name,
           wechat_backend: form.wechat_backend,
-          wechat_groups: form.wechat_groups,
-          wechat_friends: form.wechat_friends,
           group_chat_enabled: form.group_chat_enabled,
           friend_chat_enabled: form.friend_chat_enabled,
           fun_enabled: form.fun_enabled,

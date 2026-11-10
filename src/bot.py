@@ -290,7 +290,7 @@ class Bot:
         # ── 8. Start listening (blocks) ─────────────────────────
         #
         # DESIGN NOTE — fire-and-forget callback execution:
-        #   WcdbBackend uses a ThreadPoolExecutor (max_workers=4) to
+        #   WcdbBackend uses a ThreadPoolExecutor (max_workers=8) to
         #   offload AI-triggering callbacks from the poll loop.  The poll
         #   thread submits each message to the pool and returns immediately,
         #   so a slow summarization in one group never blocks polling of
@@ -312,8 +312,10 @@ class Bot:
                 self._health.stop()
             if self._conn is not None:
                 self._conn.close()
-            if hasattr(self, 'backend') and hasattr(self.backend, 'router'):
-                pass  # router cleanup handled by backend shutdown
+            try:
+                router.close()
+            except Exception:
+                logger.debug("Router cleanup failed", exc_info=True)
             try:
                 self._update_status(running=False)
             except Exception:

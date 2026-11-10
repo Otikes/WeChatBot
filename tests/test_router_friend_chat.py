@@ -75,7 +75,7 @@ def _group_router(group_chat_enabled=True):
         group_chat_enabled=group_chat_enabled,
         friend_chat_enabled=True,
     )
-    router._memory = SimpleNamespace(check_and_consolidate=lambda *a: None)
+    router._memory = SimpleNamespace(schedule=lambda *a: None)
     router._sticky = None
     router._feishu_export = None
     router._admin = SimpleNamespace(handle=lambda content, name: None)

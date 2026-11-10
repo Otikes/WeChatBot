@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { motion } from 'framer-motion'
 import { Database, Brain, Clock, ChatCircle, Pulse, Play, Stop, Key, Spinner, CheckCircle, XCircle, ArrowCounterClockwise } from '@phosphor-icons/react'
+import { ConfirmDialog } from './SharedComponents'
 
 const spring = { type: 'spring', stiffness: 100, damping: 20 }
 
@@ -126,7 +127,9 @@ function apiUrl(path) {
 export default function Dashboard({ status, onResetComplete }) {
   const [busy, setBusy] = useState(false)
   const [resetBusy, setResetBusy] = useState(false)
+  const [confirmReset, setConfirmReset] = useState(false)
   const [resetResult, setResetResult] = useState(null)
+  const [showKeyExtract, setShowKeyExtract] = useState(false)
   const [, setTick] = useState(0)
 
   // Diagnostics state
@@ -199,13 +202,9 @@ export default function Dashboard({ status, onResetComplete }) {
     }, 850)
   }
 
-  async function handleResetRuntime() {
+  async function performResetRuntime() {
     if (status.running || resetBusy) return
-    const confirmed = window.confirm(
-      '确定要重置数据吗？\n\n会清空消息历史、群聊记忆、待办、昵称与群名缓存、运行日志。\n\n所有配置（模型、API Key、微信密钥、功能开关）都会保留，无需重新初始化。'
-    )
-    if (!confirmed) return
-
+    setConfirmReset(false)
     setResetBusy(true)
     setResetResult(null)
     try {
@@ -236,7 +235,7 @@ export default function Dashboard({ status, onResetComplete }) {
   return (
     <div className="space-y-8 max-w-6xl">
       {/* Control bar */}
-      <div className="flex items-center gap-4 bg-bg-card border border-border-main p-4 rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
+      <div className="flex flex-wrap items-center gap-4 bg-bg-card border border-border-main p-4 rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
         <motion.button
           whileTap={{ scale: 0.96 }}
           whileHover={{ scale: 1.02 }}
@@ -265,8 +264,17 @@ export default function Dashboard({ status, onResetComplete }) {
           )}
           <motion.button
             whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: 1.02 }}
+            onClick={() => setShowKeyExtract((v) => !v)}
+            title="重新获取微信数据库密钥（不需要启动机器人）"
+            className="w-36 py-2.5 rounded-full text-[13px] font-semibold tracking-wide border border-border-main bg-bg-raised text-text-muted hover:text-text-main hover:border-brand-green/30 transition-all duration-300 cursor-pointer flex items-center justify-center gap-2"
+          >
+            <Key size={15} weight="fill" /> {showKeyExtract ? '收起密钥获取' : '重新获取密钥'}
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.96 }}
             whileHover={{ scale: status.running || resetBusy ? 1 : 1.02 }}
-            onClick={handleResetRuntime}
+            onClick={() => setConfirmReset(true)}
             disabled={status.running || resetBusy}
             title={status.running ? '请先停止机器人再重置数据' : '清空本地聊天数据与缓存，保留所有配置'}
             className="w-36 py-2.5 rounded-full text-[13px] font-semibold tracking-wide border border-border-main bg-bg-raised text-text-muted hover:text-[#d45656] hover:border-[#d45656]/25 hover:bg-[#d45656]/10 disabled:hover:text-text-muted disabled:hover:border-border-main disabled:hover:bg-bg-raised disabled:opacity-50 transition-all duration-300 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
@@ -297,14 +305,18 @@ export default function Dashboard({ status, onResetComplete }) {
         <KeyExtractionBanner />
       )}
 
-      <div className="grid grid-cols-3 gap-6">
+      {showKeyExtract && !(status.error && status.error.includes('KEY_MISSING')) && (
+        <KeyExtractionBanner standalone onClose={() => setShowKeyExtract(false)} />
+      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <MetricCard icon={ChatCircle} accent="green" label="已处理消息" value={status.messages_processed.toLocaleString()} sub={status.running ? '机器人监控中' : '机器人已挂起'} chartData={msgHistory} />
         <MetricCard icon={Clock} accent="blue" label="运行时长" value={uptimeStr} sub={status.running ? '自本次启动' : '—'} chartData={uptimeHistory} />
         <MetricCard icon={Brain} accent="amber" label="最近 API 调用" value={lastApi} sub={`${aiLabels[status.ai_backend] || status.ai_backend || '—'} / ${backendLabels[status.wechat_backend] || status.wechat_backend || '—'}`} chartData={latencyHistory} />
       </div>
 
-      <div className="grid grid-cols-5 gap-6">
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.1 }} className="bg-bg-card border border-border-main rounded-2xl p-6 col-span-3 shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.1 }} className="bg-bg-card border border-border-main rounded-2xl p-6 lg:col-span-3 shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
           <div className="flex items-center justify-between mb-3 pb-3 border-b border-border-main/50">
             <div className="flex items-center gap-2">
               <Pulse size={16} weight="fill" className="text-brand-green animate-pulse" />
@@ -343,7 +355,7 @@ export default function Dashboard({ status, onResetComplete }) {
           )}
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.15 }} className="bg-bg-card border border-border-main rounded-2xl p-6 col-span-2 shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
+        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ ...spring, delay: 0.15 }} className="bg-bg-card border border-border-main rounded-2xl p-6 lg:col-span-2 shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
           <div className="flex items-center gap-2 mb-3 pb-3 border-b border-border-main/50">
             <Database size={16} weight="fill" className="text-text-muted" />
             <h3 className="text-sm font-semibold tracking-tight text-text-main">后端信息</h3>
@@ -366,6 +378,17 @@ export default function Dashboard({ status, onResetComplete }) {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 }} className="text-[10px] text-text-muted font-mono uppercase tracking-[0.6px]">
         {status.timestamp ? `最近同步: ${status.timestamp}` : '等待首次状态更新...'}
       </motion.div>
+
+      <ConfirmDialog
+        open={confirmReset}
+        danger
+        busy={resetBusy}
+        title="确定要重置数据吗？"
+        description={'会清空消息历史、群聊记忆、待办、昵称与群名缓存、运行日志。\n\n所有配置（模型、API Key、微信密钥、功能开关）都会保留，无需重新初始化。'}
+        confirmLabel="重置数据"
+        onCancel={() => setConfirmReset(false)}
+        onConfirm={performResetRuntime}
+      />
     </div>
   )
 }
@@ -380,7 +403,7 @@ const EXTRACTION_PHASE_MAP = {
   hooking_restart: { label: '正在安装 Hook...' },
 }
 
-function KeyExtractionBanner() {
+function KeyExtractionBanner({ standalone = false, onClose }) {
   const [phase, setPhase] = useState('idle') // idle | extracting | hooking | waiting_exit | ...
   const [msg, setMsg] = useState('')
   const [result, setResult] = useState(null)
@@ -397,8 +420,11 @@ function KeyExtractionBanner() {
     setMsg('正在准备...')
     setResult(null)
     try {
-      await fetch(`${API}/api/onboarding/reset`, { method: 'POST' })
-      const startRes = await fetch(`${API}/api/onboarding/step1`, { method: 'POST' })
+      if (!standalone) {
+        await fetch(`${API}/api/onboarding/reset`, { method: 'POST' })
+      }
+      const startUrl = standalone ? '/api/wechat/extract-key' : '/api/onboarding/step1'
+      const startRes = await fetch(`${API}${startUrl}`, { method: 'POST' })
       const start = await startRes.json()
       if (!start.ok) {
         setPhase('error')
@@ -458,7 +484,21 @@ function KeyExtractionBanner() {
         ) : (
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1L15 14H1L8 1Z" fill="currentColor"/><path d="M8 6V9" stroke="white" strokeWidth="1.5"/><circle cx="8" cy="11.5" r="0.75" fill="white"/></svg>
         )}
-        <span>{isDone ? '密钥获取成功 — 请重启机器人' : '加密密钥缺失 — 需要重新获取才能读取微信消息'}</span>
+        <span>
+          {isDone
+            ? (standalone ? '密钥获取成功 — 可点击「同步微信数据」刷新通讯录' : '密钥获取成功 — 请重启机器人')
+            : (standalone ? '重新获取微信数据库密钥（无需启动机器人）' : '加密密钥缺失 — 需要重新获取才能读取微信消息')}
+        </span>
+        {standalone && onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            title="收起"
+            className="ml-auto p-1 rounded-lg text-text-muted hover:text-text-main hover:bg-bg-raised transition-colors cursor-pointer"
+          >
+            <XCircle size={16} />
+          </button>
+        )}
       </div>
 
       {phase !== 'idle' && phase !== 'done' && phase !== 'timeout' && phase !== 'error' && phaseMeta && (

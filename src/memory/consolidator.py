@@ -10,6 +10,8 @@ Uses the configured summarizer backend for low-cost, low-latency consolidation.
 
 import concurrent.futures
 import logging
+import queue
+import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -36,13 +38,54 @@ class MemoryConsolidator:
         consolidator = MemoryConsolidator(store, summarizer)
 
         # In router.handle(), after persisting each message:
-        consolidator.check_and_consolidate(chat_id)
+        consolidator.schedule(chat_id)  # non-blocking, coalesced per chat
+
+        # At shutdown:
+        consolidator.close()
     """
 
     def __init__(self, store: "MessageStore",
                  summarizer: "AbstractSummarizer"):
         self._store = store
         self._summarizer = summarizer
+        # Consolidation runs on a single background worker so a 2–4 s AI
+        # call never blocks message callbacks or reply sending.  Requests
+        # for the same chat are coalesced: at most one run per chat, and
+        # bursts of messages collapse into a single follow-up run.
+        self._queue: queue.Queue[str | None] = queue.Queue()
+        self._lock = threading.Lock()
+        self._inflight: set[str] = set()
+        self._pending: set[str] = set()
+        self._worker: threading.Thread | None = None
+        self._closed = False
+
+    def schedule(self, chat_id: str) -> None:
+        """Queue a consolidation check without blocking the caller."""
+        with self._lock:
+            if self._closed:
+                return
+            if chat_id in self._inflight:
+                self._pending.add(chat_id)
+                return
+            self._inflight.add(chat_id)
+            if self._worker is None:
+                self._worker = threading.Thread(
+                    target=self._run_worker,
+                    name="memory-consolidator",
+                    daemon=True,
+                )
+                self._worker.start()
+        self._queue.put(chat_id)
+
+    def close(self) -> None:
+        """Stop the background worker (in-flight work may be abandoned)."""
+        with self._lock:
+            self._closed = True
+            worker = self._worker
+        if worker is None:
+            return
+        self._queue.put(None)
+        worker.join(timeout=1.0)
 
     def check_and_consolidate(self, chat_id: str) -> bool:
         """Check if consolidation is needed and run it if so.
@@ -60,6 +103,24 @@ class MemoryConsolidator:
             return False
 
     # ── Internal ───────────────────────────────────────────────────
+
+    def _run_worker(self) -> None:
+        """Background loop: run queued checks, re-running coalesced bursts."""
+        while True:
+            chat_id = self._queue.get()
+            if chat_id is None:
+                return
+            try:
+                self.check_and_consolidate(chat_id)
+            finally:
+                with self._lock:
+                    self._inflight.discard(chat_id)
+                    rerun = chat_id in self._pending and not self._closed
+                    self._pending.discard(chat_id)
+                    if rerun:
+                        self._inflight.add(chat_id)
+                if rerun:
+                    self._queue.put(chat_id)
 
     def _check_and_consolidate_impl(self, chat_id: str) -> bool:
         """Internal: check triggers and run consolidation."""

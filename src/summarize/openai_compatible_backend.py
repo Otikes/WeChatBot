@@ -7,6 +7,7 @@ name, which also covers OpenAI-compatible relay services.
 
 import json
 import logging
+import time
 from typing import Any
 
 from openai import (
@@ -17,6 +18,7 @@ from openai import (
     RateLimitError,
 )
 
+from src.token_stats import record_usage
 from src.utils.ai_compat import (
     OPENAI_COMPATIBLE_BASE_URL,
     normalize_openai_base_url,
@@ -178,6 +180,9 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
 
     MODEL_DEFAULT = ""
 
+    # 统计面板中展示的供应商标识（子类可覆盖）
+    provider_name = "openai_compatible"
+
     # A safe default across many compatible providers. Larger-context models
     # still work through map-reduce chunking, just with earlier splitting.
     token_budget = 100_000
@@ -211,10 +216,39 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
         text = str(exc).lower()
         return "tool" in text or "function" in text
 
+    def _execute_completion(self, kwargs: dict[str, Any], call_type: str):
+        """发起一次 Chat Completions 请求，并记录 token 用量/请求日志。"""
+        started = time.time()
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            record_usage(
+                provider=self.provider_name,
+                model=self.model,
+                call_type=call_type,
+                duration_ms=int((time.time() - started) * 1000),
+                status="error",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            raise
+
+        usage = getattr(response, "usage", None)
+        record_usage(
+            provider=self.provider_name,
+            model=self.model,
+            call_type=call_type,
+            prompt_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            completion_tokens=getattr(usage, "completion_tokens", 0) or 0,
+            duration_ms=int((time.time() - started) * 1000),
+            status="success",
+        )
+        return response
+
     def _create_chat_completion(self, *,
                                 messages: list[dict],
                                 max_tokens: int,
-                                use_tools: bool = False):
+                                use_tools: bool = False,
+                                call_type: str = "chat"):
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,
@@ -227,7 +261,7 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
             kwargs["tool_choice"] = "auto"
 
         try:
-            return self.client.chat.completions.create(**kwargs)
+            return self._execute_completion(kwargs, call_type)
         except BadRequestError as exc:
             if use_tools and self._should_retry_without_tools(exc):
                 logger.info(
@@ -235,18 +269,20 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                 )
                 kwargs.pop("tools", None)
                 kwargs.pop("tool_choice", None)
-                return self.client.chat.completions.create(**kwargs)
+                return self._execute_completion(kwargs, call_type)
             raise
 
     # -- Conversational chat API call (called by base class) ----------
 
     def _call_chat_api(self, system_prompt: str,
-                        messages: list[dict]) -> str:
+                        messages: list[dict],
+                        purpose: str = "chat") -> str:
         """Call a generic OpenAI-compatible chat completion endpoint."""
         api_messages = [{"role": "system", "content": system_prompt}] + messages
         response = self._create_chat_completion(
             messages=api_messages,
             max_tokens=400,
+            call_type=purpose,
         )
         return response.choices[0].message.content or "..."
 
@@ -265,6 +301,7 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                     {"role": "user", "content": user_prompt},
                 ],
                 use_tools=True,
+                call_type="summarize",
             )
             return _parse_summary_from_response(response)
 
@@ -286,6 +323,7 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                     {"role": "system", "content": CHUNK_SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
                 ],
+                call_type="summarize_chunk",
             )
             return response.choices[0].message.content or ""
 
@@ -304,6 +342,7 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                     {"role": "user", "content": user_prompt},
                 ],
                 use_tools=True,
+                call_type="summarize_merge",
             )
             return _parse_summary_from_response(response)
 
@@ -343,6 +382,7 @@ class OpenAICompatibleSummarizer(AbstractSummarizer):
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": "请输出更新后的完整记忆日记。"},
                 ],
+                call_type="memory",
             )
             text = response.choices[0].message.content or ""
             if len(text) > 2000:

@@ -103,6 +103,10 @@ class MessageRouter:
         # Health monitoring: count unique messages processed (post-dedup)
         self.messages_processed: int = 0
 
+    def close(self) -> None:
+        """Stop background workers (memory consolidation)."""
+        self._memory.close()
+
     @staticmethod
     def _strip_markdown(text: str) -> str:
         """Remove markdown formatting characters that WeChat can't render."""
@@ -155,8 +159,9 @@ class MessageRouter:
             return None  # Duplicate or DB error — nothing more to do
         self.messages_processed += 1
 
-        # Check memory consolidation trigger (fast no-op unless threshold hit)
-        self._memory.check_and_consolidate(msg["chat_id"])
+        # Queue memory consolidation in the background — never block the
+        # message callback (and thus friend/group replies) on a slow AI call.
+        self._memory.schedule(msg["chat_id"])
 
         # ── Welcome new member ────────────────────────────────────
         if msg.get("is_system_join") and self._config.welcome_enabled:
@@ -541,10 +546,18 @@ class MessageRouter:
         images and files are skipped — the AI cannot interpret them.
         """
         if not getattr(self._config, "friend_chat_enabled", True):
+            logger.info(
+                "Friend chat switch is OFF — ignoring message from '%s'",
+                msg.get("sender_name", "?"),
+            )
             return None
 
         content = (msg.get("content") or "").strip()
         if not content:
+            logger.info(
+                "Friend message has no text content — skipped: sender='%s' type=%s",
+                msg.get("sender_name", "?"), msg.get("msg_type"),
+            )
             return None
 
         msg_age_sec = int(time.time()) - msg.get("timestamp", 0)
@@ -557,13 +570,25 @@ class MessageRouter:
 
         msg_type = msg.get("msg_type", 1)
         if msg_type not in (1, 34):
+            logger.info(
+                "Friend message type=%s is not text/voice — skipped: sender='%s'",
+                msg_type, msg["sender_name"],
+            )
             return None
         if msg_type == 34 and content == "[语音]":
+            logger.info(
+                "Voice message not transcribed — skipped: sender='%s'",
+                msg["sender_name"],
+            )
             return None
 
         # Strip WeChat reply-quote prefix (wxid_xxx:\n) if present.
         content = re.sub(r'^\s*wxid_[a-zA-Z0-9]+:\s*', '', content).strip()
         if not content:
+            logger.info(
+                "Friend message empty after stripping quote prefix — skipped: sender='%s'",
+                msg["sender_name"],
+            )
             return None
 
         logger.info(

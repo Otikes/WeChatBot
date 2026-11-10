@@ -1,8 +1,105 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Warning, Eye, EyeSlash } from '@phosphor-icons/react'
+import { Spinner, Warning, Eye, EyeSlash } from '@phosphor-icons/react'
 
 export const spring = { type: 'spring', stiffness: 200, damping: 25 }
+
+/** 把网络异常转换成可读的中文提示，避免直接展示 "Failed to fetch" */
+export function friendlyError(e, fallback) {
+  const msg = e && e.message ? e.message : ''
+  if (!msg || msg === 'Failed to fetch' || msg.includes('NetworkError')) {
+    return '无法连接本地服务，请确认应用正在运行'
+  }
+  return msg || fallback
+}
+
+/** 统一的二次确认弹窗，替代原生 window.confirm */
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel = '确认',
+  cancelLabel = '取消',
+  danger = false,
+  busy = false,
+  onConfirm,
+  onCancel,
+}) {
+  useEffect(() => {
+    if (!open) return
+    function onKeyDown(e) {
+      if (e.key === 'Escape' && !busy) onCancel?.()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [open, busy, onCancel])
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+          className="fixed inset-0 z-[70] flex items-center justify-center p-6"
+        >
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+            onClick={() => { if (!busy) onCancel?.() }}
+          />
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            initial={{ opacity: 0, y: 14, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.98 }}
+            transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+            className="relative w-full max-w-md bg-bg-card border border-border-main rounded-2xl p-6 shadow-2xl"
+          >
+            <div className="flex items-start gap-3">
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 border ${
+                danger
+                  ? 'bg-[#d45656]/10 text-[#d45656] border-[#d45656]/20'
+                  : 'bg-brand-green-light text-brand-green-hover dark:text-brand-green border-brand-green/20'
+              }`}>
+                <Warning size={18} weight="fill" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-text-main tracking-tight">{title}</h3>
+                {description && (
+                  <p className="text-xs text-text-muted leading-relaxed mt-2 whitespace-pre-line">{description}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 mt-6">
+              <button
+                type="button"
+                onClick={onCancel}
+                disabled={busy}
+                className="px-4 py-2 rounded-full text-xs font-semibold border border-border-main bg-bg-raised text-text-muted hover:text-text-main transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {cancelLabel}
+              </button>
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={busy}
+                className={`px-4 py-2 rounded-full text-xs font-bold text-[#04130d] transition-opacity cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2 ${
+                  danger ? 'bg-[#d45656] text-white hover:opacity-90' : 'bg-brand-green hover:opacity-90'
+                }`}
+              >
+                {busy && <Spinner size={13} weight="bold" className="animate-spin" />}
+                {confirmLabel}
+              </button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+}
 
 export function Field({ label, hint, error, children }) {
   return (
@@ -38,12 +135,15 @@ export function Field({ label, hint, error, children }) {
   )
 }
 
-export function Toggle({ enabled, onChange }) {
+export function Toggle({ enabled, onChange, disabled = false }) {
   return (
     <button
       type="button"
-      onClick={() => onChange(!enabled)}
+      onClick={() => { if (!disabled) onChange(!enabled) }}
+      disabled={disabled}
+      aria-pressed={enabled}
       className={`relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200 border cursor-pointer outline-none focus:ring-2 focus:ring-brand-green/20
+        disabled:opacity-50 disabled:cursor-not-allowed
         ${enabled ? 'bg-brand-green-light border-brand-green/30' : 'bg-bg-raised border-border-main'}`}
     >
       <motion.span

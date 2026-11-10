@@ -26,12 +26,15 @@ def _extract_msg_svr_id(msg: dict) -> Optional[str]:
 class VoiceFileLocator:
     """Locate .silk/.amr voice files from WCDB message metadata."""
 
-    def __init__(self, wechat_data_dir: str) -> None:
+    def __init__(self, wechat_data_dir: str, account_dir: str | None = None) -> None:
         """Args:
             wechat_data_dir: Path to WeChat data directory
                 (the parent of wxid_* folders).
+            account_dir: Optional exact account folder. When multiple accounts
+                exist, passing it avoids picking the wrong ``wxid_*`` folder.
         """
         self._data_dir = Path(wechat_data_dir)
+        self._account_dir = Path(account_dir) if account_dir else None
 
     # ------------------------------------------------------------------
     # Public API
@@ -83,6 +86,8 @@ class VoiceFileLocator:
 
     def _find_wxid_dir(self) -> Optional[Path]:
         """Find the wxid_* directory under the WeChat data directory."""
+        if self._account_dir is not None:
+            return self._account_dir if self._account_dir.exists() else None
         if not self._data_dir.exists():
             return None
         for child in self._data_dir.iterdir():

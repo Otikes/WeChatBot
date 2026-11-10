@@ -73,10 +73,28 @@ def read_contact_labels() -> dict:
             }
 
     report = client.get_contact_labels()
-    names = _friend_names()
+    # wxid → 展示名：优先用好友缓存（可能有用户自定义备注），
+    # 缺失时回退到 contact.db 里直接读到的 remark/nick_name。
+    db_names = report.pop("member_names", None) or {}
+    if not isinstance(db_names, dict):
+        db_names = {}
+    cached = _friend_names()
+
+    def display(wxid: str) -> str:
+        return cached.get(wxid) or str(db_names.get(wxid) or "")
+
     for label in report.get("labels", []):
-        label["members"] = [
-            {"wxid": wxid, "name": names.get(wxid, "")}
-            for wxid in label.get("members", [])
-        ]
+        enriched = []
+        for member in label.get("members", []):
+            if isinstance(member, dict):
+                wxid = str(member.get("wxid") or "")
+                enriched.append({
+                    "wxid": wxid,
+                    "name": member.get("name") or display(wxid),
+                })
+            else:
+                wxid = str(member)
+                enriched.append({"wxid": wxid, "name": display(wxid)})
+        label["members"] = enriched
+        label["member_count"] = len(enriched)
     return report

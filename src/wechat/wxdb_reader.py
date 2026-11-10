@@ -74,6 +74,87 @@ CFG_DWORD_OFF = 0x40              # cfgDword(图片密钥派生源)
 CFG_WXID_OFF = 0x48               # wxId std::string
 CFG_CIPHER_OFF = 0x2B8            # dbKey 密文 std::string
 
+# 微信 4.x 的联系人附加信息存在 contact.extra_buffer (protobuf) 里。
+# 通讯录标签没有独立的「标签 ↔ 联系人」关联表，而是把逗号分隔的 label id
+# 放在某个 length-delimited 字段（本机 4.1.15.13 实测为 field 30）。
+# 下面两个助手只做最小 wire-format 解析，不依赖 protobuf 库、不写死字段号。
+_LABEL_LIST_RE = re.compile(r"^[0-9]{1,10}(?:\s*[,;|]\s*[0-9]{1,10})*$")
+
+
+def _pb_varint(buf: bytes, pos: int):
+    """读一个 protobuf varint，返回 (value, new_pos)；截断时抛 ValueError。"""
+    value = 0
+    shift = 0
+    while pos < len(buf):
+        byte = buf[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, pos
+        shift += 7
+        if shift > 70:
+            raise ValueError("varint too long")
+    raise ValueError("truncated varint")
+
+
+def _pb_fields(buf: bytes):
+    """产出 [(field_no, wire_type, value), ...]，遇到未知/截断就地停止。
+
+    只处理 varint(0)/64bit(1)/length-delimited(2)/32bit(5)。extra_buffer 是
+    微信内部格式，跨版本会追加字段，因此这里绝不抛异常、也不假设 schema。
+    """
+    out = []
+    pos = 0
+    size = len(buf)
+    while pos < size:
+        try:
+            key, pos = _pb_varint(buf, pos)
+            field_no, wire = key >> 3, key & 7
+            if not field_no:
+                break
+            if wire == 0:
+                value, pos = _pb_varint(buf, pos)
+            elif wire == 2:
+                length, pos = _pb_varint(buf, pos)
+                if length < 0 or pos + length > size:
+                    break
+                value, pos = buf[pos:pos + length], pos + length
+            elif wire == 5:
+                if pos + 4 > size:
+                    break
+                value, pos = buf[pos:pos + 4], pos + 4
+            elif wire == 1:
+                if pos + 8 > size:
+                    break
+                value, pos = buf[pos:pos + 8], pos + 8
+            else:
+                break
+        except ValueError:
+            break
+        out.append((field_no, wire, value))
+    return out
+
+
+def _pb_label_ids(value, known_ids: set) -> list:
+    """把一个 protobuf bytes 值解析成标签 ID 列表；不是标签串就返回 []。
+
+    用「每个 id 都能在 contact_label 里找到」做校验，避免把头像 URL、
+    地区名、单数字标志位之类误判成标签归属。
+    """
+    if not isinstance(value, bytes):
+        return []
+    try:
+        text = value.decode("ascii").strip()
+    except UnicodeDecodeError:
+        return []
+    if not text or len(text) > 200 or not _LABEL_LIST_RE.match(text):
+        return []
+    ids = [part.strip() for part in re.split(r"[,;|]", text) if part.strip()]
+    if not ids or not all(i in known_ids for i in ids):
+        return []
+    return ids
+
+
 MSG_TYPE_NAMES = {
     1: "文本",
     3: "图片",
@@ -2725,27 +2806,106 @@ class WeChatDB:
                     break
         return label_col, contact_col
 
+    def _labels_from_extra_buffer(self, conn: sqlite3.Connection, known_ids: set):
+        """微信 4.x 主路径：从 contact.extra_buffer 还原「标签 → 好友」。
+
+        实测 4.1.15.13 的 contact.db 只有 ``contact_label`` 一张标签表，
+        **没有**独立关联表；每个联系人的标签 id 逗号串藏在其 protobuf
+        ``extra_buffer`` 的 field 30 里。为了跨版本可用，这里先扫描所有
+        联系人、统计各候选字段命中合法标签 id 的次数，再挑字段：
+        field 30 优先（已知版本），否则取覆盖标签种类/多标签/命中数最多者。
+
+        Returns:
+            ``(mapping: dict[label_id, list[wxid]], names: dict[wxid, str],
+            source: str)``；读不到返回 ``({}, {}, "")``。
+        """
+        try:
+            cols = [str(r[1]) for r in conn.execute("PRAGMA table_info(contact)")]
+        except Exception:
+            return {}, {}, ""
+        lower = {c.lower(): c for c in cols}
+        if "extra_buffer" not in lower or "username" not in lower:
+            return {}, {}, ""
+
+        select = ['"username"', '"extra_buffer"']
+        for want in ("remark", "nick_name"):
+            if want in lower:
+                select.append('"%s"' % lower[want])
+        try:
+            rows = conn.execute(
+                "SELECT %s FROM contact "
+                "WHERE extra_buffer IS NOT NULL AND length(extra_buffer) > 0"
+                % ", ".join(select)
+            ).fetchall()
+        except Exception:
+            return {}, {}, ""
+
+        # field_no -> [(wxid, [label_id...], display_name), ...]
+        hits: dict = {}
+        for row in rows:
+            wxid = str(row[0] or "").strip()
+            blob = row[1]
+            if not wxid or not isinstance(blob, (bytes, bytearray, memoryview)):
+                continue
+            remark = str(row[2] or "").strip() if len(select) > 2 else ""
+            nick = str(row[3] or "").strip() if len(select) > 3 else ""
+            name = remark or nick
+            for field_no, wire, value in _pb_fields(bytes(blob)):
+                if wire != 2:
+                    continue
+                ids = _pb_label_ids(value, known_ids)
+                if ids:
+                    hits.setdefault(field_no, []).append((wxid, ids, name))
+        if not hits:
+            return {}, {}, ""
+
+        if 30 in hits:
+            field_no = 30
+        else:
+            def score(item):
+                num, entries = item
+                distinct = {i for _, ids, _ in entries for i in ids}
+                multi = sum(1 for _, ids, _ in entries if len(ids) > 1)
+                return (len(distinct) >= 2, multi, len(entries))
+
+            field_no = max(hits.items(), key=score)[0]
+
+        mapping: dict = {}
+        names: dict = {}
+        for wxid, ids, name in hits[field_no]:
+            if name and wxid not in names:
+                names[wxid] = name
+            for label_id in ids:
+                bucket = mapping.setdefault(label_id, [])
+                if wxid not in bucket:
+                    bucket.append(wxid)
+        return mapping, names, "contact.extra_buffer#%d" % field_no
+
     def contact_label_report(self) -> dict:
         """读微信自带的通讯录标签及成员（纯只读，尽力而为，绝不抛影响主流程）。
 
         标签定义来自 ``contact_label``（见 :meth:`list_labels`）。「标签 ↔ 好友」
-        的关联方式在微信 4.x 各版本里并不统一，因此动态枚举 ``contact.db``
-        中含 label 的表并探列，依次尝试两种来源：
+        的关联方式在微信各版本里并不统一，因此按命中顺序尝试三种来源：
 
+        0. **微信 4.x 实际存储**：``contact.extra_buffer`` 是 protobuf，逗号
+           分隔的 label id 放在某个 string 字段（4.1.15.13 实测 field 30）。
+           该版本没有独立关联表，这是唯一能拿到成员的路径。
         1. 独立关联表（如 ``contact_label_contact``）：读 (label_id, contact) 两列；
            若关联表存的是 ``contact.id`` 数字，则用 contact 表还原成 wxid。
         2. ``contact`` 表里直接存逗号分隔 label id 的字段（如 ``label_list_``）。
 
         任何一步失败都静默降级：``available=False`` 或 ``members`` 为空。
-        返回的 ``source`` / ``tables`` 只用于诊断，便于实机确认关联表名。
+        返回的 ``source`` / ``tables`` 只用于诊断，便于实机确认关联来源。
+        ``member_names`` 是从 contact 表读到的 wxid → 展示名，供上层补昵称。
 
         Returns:
             ``{"available": bool, "labels": [{label_id, name, sort_order,
             member_count, members: [wxid, ...]}], "source": str,
-            "tables": [str], "note": str}``
+            "tables": [str], "member_names": {wxid: str}, "note": str}``
         """
         report = {
-            "available": False, "labels": [], "source": "", "tables": [], "note": "",
+            "available": False, "labels": [], "source": "", "tables": [],
+            "member_names": {}, "note": "",
         }
         labels = self.list_labels()
         if not labels:
@@ -2769,6 +2929,19 @@ class WeChatDB:
             ]
             report["tables"] = [t for t in tables if "label" in t.lower()]
 
+            # 来源⓪：微信 4.x 把 label id 存在 contact.extra_buffer protobuf 里，
+            # 没有独立关联表。优先走这条，命中后跳过下面的探表回退。
+            known_ids = {str(label["label_id"]) for label in labels}
+            (
+                extra_mapping, extra_names, extra_source,
+            ) = self._labels_from_extra_buffer(conn, known_ids)
+            if extra_mapping:
+                mapping.update(extra_mapping)
+                report["member_names"] = extra_names
+                report["source"] = extra_source
+                if "contact" not in report["tables"]:
+                    report["tables"].append("contact")
+
             # contact.id -> username：关联表存数字 id 时用它还原 wxid
             id_to_username: dict[str, str] = {}
             try:
@@ -2785,8 +2958,8 @@ class WeChatDB:
             except Exception:
                 pass
 
-            for table in report["tables"]:
-                if table.lower() == "contact_label":
+            for table in report["tables"] if not mapping else []:
+                if table.lower() in ("contact_label", "contact"):
                     continue
                 label_col, contact_col = self._label_contact_columns(conn, table)
                 if not label_col or not contact_col:
@@ -2844,6 +3017,29 @@ class WeChatDB:
                                 bucket.append(username)
                     if mapping:
                         report["source"] = f"contact.{field}"
+
+            # 兜底补昵称：关联表/contact 字段路径没带出 remark/nick_name 时，
+            # 按 wxid 回查 contact 表（分批，避开 SQLite 参数个数上限）。
+            missing = sorted({
+                wxid for wxids in mapping.values() for wxid in wxids
+                if wxid not in report["member_names"]
+            })
+            if missing and {"username", "remark", "nick_name"} <= contact_cols:
+                for start in range(0, len(missing), 400):
+                    chunk = missing[start:start + 400]
+                    placeholders = ",".join("?" * len(chunk))
+                    try:
+                        rows = conn.execute(
+                            "SELECT username, remark, nick_name FROM contact "
+                            "WHERE username IN (%s)" % placeholders, chunk,
+                        ).fetchall()
+                    except Exception:
+                        break
+                    for row in rows:
+                        name = (str(row[1] or "").strip()
+                                or str(row[2] or "").strip())
+                        if name:
+                            report["member_names"][str(row[0])] = name
         except Exception as exc:
             logging.getLogger(__name__).debug("contact_label_report failed: %s", exc)
         finally:
@@ -2864,7 +3060,19 @@ class WeChatDB:
             })
         report["labels"] = out
         if not report["source"]:
-            report["note"] = "未找到标签与联系人的关联表（该微信版本可能用了不同的表结构）"
+            report["note"] = (
+                "未找到标签与联系人的关联数据（微信版本可能用了不同的存储方式，"
+                "请确认微信已登录且 contact.db 可解密）"
+            )
+        else:
+            total = len({w for label in out for w in label["members"]})
+            report["note"] = "已读取 %d 位好友的标签归属（来源 %s）。" % (
+                total, report["source"])
+            if report["source"].startswith("contact.extra_buffer"):
+                report["note"] += (
+                    " 微信 4.x 把标签存在 contact.extra_buffer 中，没有独立关联表。"
+                )
+            report["note"] += " 此处仅只读展示，不会同步到系统群发分组。"
         return report
 
     def get_groups(self) -> List[dict]:

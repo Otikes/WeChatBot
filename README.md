@@ -69,7 +69,7 @@
 | Token 用量统计 | **无** | `token_stats.py` + `TokenStats.jsx` | **全新** |
 | AI 后端 | DeepSeek / Claude 固定后端 | 增加 Chat Completions / Messages 通用协议 | 扩展 |
 | 群发分组 + MCP 消息发送工具 | **无** | 系统分组 + `send_message` / `batch_send_messages` / `list_broadcast_groups` | **全新** |
-| 微信通讯录标签（只读） | **无** | 动态探表读取 + 只读视图 | **全新**，与群发分组互不联动 |
+| 微信通讯录标签（只读） | **无** | `contact.extra_buffer` protobuf 解析标签归属 + 成员昵称 + 只读视图 | **全新**，与群发分组互不联动 |
 | 品牌 / 图标 / 安装包 / CI 产物名 | webot | WeChatBot | 全链路改名，保留旧版升级兼容 |
 
 ### 控制台菜单对照
@@ -204,8 +204,9 @@ WeChatBot 提供一套**系统内自定义分组**，用于组织消息发送目
 
 WeChatBot 可以**读取微信自带的通讯录标签及其成员**，方便盘点，但与群发分组彼此独立。
 
-- 底层通过**动态探表**读取微信本地库（表结构随版本变化，运行时动态识别）；当未登录、密钥失效或表不可读时**静默降级**——返回空结果或提示，不报错、不影响机器人主流程。
-- 查询方式：`GET /api/wechat/labels`，或 MCP 工具 `list_wechat_labels`。
+- 底层读取 `contact.db` 的 `contact_label` 标签定义，并从 `contact.extra_buffer`（protobuf）里解析每位好友的标签归属。**微信 4.x 没有独立的「标签 ↔ 联系人」关联表**，标签 id 以逗号串存在该 protobuf 的 field 30；解析不写死字段号，会按已知标签 id 自动识别，旧版本则回退到关联表探测。成员昵称来自 `contact` 表的备注/昵称，并与本地好友昵称缓存合并。
+- 当未登录、密钥失效或库不可读时**静默降级**——返回空结果或提示，不报错、不影响机器人主流程。
+- 查询方式：`GET /api/wechat/labels`，或 MCP 工具 `list_wechat_labels`。返回的每个标签带 `member_count` 与 `members: [{"wxid", "name"}]`。
 - **只读**：仅用于查看，**不会导入到群发分组**，也不会把微信标签同步成系统分组；两者互不联动（见 [群发分组](#群发分组)）。
 - **局限**：微信 PC 端的通讯录标签主要针对好友，**群标签通常没有对应数据**，因此这里一般只能读到好友标签。
 

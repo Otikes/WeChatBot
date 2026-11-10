@@ -2193,7 +2193,7 @@ WCDB_KEY=
 |---|---|---|
 | `_running_client` | `def _running_client():` | 优先复用运行中机器人已解密的 WCDB 客户端：从 `src.web.server._bot_control.get_backend()` 取 `_client`（要求 `_client._db` 不为 None），避免重复取密钥/解密；异常时返回 `None` |
 | `_friend_names` | `def _friend_names() -> dict[str, str]:` | 读 `<WEBOT_DATA_DIR>/friend_names.json`，产出 wxid → 展示名，用于给标签成员补昵称；文件不存在/损坏返回 `{}` |
-| `read_contact_labels` | `def read_contact_labels() -> dict:` | 返回微信原生通讯录标签报告；优先 `_running_client()`，无则 `LocalWcdbClient()` + `.init()`；再调 `client.get_contact_labels()`，用 `_friend_names()` 把每个标签的 `members` 从 wxid 列表补成 `[{"wxid", "name"}]` |
+| `read_contact_labels` | `def read_contact_labels() -> dict:` | 返回微信原生通讯录标签报告；优先 `_running_client()`，无则 `LocalWcdbClient()` + `.init()`；再调 `client.get_contact_labels()`；`pop("member_names")` 拿到 contact.db 里的 remark/nick_name，与 `_friend_names()` 合并（好友缓存优先）后把每个标签的 `members` 从 wxid 列表补成 `[{"wxid", "name"}]`，并重算 `member_count`；已经是 dict 的 member 也兼容 |
 
 **返回结构**
 
@@ -2207,20 +2207,36 @@ WCDB_KEY=
       "members": [{"wxid": str, "name": str}],   # labels.py 补昵称后的结构
     },
   ],
-  "source": str,            # 命中的关联表，如 "contact_label_contact.label_id/contact"
-  "tables": [str],          # contact.db 中含 label 的表名，仅用于诊断
-  "note": str,              # 失败/降级说明，调用方应展示给用户
+  "source": str,            # 命中的关联来源，如 "contact.extra_buffer#30"
+                            # 或 "contact_label_contact.label_id_/username_"
+  "tables": [str],          # 标签相关表 + 命中 extra_buffer 时的 "contact"，仅用于诊断
+  "note": str,              # 成功时说明好友数与来源；失败/降级时说明原因
 }
 ```
 
+`member_names` 是 `client.get_contact_labels()` 的中间产物（wxid → 展示名），
+在 `read_contact_labels()` 里被 `pop` 掉，不会出现在 API / MCP 返回值中。
+
 失败时返回 `available=False` + `note`，不抛异常（如 `"微信本地数据库不可用：{exc}"`）。
 
-#### 附录.1.3 `src/wechat/wxdb_reader.py` — `WeChatDB` 新增两个方法
+#### 附录.1.3 `src/wechat/wxdb_reader.py` — 标签读取（模块级助手 + `WeChatDB` 方法）
+
+**模块级常量与助手**（放在 `MSG_TYPE_NAMES` 之前）
+
+| 名称 | 签名 | 说明 |
+|---|---|---|
+| `_LABEL_LIST_RE` | `re.compile(r"^[0-9]{1,10}(?:\s*[,;|]\s*[0-9]{1,10})*$")` | 逗号/分号/竖线分隔的数字 id 串 |
+| `_pb_varint` | `def _pb_varint(buf: bytes, pos: int):` | 读一个 protobuf varint，返回 `(value, new_pos)`；截断/超长抛 `ValueError` |
+| `_pb_fields` | `def _pb_fields(buf: bytes):` | 最小 wire-format 解析，产出 `[(field_no, wire_type, value), ...]`；只处理 0/1/2/5，遇到未知或截断就地停止、不抛异常，不假设 schema |
+| `_pb_label_ids` | `def _pb_label_ids(value, known_ids: set) -> list:` | 把 bytes 值解析成标签 id 列表；要求纯 ascii、长度 ≤200、形如数字串、且**每个 id 都在 `contact_label` 里**，否则返回 `[]`（避免头像 URL / 地区名 / 单数字标志位误判） |
+
+**`WeChatDB` 方法**
 
 | 方法 | 签名 | 说明 |
 |---|---|---|
 | `_label_contact_columns` | `def _label_contact_columns(self, conn: sqlite3.Connection, table: str):` | 在候选关联表里 `PRAGMA table_info` 探列，找出 `(标签列, 联系人列)`；标签列优先 `label_id*`、避开 `label_name*`、短列名优先，联系人列按 `contact/username/user_name/wxid/member/uid` 提示匹配再退回 `*id`/`usrname`；无法确认返回 `(None, None)` |
-| `contact_label_report` | `def contact_label_report(self) -> dict:` | 纯只读、尽力而为、绝不抛影响主流程；动态枚举 `contact.db` 中含 label 的表并探列，依次尝试两种来源，任何一步失败都静默降级（`available=False` 或 `members` 为空） |
+| `_labels_from_extra_buffer` | `def _labels_from_extra_buffer(self, conn: sqlite3.Connection, known_ids: set):` | **微信 4.x 主路径**：扫描 `contact.extra_buffer` 的 protobuf 字段，统计各字段命中合法标签 id 的次数；field 30 优先（4.1.15.13 实测），否则按「覆盖 ≥2 种标签 → 多标签条数 → 命中数」打分选字段；返回 `(mapping, member_names, source)` |
+| `contact_label_report` | `def contact_label_report(self) -> dict:` | 纯只读、尽力而为、绝不抛影响主流程；依次尝试 `extra_buffer` → 独立关联表 → `contact` 内 label 列三种来源，任何一步失败都静默降级；返回 `member_names` 供上层补昵称 |
 
 **`contact_label_report()` 读取策略（ASCII 调用链）**
 
@@ -2230,9 +2246,21 @@ contact_label_report()
   ├─ list_labels() → 读 contact_label 表拿标签定义；为空则 note 提示并返回 available=False
   ├─ _contact_conn() → 打开 contact.db；不可读则 note="contact.db 不可读"
   ├─ 枚举 sqlite_master 中含 label 的表 → report["tables"]
+  ├─ known_ids = {str(label["label_id"]) for label in labels}
+  │
+  ├─ 来源⓪ _labels_from_extra_buffer(conn, known_ids)   ← 微信 4.x 实际存储
+  │     ├─ PRAGMA table_info(contact) → 需有 username + extra_buffer
+  │     ├─ SELECT username, extra_buffer, remark, nick_name
+  │     │     FROM contact WHERE extra_buffer 非空
+  │     ├─ 逐行 _pb_fields(bytes(blob)) → 对 wire=2 的字段调 _pb_label_ids()
+  │     │     └─ 按 field_no 累计 hits[(wxid, [label_id...], name)]
+  │     ├─ 选字段：30 存在则取 30，否则 max(hits, key=score)
+  │     └─ 命中 → mapping / member_names / source="contact.extra_buffer#N"
+  │           └─ report["tables"] 追加 "contact"
+  │
   ├─ PRAGMA table_info(contact) → 若含 id/username，建 contact.id → username 映射
   │
-  ├─ 来源① 独立关联表（如 contact_label_contact，跳过 contact_label 本身）
+  ├─ 来源① 独立关联表（仅当 mapping 仍为空；跳过 contact_label / contact）
   │     ├─ _label_contact_columns(conn, table) → (label_col, contact_col)
   │     ├─ SELECT label_col, contact_col → 逐行还原
   │     │     └─ 关联值是数字 id 时用 id_to_username 还原 wxid，否则原样当 wxid
@@ -2243,9 +2271,18 @@ contact_label_report()
   │     ├─ SELECT field, username FROM contact → re.split(r"[,;|\s]+", raw)
   │     └─ 命中即写 report["source"]=f"contact.{field}"
   │
-  └─ 组装 out：[{label_id, name, sort_order, member_count, members:[wxid,...]}] → report["labels"]
-        └─ 无 source 时 note="未找到标签与联系人的关联表（该微信版本可能用了不同的表结构）"
+  ├─ 兜底补昵称：member_names 里缺的 wxid 按 400 个一批回查 contact 表
+  │
+  └─ 组装 out：[{label_id, name, sort_order, member_count, members:[wxid,...]}]
+        ├─ 无 source → note="未找到标签与联系人的关联数据…"
+        └─ 有 source → note="已读取 N 位好友的标签归属（来源 …）" + 只读声明
 ```
+
+> 实测背景：4.1.15.13 的 `contact.db` 共 17 张表，只有 `contact_label`
+> （13 行）一张标签表，**没有** `contact_label_contact` 之类关联表，
+> `contact` 也没有 label 列。旧实现因此只能显示标签、成员恒为空。
+> 标签 id 逗号串实际存在 `contact.extra_buffer` protobuf 的 field 30，
+> 本机 54 位好友 / 81 条标签归属全部可读。
 
 注意：`contact_label_report()` 返回的 `members` 仍是 **wxid 字符串列表**；补昵称成 `[{"wxid","name"}]` 是 `src/wechat/labels.py:read_contact_labels()` 完成的。
 
@@ -2346,7 +2383,7 @@ GET  /api/wechat/labels
 | `list_broadcast_groups` | 只读列出系统群发分组（与微信原生标签无关），供发送前确认分组名与目标 | `name`（string，可选，名称模糊筛选） | 默认 `READ_ONLY_ANNOTATIONS` | 无；受 MCP 数据范围限制，不在范围内的目标被隐藏为 `hidden_count` |
 | `send_message` | 向单个好友/群聊发送一条文本消息（写操作） | `chat`（string，**必填**：群 ID/群名/好友 wxid/昵称/备注）、`content`（string，**必填**，最长 2000 字）、`dry_run`（boolean，默认 `False`） | **显式覆盖**：`readOnlyHint:False, destructiveHint:True, idempotentHint:False, openWorldHint:True` | 机器人已启动、微信已登录且窗口可见、目标在 MCP 数据范围内；建议先 `dry_run=true` |
 | `batch_send_messages` | 批量向多个好友/群聊发送同一条文本（写操作，串行） | `content`（string，**必填**）、`chats`（array of string，目标数组）、`group`（string，群发分组名）、`interval_ms`（integer，0–5000，默认 800）、`dry_run`（boolean，默认 `False`） | **显式覆盖**：同 `send_message` | 同 `send_message`；`chats` 与 `group` 至少给一个；单次最多 50 个目标；强烈建议先 `dry_run=true` |
-| `list_wechat_labels` | 只读列出微信自带通讯录标签及各标签下好友（wxid + 昵称） | 无（`_object()`） | 默认 `READ_ONLY_ANNOTATIONS` | 无；底层动态探测 `contact.db`，读不到时 `available=false` + `note`，标签成员为空 |
+| `list_wechat_labels` | 只读列出微信自带通讯录标签及各标签下好友（wxid + 昵称） | 无（`_object()`） | 默认 `READ_ONLY_ANNOTATIONS` | 无；底层优先解析 `contact.extra_buffer`，再回退动态探关联表；读不到时 `available=false` + `note`，标签成员为空 |
 
 > `send_message` 与 `batch_send_messages` 是仅有的两个**显式写了非只读 annotations** 的工具，用于覆盖默认的 `READ_ONLY_ANNOTATIONS`；其余 16 个工具（含新增的 `list_broadcast_groups`、`list_wechat_labels`）沿用默认只读注解。
 
@@ -2357,7 +2394,7 @@ GET  /api/wechat/labels
 | 文件 | 改动 |
 |---|---|
 | `ui/src/components/BroadcastGroupsPanel.jsx`（新增） | `export default function BroadcastGroupsPanel()`；「系统配置 → 群发分组」子标签面板；`load()` 用 `GET /api/broadcast/groups` 拿 `groups` + `options`，保存用 `POST /api/broadcast/groups`（`body: JSON.stringify({ groups })`）；候选目标由 `options.groups` / `options.friends` 映射出 `type/id/name` |
-| `ui/src/components/WeChatLabelsPanel.jsx`（新增） | `export default function WeChatLabelsPanel()`；顶层「通讯录标签」标签面板；`load()` 用 `GET /api/wechat/labels`；页面明确标注「微信通讯录标签（只读）」，与 WeChatBot 群发分组完全独立 |
+| `ui/src/components/WeChatLabelsPanel.jsx`（新增） | `export default function WeChatLabelsPanel()`；顶层「通讯录标签」标签面板；`load()` 用 `GET /api/wechat/labels`；状态条显示标签数 + 去重好友数（`totalFriends`），每个标签卡片列出成员（名称优先、无名称回退 wxid）；页面明确标注「微信通讯录标签（只读）」及 `contact.extra_buffer` 来源，与 WeChatBot 群发分组完全独立 |
 | `ui/src/App.jsx`（修改） | `TABS`：`config.subs` 新增 `{ id: 'broadcast', label: '群发分组' }`；顶层新增 `{ id: 'wechat-labels', label: '通讯录标签', icon: Tag }`；新增 `WeChatLabelsPanel` 的 `lazy` import；渲染处新增 `activeTab === 'wechat-labels' && <WeChatLabelsPanel />`；`activeTab === 'config'` 仍交给 `ConfigPanel activeSection={configSection}` |
 | `ui/src/components/ConfigPanel.jsx`（修改） | `import BroadcastGroupsPanel`；`sectionTitles`/`sectionAccents` 增加 `broadcast` 项；渲染处新增 `activeSection === 'broadcast' && <BroadcastGroupsPanel />`；主「保存配置」按钮条件改为 `activeSection !== 'sandbox' && activeSection !== 'broadcast'`，**在群发分组子标签隐藏**（该面板有独立保存逻辑，避免误把分组写进 `.env`） |
 

@@ -537,6 +537,59 @@ class TestConfigExportImport:
             assert "导出备份" in page_text or "配置备份" in page_text
 
 
+class TestWeChatLabelsPanel:
+    """浏览器里验证「通讯录标签」页能把好友成员渲染出来。
+
+    用 route 拦截 API 返回合成数据，避免依赖真机微信 / 解密数据库。
+    """
+
+    def test_label_members_and_counts_render(self, page):
+        payload = {
+            "ok": True,
+            "available": True,
+            "labels": [
+                {
+                    "label_id": "1", "name": "同学", "sort_order": 0,
+                    "member_count": 2,
+                    "members": [
+                        {"wxid": "wxid_a", "name": "张三"},
+                        {"wxid": "wxid_b", "name": ""},
+                    ],
+                },
+                {
+                    "label_id": "2", "name": "空标签", "sort_order": 1,
+                    "member_count": 0, "members": [],
+                },
+            ],
+            "source": "contact.extra_buffer#30",
+            "tables": ["contact_label", "contact"],
+            "note": "已读取 2 位好友的标签归属（来源 contact.extra_buffer#30）。",
+        }
+        page.route(
+            "**/api/wechat/labels",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(payload, ensure_ascii=False),
+            ),
+        )
+        page.goto(BASE_URL, timeout=10000)
+        page.wait_for_timeout(800)
+        tab_btn = page.locator("button:has-text('通讯录标签')")
+        assert tab_btn.count() > 0
+        tab_btn.first.click()
+        page.wait_for_timeout(600)
+
+        body = page.inner_text("body")
+        assert "2 个标签 · 2 位好友" in body   # 去重后的好友总数
+        assert "同学" in body
+        assert "张三" in body                  # 有昵称显示昵称
+        assert "wxid_b" in body                # 无昵称回退 wxid
+        assert "空标签" in body
+        assert "该标签下没有好友" in body
+        assert "contact.extra_buffer#30" in body
+
+
 class TestLogViewer:
     def test_clear_button_clears_persisted_logs(self, page):
         project_root = Path(__file__).resolve().parent.parent

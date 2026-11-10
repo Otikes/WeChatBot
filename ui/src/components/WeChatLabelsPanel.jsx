@@ -32,6 +32,9 @@ export default function WeChatLabelsPanel() {
   useEffect(() => { load() }, [load])
 
   const labels = data?.labels || []
+  const totalFriends = new Set(
+    labels.flatMap((label) => (label.members || []).map((m) => m.wxid)),
+  ).size
 
   return (
     <div className="space-y-5">
@@ -39,7 +42,8 @@ export default function WeChatLabelsPanel() {
         <p className="text-[12px] text-text-main font-semibold mb-1">微信通讯录标签（只读）</p>
         <p className="text-[11px] text-text-muted leading-relaxed">
           直接读取微信本地数据库中的通讯录标签及其好友，用于查看你在微信里已有的分组。
-          底层会动态探测关联表，不同微信版本结构可能不同，读不到时会给出说明。
+          微信 4.x 把标签归属存在 contact.extra_buffer 里（没有独立关联表），这里会自动解析；
+          旧版本则回退到关联表探测，读不到时会给出说明。
         </p>
         <p className="text-[11px] text-text-muted mt-1.5 flex items-start gap-1.5">
           <Info size={13} className="shrink-0 mt-0.5 text-brand-green" />
@@ -63,7 +67,7 @@ export default function WeChatLabelsPanel() {
               : 'bg-[#c37d0d]/10 border-[#c37d0d]/25 text-[#c37d0d]'
           }`}>
             {data.available
-              ? <><CheckCircle size={12} /> 读取成功 · {labels.length} 个标签</>
+              ? <><CheckCircle size={12} /> 读取成功 · {labels.length} 个标签 · {totalFriends} 位好友</>
               : <><WarningCircle size={12} /> 暂不可用</>}
           </span>
         )}
@@ -122,7 +126,7 @@ export default function WeChatLabelsPanel() {
               <div className="p-3 max-h-[190px] overflow-y-auto">
                 {(label.members || []).length === 0 ? (
                   <p className="text-[11px] text-text-muted py-3 text-center">
-                    未读取到成员（可能是该标签为空，或本机微信版本的关联表未能识别）
+                    该标签下没有好友（微信里可能是空标签）
                   </p>
                 ) : (
                   <div className="flex flex-wrap gap-1.5">

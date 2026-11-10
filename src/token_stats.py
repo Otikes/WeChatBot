@@ -1,6 +1,6 @@
 """LLM Token 用量统计 — SQLite 持久化与聚合查询。
 
-独立数据库文件（默认 ``webot 数据目录/token_usage.db``），不随
+独立数据库文件（默认 ``WeChatBot 数据目录/token_usage.db``），不随
 「重置本地数据」被清空，保证消耗统计长期可追溯。
 
 每次 AI 请求由后端在拿到响应后调用 :func:`record_usage` 写入一条记录；

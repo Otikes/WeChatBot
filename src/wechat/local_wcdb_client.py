@@ -150,6 +150,20 @@ class LocalWcdbClient:
             })
         return out
 
+    def get_contact_labels(self) -> dict:
+        """只读返回微信通讯录标签及成员（动态探表，失败时静默降级）。
+
+        与系统内的群发分组无关：这里读的是微信自带的通讯录标签。
+        """
+        try:
+            return self._require_db().contact_label_report()
+        except Exception as exc:
+            logger.warning("Failed to read contact labels: %s", exc)
+            return {
+                "available": False, "labels": [], "source": "",
+                "tables": [], "note": str(exc),
+            }
+
     def get_contacts(self, limit: int = 0) -> list[dict]:
         """Return all contacts (``contact.db``) — used for group/friend discovery.
 

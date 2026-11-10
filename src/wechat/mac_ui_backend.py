@@ -1218,7 +1218,7 @@ JSON.stringify(result);
         if isinstance(data, dict) and data.get("error"):
             logger.warning(
                 "macOS WeChat geometry access failed: %s. "
-                "Grant Accessibility permission to webot.app.",
+                "Grant Accessibility permission to WeChatBot.app.",
                 data.get("error"),
             )
         return data if isinstance(data, dict) else {}

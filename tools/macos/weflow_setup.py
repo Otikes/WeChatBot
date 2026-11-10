@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare macOS WeFlow/WCDB direct reads for webot.
+"""Prepare macOS WeFlow/WCDB direct reads for WeChatBot.
 
 This helper exposes only the setup steps still needed by the integrated
 WeFlow path: diagnose the local WeChat account, extract/import database keys,

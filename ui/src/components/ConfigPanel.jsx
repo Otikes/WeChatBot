@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { CheckCircle, Warning, FloppyDisk, Info, DownloadSimple, UploadSimple } from '@phosphor-icons/react'
 import { Field, Toggle, Select, Input } from './SharedComponents'
 import LotsEditor from './LotsEditor'
+import BroadcastGroupsPanel from './BroadcastGroupsPanel'
 
 const pageTransition = {
   initial: { opacity: 0, x: 12 },
@@ -985,10 +986,10 @@ function FeishuSection({ form, update }) {
 
 // ── Lots Editor (抽签配置编辑器) ─────────────────────────────────────────
 
-const sectionTitles = { ai: 'LLM模型配置', voice: '语音模型配置', imagegen: '生图模型配置', identity: '机器人身份', data: '数据路径', sandbox: '提示词沙箱' }
-const sectionAccents = { ai: '#18E299', voice: '#10b981', imagegen: '#8b5cf6', identity: '#3772cf', data: '#18E299', sandbox: '#8b5cf6' }
+const sectionTitles = { ai: 'LLM模型配置', voice: '语音模型配置', imagegen: '生图模型配置', identity: '机器人身份', data: '数据路径', broadcast: '群发分组', sandbox: '提示词沙箱' }
+const sectionAccents = { ai: '#18E299', voice: '#10b981', imagegen: '#8b5cf6', identity: '#3772cf', data: '#18E299', broadcast: '#6366f1', sandbox: '#8b5cf6' }
 
-// ── Data Path Section (webot + 微信数据目录配置) ───────────────────────
+// ── Data Path Section (WeChatBot + 微信数据目录配置) ───────────────────────
 
 function DataPathSection({ form, update, detectedDataDir }) {
   const [browseOpen, setBrowseOpen] = useState(false)
@@ -1027,7 +1028,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
 
   function openBrowse(target = 'wechat') {
     setBrowseTarget(target)
-    const initialPath = target === 'webot'
+    const initialPath = target === 'WeChatBot'
       ? (form.webot_data_dir || form.resolved_webot_data_dir || '')
       : (form.wechat_data_dir || detectedDataDir || '')
     setBrowseInput(initialPath)
@@ -1062,7 +1063,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
   }
 
   function selectCurrentPath() {
-    if (browseTarget === 'webot') {
+    if (browseTarget === 'WeChatBot') {
       update('webot_data_dir', browsePath)
     } else {
       update('wechat_data_dir', browsePath)
@@ -1108,8 +1109,8 @@ function DataPathSection({ form, update, detectedDataDir }) {
 
   return (
     <div className="space-y-6">
-      <Field label="webot 数据目录"
-        hint="webot 自己生成的数据存储位置；不影响微信聊天记录目录。留空则使用程序目录下的 data。">
+      <Field label="WeChatBot 数据目录"
+        hint="WeChatBot 自己生成的数据存储位置；不影响微信聊天记录目录。留空则使用程序目录下的 data。">
         <div className="flex items-start gap-2">
           <div className="flex-1 relative">
             <input
@@ -1134,7 +1135,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
           </div>
           <button
             type="button"
-            onClick={() => openBrowse('webot')}
+            onClick={() => openBrowse('WeChatBot')}
             className="shrink-0 px-4 py-2.5 bg-bg-main border border-border-main rounded-full text-[13px] text-text-main font-medium hover:border-brand-green hover:text-brand-green-hover transition-colors cursor-pointer"
           >
             浏览...
@@ -1150,7 +1151,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
       )}
       {hasWebotCustomPath && (
         <p className="text-xs text-text-muted leading-relaxed">
-          保存后重启生效；机器人停止时会复制旧目录中已有的 webot 数据，目标目录已有文件不会覆盖。
+          保存后重启生效；机器人停止时会复制旧目录中已有的 WeChatBot 数据，目标目录已有文件不会覆盖。
         </p>
       )}
 
@@ -1272,7 +1273,7 @@ function DataPathSection({ form, update, detectedDataDir }) {
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-border-main/60">
               <h4 className="text-sm font-semibold text-text-main">
-                选择{browseTarget === 'webot' ? 'webot 数据目录' : '微信数据目录'}
+                选择{browseTarget === 'WeChatBot' ? 'WeChatBot 数据目录' : '微信数据目录'}
               </h4>
               <button
                 type="button"
@@ -2069,7 +2070,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
       const url = URL.createObjectURL(blob)
       const downloadAnchor = document.createElement('a')
       downloadAnchor.setAttribute("href", url)
-      downloadAnchor.setAttribute("download", `webot-config-${new Date().toISOString().slice(0, 10)}.json`)
+      downloadAnchor.setAttribute("download", `WeChatBot-config-${new Date().toISOString().slice(0, 10)}.json`)
       document.body.appendChild(downloadAnchor)
       downloadAnchor.click()
       downloadAnchor.remove()
@@ -2281,6 +2282,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
                 {activeSection === 'imagegen' && <ImageGenSection form={form} update={update} />}
                 {activeSection === 'identity' && <IdentitySection form={form} update={update} />}
                 {activeSection === 'data' && <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />}
+                {activeSection === 'broadcast' && <BroadcastGroupsPanel />}
                 {activeSection === 'sandbox' && <SandboxSection form={form} />}
               </div>
             </div>
@@ -2288,7 +2290,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
         </AnimatePresence>
       </div>
 
-      {activeSection !== 'sandbox' && (
+      {activeSection !== 'sandbox' && activeSection !== 'broadcast' && (
         <>
           <div className="mt-8 flex items-center gap-4">
             <motion.button

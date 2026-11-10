@@ -1,6 +1,6 @@
 """Welcome template manager — load/save templates and per-group mappings.
 
-Templates are stored in the configured webot data directory.  Each template has a
+Templates are stored in the configured WeChatBot data directory.  Each template has a
 unique id, a display name, and a message body with ``{new_member}`` as the
 placeholder for the new member's identifier.
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 from src.config import webot_data_path
 
-# Default path under the configured webot data directory
+# Default path under the configured WeChatBot data directory
 DEFAULT_WELCOME_CONFIG_PATH = webot_data_path("welcome_templates.json")
 
 DISABLED_SENTINEL = "__disabled__"

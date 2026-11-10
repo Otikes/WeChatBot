@@ -27,7 +27,7 @@ def _resolve_app_home() -> Path:
     if not getattr(sys, "frozen", False):
         return Path(__file__).resolve().parent
 
-    return Path.home() / "Library" / "Application Support" / "webot"
+    return Path.home() / "Library" / "Application Support" / "WeChatBot"
 
 
 RESOURCE_ROOT = _resolve_resource_root()
@@ -90,7 +90,7 @@ def open_dashboard(
             import webview as webview_module
 
         webview_module.create_window(
-            title="webot — Dashboard",
+            title="WeChatBot — Dashboard",
             url=url,
             width=1200,
             height=800,

@@ -224,7 +224,7 @@ export default function McpPanel() {
           params: {
             protocolVersion: '2025-06-18',
             capabilities: {},
-            clientInfo: { name: 'webot-ui', version: '1.0.0' },
+            clientInfo: { name: 'WeChatBot-ui', version: '1.0.0' },
           },
         }),
       })
@@ -349,7 +349,7 @@ export default function McpPanel() {
 
   const jsonConfig = JSON.stringify({
     mcpServers: {
-      webot: {
+      WeChatBot: {
         url: endpoint,
         headers: { Authorization: `Bearer ${apiKey}` },
       },
@@ -358,7 +358,7 @@ export default function McpPanel() {
 
   const sseConfig = JSON.stringify({
     mcpServers: {
-      webot: {
+      WeChatBot: {
         url: sseEndpoint,
         headers: { Authorization: `Bearer ${apiKey}` },
       },
@@ -367,7 +367,7 @@ export default function McpPanel() {
 
   const stdioConfig = JSON.stringify({
     mcpServers: {
-      webot: {
+      WeChatBot: {
         command: 'npx',
         args: [
           '-y', 'mcp-remote', endpoint,
@@ -379,7 +379,7 @@ export default function McpPanel() {
 
   const codexConfig = [
     '# ~/.codex/config.toml',
-    '[mcp_servers.webot]',
+    '[mcp_servers.WeChatBot]',
     'command = "npx"',
     'args = [',
     '  "-y", "mcp-remote",',

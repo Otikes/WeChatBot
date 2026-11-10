@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for the macOS webot app.
+PyInstaller spec for the macOS WeChatBot app.
 
 Build: .venv/bin/pyinstaller build-macos.spec
-Output: dist/webot.app
+Output: dist/WeChatBot.app
 """
 import os
 from pathlib import Path
@@ -112,7 +112,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="webot",
+    name="WeChatBot",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -132,18 +132,18 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name="webot",
+    name="WeChatBot",
 )
 
 app = BUNDLE(
     coll,
-    name="webot.app",
+    name="WeChatBot.app",
     icon=None,
-    bundle_identifier="com.webot.desktop",
+    bundle_identifier="com.wechatbot.desktop",
     codesign_identity=MACOS_CODESIGN_IDENTITY,
     entitlements_file=MACOS_ENTITLEMENTS_FILE,
     info_plist={
-        "NSAppleEventsUsageDescription": "webot needs to control WeChat and System Events to switch chats and send replies.",
-        "NSScreenCaptureUsageDescription": "webot needs to read the visible WeChat chat title and search results on macOS.",
+        "NSAppleEventsUsageDescription": "WeChatBot needs to control WeChat and System Events to switch chats and send replies.",
+        "NSScreenCaptureUsageDescription": "WeChatBot needs to read the visible WeChat chat title and search results on macOS.",
     },
 )

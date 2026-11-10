@@ -1,6 +1,6 @@
 """Analyze group chat message frequency to recommend proactive mode thresholds.
 
-Reads messages from the configured webot messages database, computes message rate distributions
+Reads messages from the configured WeChatBot messages database, computes message rate distributions
 per group, and outputs recommended thresholds for the 5 proactive modes:
 
     SLEEP / QUIET / CASUAL / LIVELY / BURST
@@ -235,7 +235,7 @@ def main():
     )
     parser.add_argument(
         "--db", default=None,
-        help="Path to SQLite database (default: configured webot data dir)",
+        help="Path to SQLite database (default: configured WeChatBot data dir)",
     )
     parser.add_argument(
         "--window", type=int, default=5,

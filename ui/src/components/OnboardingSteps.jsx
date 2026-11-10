@@ -334,7 +334,7 @@ export function Step1Prepare({ data, updateData, onDone }) {
             {phase === 'idle' && (
               <div className="space-y-6">
                 <p className="text-[14px] text-text-muted leading-relaxed">
-                  微信机器人需要从微信获取加密密钥以读取聊天记录。自动获取过程无侵入，不会影响微信正常使用。
+                  WeChatBot 需要从微信获取加密密钥以读取聊天记录。自动获取过程无侵入，不会影响微信正常使用。
                 </p>
 
                 {renderChecklist()}

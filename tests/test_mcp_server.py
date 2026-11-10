@@ -136,11 +136,20 @@ class TestMcpServer(unittest.TestCase):
             "search_messages", "get_group_activity",
             "get_member_activity", "search_contacts", "find_new_senders",
             "get_contact_profile",
+            "list_broadcast_groups", "send_message", "batch_send_messages",
+            "list_wechat_labels",
         }
         self.assertEqual(names, expected)
+        write_tools = {"send_message", "batch_send_messages"}
         for tool in listing["result"]["tools"]:
-            self.assertTrue(tool["annotations"]["readOnlyHint"])
-            self.assertFalse(tool["annotations"]["destructiveHint"])
+            annotations = tool["annotations"]
+            if tool["name"] in write_tools:
+                self.assertFalse(annotations["readOnlyHint"])
+                self.assertTrue(annotations["destructiveHint"])
+                self.assertFalse(annotations["idempotentHint"])
+            else:
+                self.assertTrue(annotations["readOnlyHint"])
+                self.assertFalse(annotations["destructiveHint"])
 
     def test_notification_returns_none(self):
         from src.mcp_server.server import handle_rpc
@@ -669,7 +678,7 @@ class TestMcpServer(unittest.TestCase):
         self.assertEqual(data["endpoint"], "http://127.0.0.1:7327/mcp")
         self.assertEqual(data["sse_endpoint"], "http://127.0.0.1:7327/mcp/sse")
         self.assertEqual(data["api_key"], "test_key_123456")
-        self.assertEqual(len(data["tools"]), 14)
+        self.assertEqual(len(data["tools"]), 18)
         self.assertIn("127.0.0.1", data["allowed_hosts"])
 
     def test_update_settings_roundtrip(self):

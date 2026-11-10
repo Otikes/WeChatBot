@@ -29,7 +29,7 @@ class FeishuConfigTests(unittest.TestCase):
             "FEISHU_AUTO_SYNC_ENABLED": "true",
             "FEISHU_AUTO_SYNC_MIN_MESSAGES": "5",
             "FEISHU_AUTO_SYNC_COOLDOWN_SEC": "600",
-            "FEISHU_KNOWLEDGE_BASE_NAME": "webot 测试沉淀",
+            "FEISHU_KNOWLEDGE_BASE_NAME": "WeChatBot 测试沉淀",
             "FEISHU_KNOWLEDGE_FOLDER_TOKEN": "fld_test",
         }
         with patch.dict(os.environ, env, clear=True):
@@ -46,7 +46,7 @@ class FeishuConfigTests(unittest.TestCase):
         self.assertTrue(cfg.feishu_auto_sync_enabled)
         self.assertEqual(cfg.feishu_auto_sync_min_messages, 5)
         self.assertEqual(cfg.feishu_auto_sync_cooldown_sec, 600)
-        self.assertEqual(cfg.feishu_knowledge_base_name, "webot 测试沉淀")
+        self.assertEqual(cfg.feishu_knowledge_base_name, "WeChatBot 测试沉淀")
         self.assertEqual(cfg.feishu_knowledge_folder_token, "fld_test")
 
     def test_load_config_rejects_invalid_feishu_export_mode(self):
@@ -410,7 +410,7 @@ class FeishuExportServiceTests(unittest.TestCase):
         cfg = BotConfig(
             feishu_export_enabled=True,
             feishu_export_mode="knowledge",
-            feishu_knowledge_base_name="webot 测试沉淀",
+            feishu_knowledge_base_name="WeChatBot 测试沉淀",
             feishu_knowledge_folder_token="fld_test",
         )
         store = self._store_with_messages()
@@ -450,7 +450,7 @@ class FeishuExportServiceTests(unittest.TestCase):
         self.assertTrue(result.ok)
         self.assertIn("已沉淀到飞书知识库", result.reply_text)
         client.create_bitable_app.assert_called_once_with(
-            name="webot 测试沉淀",
+            name="WeChatBot 测试沉淀",
             folder_token="fld_test",
         )
         created_table_names = [

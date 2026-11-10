@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 def find_wechat_pids():
-    """Find WeChat process PIDs (skip webot.exe)."""
+    """Find WeChat process PIDs (skip WeChatBot.exe)."""
     kernel32 = ct.WinDLL("kernel32", use_last_error=True)
     TH32CS_SNAPPROCESS = 0x00000002
 

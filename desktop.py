@@ -6,7 +6,7 @@ Falls back to browser if WebView2 is unavailable.
 
 Usage:
     python desktop.py
-    webot.exe  (packaged version)
+    WeChatBot.exe  (packaged version)
 """
 import os
 import sys
@@ -127,15 +127,15 @@ def main():
             ctypes.windll.user32.MessageBoxW(
                 0,
                 "Web 服务器启动超时，请检查端口 7327 是否被占用。\n\n"
-                "详情见 webot 数据目录中的 crash.log",
-                "webot — 启动失败",
+                "详情见 WeChatBot 数据目录中的 crash.log",
+                "WeChatBot — 启动失败",
                 0x10,
             )
         except Exception:
             pass
         return
 
-    title = "webot — 初始设置" if onboarding_needed else "webot — Dashboard"
+    title = "WeChatBot — 初始设置" if onboarding_needed else "WeChatBot — Dashboard"
 
     # Try native WebView2, fall back to browser
     try:

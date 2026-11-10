@@ -183,6 +183,8 @@ WeChat 123 me 80r REG 1,16 1 /tmp/other.db
             script = Path(tmp) / "macos_lldb_keyscan.py"
             script.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
             with (
+                # 隔离外部注入的 PYTHONPATH，让断言只验证 lldb 自身路径
+                patch.dict(os.environ, {"PYTHONPATH": ""}),
                 patch.object(setup, "LLDB_SCANNER_SCRIPT", script),
                 patch.object(setup, "detect_wechat_pid", return_value=123),
                 patch.object(setup, "detect_data_dir", return_value="/Users/me/xwechat_files/wxid_abc"),

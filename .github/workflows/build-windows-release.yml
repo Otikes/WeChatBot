@@ -54,11 +54,11 @@ jobs:
         shell: pwsh
         run: |
           $sourceRelease = "${{ inputs.source_windows_release }}"
-          $previousExe = Join-Path $env:RUNNER_TEMP "webot-$sourceRelease.exe"
+          $previousExe = Join-Path $env:RUNNER_TEMP "WeChatBot-$sourceRelease.exe"
           $extractor = Join-Path $env:RUNNER_TEMP "extract_windows_dlls.py"
 
           Invoke-WebRequest `
-            -Uri "https://github.com/cancelGuMu/webot/releases/download/$sourceRelease/webot.exe" `
+            -Uri "https://github.com/Otikes/WeChatBot/releases/download/$sourceRelease/WeChatBot.exe" `
             -OutFile $previousExe
 
           @'
@@ -142,12 +142,12 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ inputs.tag }}".TrimStart("v")
-          $zipPath = "dist/webot-windows-x64.zip"
+          $zipPath = "dist/WeChatBot-windows-x64.zip"
           Compress-Archive `
-            -Path "dist/webot.exe", "dist/webot-setup.exe", ".env.example" `
+            -Path "dist/WeChatBot.exe", "dist/WeChatBot-setup.exe", ".env.example" `
             -DestinationPath $zipPath `
             -Force
-          Get-ChildItem dist/webot.exe, dist/webot-setup.exe, $zipPath |
+          Get-ChildItem dist/WeChatBot.exe, dist/WeChatBot-setup.exe, $zipPath |
             Format-Table Name, Length
 
       - name: Upload assets to GitHub Release
@@ -157,6 +157,6 @@ jobs:
           overwrite_files: true
           fail_on_unmatched_files: true
           files: |
-            dist/webot.exe
-            dist/webot-setup.exe
-            dist/webot-windows-x64.zip
+            dist/WeChatBot.exe
+            dist/WeChatBot-setup.exe
+            dist/WeChatBot-windows-x64.zip

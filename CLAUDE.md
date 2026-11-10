@@ -13,7 +13,7 @@ git commit -m "<描述做了什么，为什么>"
 
 ## 每次修改必须重新打包
 
-前端代码或 Python 代码修改后，必须重新构建并打包 EXE，确保 `dist/webot.exe` 包含最新改动。
+前端代码或 Python 代码修改后，必须重新构建并打包 EXE，确保 `dist/WeChatBot.exe` 包含最新改动。
 
 ```bash
 # 1. 构建前端（如有前端改动）
@@ -23,7 +23,7 @@ cd ui && npm run build
 pyinstaller build.spec
 
 # 3. 复制到正确位置（如 PyInstaller 输出到了 ui/dist/）
-cp ui/dist/webot.exe dist/webot.exe
+cp ui/dist/WeChatBot.exe dist/WeChatBot.exe
 ```
 
 ## 每次修改必须进行功能测试
@@ -59,12 +59,12 @@ python -m pytest tests/ -v
 1. **AI 聊天/总结** — 需要真实 API Key + 微信运行
 2. **密钥提取** — 需要微信客户端运行
 3. **主动发言** — 需要微信客户端 + 真实群聊
-4. **昵称管理** — 需要配置后的 webot `messages.db` 有数据
+4. **昵称管理** — 需要配置后的 WeChatBot `messages.db` 有数据
 5. **消息发送** — 需要微信窗口可见
 
 ## 项目概述
 
-webot — 微信消息总结机器人，支持 WCDB 直读数据库、AI 自动总结/聊天/主动发言。
+WeChatBot — 微信消息总结机器人，支持 WCDB 直读数据库、AI 自动总结/聊天/主动发言。
 
 ## 技术栈
 
@@ -105,7 +105,7 @@ cd ui && npm run build
 # 打包 EXE
 pyinstaller build.spec
 
-# 输出: dist/webot.exe
+# 输出: dist/WeChatBot.exe
 ```
 
 ## 日志位置

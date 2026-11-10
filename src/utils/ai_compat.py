@@ -4,7 +4,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 OPENAI_COMPATIBLE_BASE_URL = "https://api.openai.com/v1"
-OPENAI_COMPATIBLE_LOCAL_API_KEY = "webot-local-compatible"
+OPENAI_COMPATIBLE_LOCAL_API_KEY = "WeChatBot-local-compatible"
 
 _OPENAI_ENDPOINT_SUFFIXES = (
     "/chat/completions",

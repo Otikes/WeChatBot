@@ -594,6 +594,7 @@ _WEBOT_DATA_MIGRATION_ITEMS = (
     "friend_names.json",
     "nicknames.json",
     "welcome_templates.json",
+    "broadcast_groups.json",
     "lots.json",
     "feishu_resources.json",
     "voice_cache.json",
@@ -603,7 +604,7 @@ _WEBOT_DATA_MIGRATION_ITEMS = (
 
 
 def _migrate_webot_data_dir(old_raw: str, new_raw: str) -> list[str]:
-    """Copy existing webot-owned data files when WEBOT_DATA_DIR changes."""
+    """Copy existing WeChatBot-owned data files when WEBOT_DATA_DIR changes."""
     old_dir = resolve_webot_data_dir(old_raw)
     new_dir = resolve_webot_data_dir(new_raw)
     if old_dir == new_dir or not old_dir.exists():
@@ -626,7 +627,7 @@ def _migrate_webot_data_dir(old_raw: str, new_raw: str) -> list[str]:
                 shutil.copy2(src, dst)
             copied.append(str(dst))
         except Exception:
-            logger.warning("Failed to migrate webot data item %s -> %s", src, dst, exc_info=True)
+            logger.warning("Failed to migrate WeChatBot data item %s -> %s", src, dst, exc_info=True)
     return copied
 
 
@@ -1932,6 +1933,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                          "/api/ai/models",
                          "/api/friends/selection",
                          "/api/groups/selection",
+                         "/api/broadcast/groups",
                          "/api/sandbox/test",
                          "/api/lots",
                          "/api/todos/action",
@@ -2115,7 +2117,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 }
                 export_data.update(_feishu_config_from_raw(raw))
                 export_data.update(_image_gen_config_from_raw(raw))
-                filename = f"webot-config-{_dt_date.today().isoformat()}.json"
+                filename = f"WeChatBot-config-{_dt_date.today().isoformat()}.json"
                 body = json.dumps(export_data, ensure_ascii=False, indent=2).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2232,7 +2234,7 @@ class _UIHandler(SimpleHTTPRequestHandler):
             body = self.rfile.read(content_len) if content_len else b"{}"
             try:
                 config = json.loads(body)
-                # Basic validation: must look like a webot config export
+                # Basic validation: must look like a WeChatBot config export
                 expected_keys = ['ai_backend', 'openai_model', 'summarize_model', 'wechat_backend']
                 has_keys = any(k in config for k in expected_keys)
                 if not has_keys:
@@ -2758,6 +2760,48 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 store.cleanup(chat_id)
             except Exception as e:
                 logger.exception("Todo action failed")
+                self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: Broadcast groups (system-defined; unrelated to WeChat labels) ──
+        if self.path == "/api/broadcast/groups":
+            if self.command == "GET":
+                try:
+                    from src import broadcast
+                    from src.mcp_server.data import scope_options
+
+                    self.send_json({
+                        "ok": True,
+                        "groups": broadcast.groups(),
+                        "options": scope_options(),
+                    })
+                except Exception as e:
+                    logger.exception("Failed to load broadcast groups")
+                    self.send_json({"ok": False, "error": str(e)})
+            else:
+                content_len = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_len) if content_len else b"{}"
+                try:
+                    from src import broadcast
+
+                    data = json.loads(body)
+                    saved = broadcast.save(data)
+                    self.send_json({"ok": True, "groups": saved["groups"]})
+                except ValueError as e:
+                    self.send_json({"ok": False, "error": str(e)})
+                except Exception as e:
+                    logger.exception("Failed to save broadcast groups")
+                    self.send_json({"ok": False, "error": str(e)})
+            return
+
+        # ── API: WeChat native contact labels (read-only) ──────────────
+        if self.path == "/api/wechat/labels":
+            try:
+                from src.wechat.labels import read_contact_labels
+
+                self.send_json({"ok": True, **read_contact_labels()})
+            except Exception as e:
+                logger.exception("Failed to read WeChat contact labels")
                 self.send_json({"ok": False, "error": str(e)})
             return
 

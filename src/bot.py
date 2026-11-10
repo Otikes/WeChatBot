@@ -328,7 +328,7 @@ class Bot:
         """Log the startup banner with configuration details."""
         config = self._config
         logger.info("=" * 50)
-        logger.info("webot starting...")
+        logger.info("WeChatBot starting...")
         logger.info("WeChat backend: %s", config.wechat_backend)
         logger.info("AI backend: %s", config.ai_backend)
         if config.ai_backend == "deepseek":

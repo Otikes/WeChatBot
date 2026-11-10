@@ -674,7 +674,7 @@ class LoadConfigTests(unittest.TestCase):
         """WEBOT_DATA_DIR should relocate legacy DB_PATH/LOG_FILE defaults."""
         from src.config import load_config
 
-        data_dir = Path("F:/tmp/webot-data")
+        data_dir = Path("F:/tmp/WeChatBot-data")
         with patch.dict(os.environ, {
             "OPENAI_MODEL": "chat-model",
             "WEBOT_DATA_DIR": str(data_dir),
@@ -687,10 +687,10 @@ class LoadConfigTests(unittest.TestCase):
             self.assertEqual(Path(config.log_file), data_dir.resolve() / "bot.log")
 
     def test_webot_data_dir_defaults_to_current_app_home(self):
-        """The default webot data dir should follow the active app home."""
+        """The default WeChatBot data dir should follow the active app home."""
         from src.config import load_config
 
-        app_home = Path("F:/tmp/webot-home")
+        app_home = Path("F:/tmp/WeChatBot-home")
         with patch.dict(os.environ, {
             "OPENAI_MODEL": "chat-model",
             "WEBOT_APP_HOME": str(app_home),
@@ -703,7 +703,7 @@ class LoadConfigTests(unittest.TestCase):
         """A custom DB_PATH should remain an explicit override."""
         from src.config import load_config
 
-        data_dir = Path("F:/tmp/webot-data")
+        data_dir = Path("F:/tmp/WeChatBot-data")
         explicit_db = Path("F:/tmp/custom/messages.sqlite")
         with patch.dict(os.environ, {
             "OPENAI_MODEL": "chat-model",

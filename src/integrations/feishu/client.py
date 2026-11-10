@@ -124,7 +124,7 @@ class FeishuClient:
         table_name: str,
         fields: list[dict],
     ) -> dict:
-        """Create a Bitable table with the fields used by webot."""
+        """Create a Bitable table with the fields used by WeChatBot."""
         data = self._request_json(
             "POST",
             f"/open-apis/bitable/v1/apps/{app_token}/tables",

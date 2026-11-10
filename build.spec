@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-PyInstaller spec for webot Desktop.
+PyInstaller spec for WeChatBot Desktop.
 
 Build: pyinstaller build.spec
-Output: dist/webot.exe
+Output: dist/WeChatBot.exe
 """
 import os
 import sys
@@ -122,7 +122,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='webot',
+    name='WeChatBot',
     icon='image/logo_assets/logo.ico',
     debug=False,
     bootloader_ignore_signals=False,

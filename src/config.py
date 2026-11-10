@@ -111,10 +111,10 @@ def _clean_path_value(raw: str | Path | None) -> str:
 
 
 def resolve_webot_data_dir(raw: str | Path | None = None) -> Path:
-    """Return the effective directory for webot-owned runtime data.
+    """Return the effective directory for WeChatBot-owned runtime data.
 
     ``WEBOT_DATA_DIR`` is intentionally separate from ``WECHAT_DATA_DIR``:
-    the former stores files created by webot itself, while the latter points
+    the former stores files created by WeChatBot itself, while the latter points
     at WeChat's own account data directory.
     """
     value = _clean_path_value(
@@ -129,12 +129,12 @@ def resolve_webot_data_dir(raw: str | Path | None = None) -> Path:
 
 
 def get_webot_data_dir() -> Path:
-    """Return the current webot-owned data directory from environment."""
+    """Return the current WeChatBot-owned data directory from environment."""
     return resolve_webot_data_dir()
 
 
 def webot_data_path(*parts: str | Path) -> Path:
-    """Return a path under the configured webot data directory."""
+    """Return a path under the configured WeChatBot data directory."""
     return get_webot_data_dir().joinpath(*parts)
 
 
@@ -142,7 +142,7 @@ def resolve_webot_storage_path(
     raw: str | Path | None,
     legacy_default: str,
 ) -> Path:
-    """Resolve a configurable webot-owned file path.
+    """Resolve a configurable WeChatBot-owned file path.
 
     Legacy defaults such as ``data/messages.db`` and ``data/bot.log`` are
     treated as relative to ``WEBOT_DATA_DIR`` so old .env files automatically
@@ -261,8 +261,8 @@ class BotConfig:
     # Set to the parent directory containing wxid_* folders (e.g. D:\WeChatData).
     wechat_data_dir: str = ""
 
-    # === webot Data Storage ===
-    # Custom directory for files created by webot itself (SQLite DB, logs,
+    # === WeChatBot Data Storage ===
+    # Custom directory for files created by WeChatBot itself (SQLite DB, logs,
     # nicknames, welcome templates, caches).  Leave empty to use ./data.
     webot_data_dir: str = "data"
 
@@ -325,7 +325,7 @@ class BotConfig:
     # === Welcome New Member ===
     # Master switch — automatically send a welcome message when a new
     # member joins a group chat.  Welcome templates and per-group settings
-    # are stored in the configured webot data directory.
+    # are stored in the configured WeChatBot data directory.
     welcome_enabled: bool = False
 
     # === Sticky Mention ===

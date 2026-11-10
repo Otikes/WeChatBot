@@ -1,6 +1,6 @@
 import { useState, useEffect, lazy, Suspense, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare, ChatCircleDots, Coins, PlugsConnected } from '@phosphor-icons/react'
+import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare, ChatCircleDots, Coins, PlugsConnected, Tag } from '@phosphor-icons/react'
 import Dashboard from './components/Dashboard'
 
 // 非首屏面板按需加载，避免启动时解析全部面板代码
@@ -13,6 +13,7 @@ const LogViewer = memo(lazy(() => import('./components/LogViewer')))
 const TodoManager = memo(lazy(() => import('./components/TodoManager')))
 const TokenStats = memo(lazy(() => import('./components/TokenStats')))
 const McpPanel = memo(lazy(() => import('./components/McpPanel')))
+const WeChatLabelsPanel = memo(lazy(() => import('./components/WeChatLabelsPanel')))
 const Onboarding = memo(lazy(() => import('./components/Onboarding')))
 
 function PanelFallback() {
@@ -40,6 +41,7 @@ const TABS = [
       { id: 'imagegen', label: '生图模型配置' },
       { id: 'identity', label: '机器人身份' },
       { id: 'data', label: '数据路径' },
+      { id: 'broadcast', label: '群发分组' },
       { id: 'sandbox', label: '提示词沙箱' },
     ],
   },
@@ -57,6 +59,7 @@ const TABS = [
     ],
   },
   { id: 'friend-chat', label: '好友私聊', icon: ChatCircleDots },
+  { id: 'wechat-labels', label: '通讯录标签', icon: Tag },
   { id: 'nicknames', label: '群聊配置', icon: Users },
   { id: 'todo-manager', label: '群聊待办', icon: CheckSquare },
   { id: 'logs', label: '运行日志', icon: Scroll },
@@ -196,11 +199,11 @@ export default function App() {
         <div className="p-5 flex flex-col h-full">
           <div className="flex items-center gap-3 mb-8 shrink-0">
               <div className="relative">
-                <img src="/logo-128.png" alt="webot" className="w-9 h-9 rounded-full border border-border-main" />
+                <img src="/logo-128.png" alt="WeChatBot" className="w-9 h-9 rounded-full border border-border-main" />
                 <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-bg-main transition-colors duration-300 ${!wsConnected ? 'bg-[#d45656] animate-pulse' : (status.running ? 'bg-brand-green' : 'bg-slate-500')}`} />
               </div>
               <div>
-                <h1 className="text-sm font-semibold tracking-tight text-text-main">微信机器人</h1>
+                <h1 className="text-sm font-semibold tracking-tight text-text-main">WeChatBot</h1>
                 <p className="text-xs text-text-muted font-mono font-medium">{!wsConnected ? '连接已断开' : (status.running ? '运行中' : '已停止')}</p>
               </div>
             </div>
@@ -339,6 +342,7 @@ export default function App() {
             {activeTab === 'dashboard' && <Dashboard status={status} onResetComplete={handleResetComplete} />}
             {activeTab === 'token-stats' && <TokenStats />}
             {activeTab === 'mcp' && <McpPanel />}
+            {activeTab === 'wechat-labels' && <WeChatLabelsPanel />}
             {activeTab === 'config' && <ConfigPanel activeSection={configSection} onNavigate={setConfigSection} />}
             {activeTab === 'features' && <FeaturesPanel activeSection={featuresSection} onNavigate={setFeaturesSection} />}
             {activeTab === 'friend-chat' && <FriendChatPanel />}

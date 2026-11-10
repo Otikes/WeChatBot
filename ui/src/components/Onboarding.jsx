@@ -111,11 +111,11 @@ export default function Onboarding({ onComplete }) {
           <div>
             <div className="flex items-center gap-3 mb-8">
               <div className="relative">
-                <img src="/logo-128.png" alt="webot" className="w-9 h-9 rounded-full border border-border-main" />
+                <img src="/logo-128.png" alt="WeChatBot" className="w-9 h-9 rounded-full border border-border-main" />
                 <div className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ring-2 ring-bg-main bg-brand-green animate-pulse" />
               </div>
               <div>
-                <h1 className="text-sm font-semibold tracking-tight text-text-main">微信机器人</h1>
+                <h1 className="text-sm font-semibold tracking-tight text-text-main">WeChatBot</h1>
                 <p className="text-[11px] text-text-muted font-mono font-medium tracking-wider uppercase">启动工坊</p>
               </div>
             </div>

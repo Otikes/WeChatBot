@@ -41,7 +41,7 @@ class _CursorProxy:
 class ThreadSafeConnection:
     """Proxy serializing all sqlite3 calls behind a single RLock.
 
-    webot shares one connection across poll workers, the web server and
+    WeChatBot shares one connection across poll workers, the web server and
     the health monitor; sqlite3 connections are not thread-reentrant,
     which caused sporadic InterfaceError / UNIQUE-constraint failures
     under concurrent inserts (silently dropping messages).  Results are

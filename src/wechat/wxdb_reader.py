@@ -2694,6 +2694,179 @@ class WeChatDB:
         """所有标签名（给「这个标签存不存在」这类判断用）。"""
         return [x["name"] for x in self.list_labels() if x.get("name")]
 
+    # ------------------------------------------------------------------
+    # 通讯录标签成员（纯只读，跨微信版本动态探表）
+    # ------------------------------------------------------------------
+    def _label_contact_columns(self, conn: sqlite3.Connection, table: str):
+        """在候选关联表里找出 (标签列, 联系人列)；无法确认时返回 (None, None)。"""
+        try:
+            cols = [str(r[1]) for r in conn.execute(f'PRAGMA table_info("{table}")')]
+        except Exception:
+            return None, None
+        label_candidates = [c for c in cols if "label" in c.lower()]
+        # 优先 label_id*，避开 label_name*，短列名优先
+        label_candidates.sort(
+            key=lambda c: ("id" not in c.lower(), "name" in c.lower(), len(c))
+        )
+        label_col = label_candidates[0] if label_candidates else None
+        contact_col = None
+        for hint in ("contact", "username", "user_name", "wxid", "member", "uid"):
+            for c in cols:
+                if c != label_col and hint in c.lower():
+                    contact_col = c
+                    break
+            if contact_col:
+                break
+        if contact_col is None:
+            for c in cols:
+                low = c.lower().rstrip("_")
+                if c != label_col and (low.endswith("id") or low == "usrname"):
+                    contact_col = c
+                    break
+        return label_col, contact_col
+
+    def contact_label_report(self) -> dict:
+        """读微信自带的通讯录标签及成员（纯只读，尽力而为，绝不抛影响主流程）。
+
+        标签定义来自 ``contact_label``（见 :meth:`list_labels`）。「标签 ↔ 好友」
+        的关联方式在微信 4.x 各版本里并不统一，因此动态枚举 ``contact.db``
+        中含 label 的表并探列，依次尝试两种来源：
+
+        1. 独立关联表（如 ``contact_label_contact``）：读 (label_id, contact) 两列；
+           若关联表存的是 ``contact.id`` 数字，则用 contact 表还原成 wxid。
+        2. ``contact`` 表里直接存逗号分隔 label id 的字段（如 ``label_list_``）。
+
+        任何一步失败都静默降级：``available=False`` 或 ``members`` 为空。
+        返回的 ``source`` / ``tables`` 只用于诊断，便于实机确认关联表名。
+
+        Returns:
+            ``{"available": bool, "labels": [{label_id, name, sort_order,
+            member_count, members: [wxid, ...]}], "source": str,
+            "tables": [str], "note": str}``
+        """
+        report = {
+            "available": False, "labels": [], "source": "", "tables": [], "note": "",
+        }
+        labels = self.list_labels()
+        if not labels:
+            report["note"] = (
+                "未读取到 contact_label 表（微信版本不支持、未登录或正在 checkpoint）"
+            )
+            return report
+        report["available"] = True
+
+        conn = self._contact_conn()
+        if conn is None:
+            report["note"] = "contact.db 不可读"
+            return report
+
+        mapping: dict[str, list[str]] = {}
+        try:
+            tables = [
+                str(r[0]) for r in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                )
+            ]
+            report["tables"] = [t for t in tables if "label" in t.lower()]
+
+            # contact.id -> username：关联表存数字 id 时用它还原 wxid
+            id_to_username: dict[str, str] = {}
+            try:
+                contact_cols = {
+                    str(r[1]).lower()
+                    for r in conn.execute("PRAGMA table_info(contact)")
+                }
+                if {"id", "username"} <= contact_cols:
+                    id_to_username = {
+                        str(r[0]): str(r[1]).strip()
+                        for r in conn.execute("SELECT id, username FROM contact")
+                        if str(r[1] or "").strip()
+                    }
+            except Exception:
+                pass
+
+            for table in report["tables"]:
+                if table.lower() == "contact_label":
+                    continue
+                label_col, contact_col = self._label_contact_columns(conn, table)
+                if not label_col or not contact_col:
+                    continue
+                try:
+                    rows = conn.execute(
+                        f'SELECT "{label_col}", "{contact_col}" FROM "{table}"'
+                    ).fetchall()
+                except Exception:
+                    continue
+                for row in rows:
+                    label_id = str(row[0] if row[0] is not None else "").strip()
+                    raw = str(row[1] if row[1] is not None else "").strip()
+                    if not label_id or not raw:
+                        continue
+                    wxid = id_to_username.get(raw, "" if raw.isdigit() else raw)
+                    if not wxid:
+                        continue
+                    bucket = mapping.setdefault(label_id, [])
+                    if wxid not in bucket:
+                        bucket.append(wxid)
+                if mapping:
+                    report["source"] = f"{table}.{label_col}/{contact_col}"
+                    break
+
+            # 回退：contact 表内直接存 label id 列表
+            if not mapping:
+                try:
+                    cols = [str(r[1]) for r in conn.execute("PRAGMA table_info(contact)")]
+                except Exception:
+                    cols = []
+                fields = [
+                    c for c in cols
+                    if "label" in c.lower() and "name" not in c.lower()
+                ]
+                if fields and "username" in cols:
+                    field = fields[0]
+                    try:
+                        rows = conn.execute(
+                            f'SELECT "{field}", username FROM contact'
+                        ).fetchall()
+                    except Exception:
+                        rows = []
+                    for row in rows:
+                        username = str(row[1] or "").strip()
+                        raw = str(row[0] or "").strip()
+                        if not username or not raw:
+                            continue
+                        for label_id in re.split(r"[,;|\s]+", raw):
+                            label_id = label_id.strip()
+                            if not label_id:
+                                continue
+                            bucket = mapping.setdefault(label_id, [])
+                            if username not in bucket:
+                                bucket.append(username)
+                    if mapping:
+                        report["source"] = f"contact.{field}"
+        except Exception as exc:
+            logging.getLogger(__name__).debug("contact_label_report failed: %s", exc)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        out = []
+        for label in labels:
+            members = mapping.get(str(label["label_id"]), [])
+            out.append({
+                "label_id": str(label["label_id"]),
+                "name": label["name"],
+                "sort_order": label["sort_order"],
+                "member_count": len(members),
+                "members": members,
+            })
+        report["labels"] = out
+        if not report["source"]:
+            report["note"] = "未找到标签与联系人的关联表（该微信版本可能用了不同的表结构）"
+        return report
+
     def get_groups(self) -> List[dict]:
         """列出所有群聊。
 

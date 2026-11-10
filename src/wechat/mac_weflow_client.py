@@ -1,6 +1,6 @@
 """macOS WeFlow-style WCDB reader.
 
-This client mirrors the part of WeFlow we need for webot: use the stable
+This client mirrors the part of WeFlow we need for WeChatBot: use the stable
 ``@chatroom`` id as the target key, then resolve display names from WeChat's
 local WCDB contact data.  It intentionally exposes the same small shape the
 macOS backend already consumes: new messages, sessions, chatrooms and contacts.

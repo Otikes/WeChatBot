@@ -1,8 +1,9 @@
-# webot 代码参考手册
+# WeChatBot 代码参考手册
 
 > 微信消息总结机器人 — 完整代码架构与 API 参考文档
 > 生成日期: 2026-06-11
 > 最后更新: 2026-06-11
+> 二开新增模块（系统群发分组、微信通讯录标签只读、消息发送 MCP 工具、品牌改名）统一收录于文末 [附录：WeChatBot 二次开发新增模块](#附录wechatbot-二次开发新增模块)；正文 §1–§5 仍描述二开前的既有架构，二者并存、互不覆盖。
 
 ---
 
@@ -75,6 +76,7 @@ grep "文件名" CODEBASE_REFERENCE.md
    - [功能K: macOS适配](#功能k-macos适配)
    - [功能L: 文生图](#功能l-文生图)
 5. [配置文件和环境变量](#5-配置文件和环境变量)
+6. [附录：WeChatBot 二次开发新增模块](#附录wechatbot-二次开发新增模块)
 
 ---
 
@@ -102,7 +104,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `GROUP_CHAT_ENABLED` | `bool` | `True` | `src/config.py` | `src/router.py:handle()` (群聊 @ 对话与主动发言) |
 | `FRIEND_CHAT_ENABLED` | `bool` | `True` | `src/config.py` | `src/router.py:_handle_friend_chat()`, `src/wechat/wcdb_backend.py:_poll_cycle()` |
 | `WECHAT_DATA_DIR` | `str` | `""` | `src/config.py` | `src/wechat/data_dir.py`, `src/wechat/local_wcdb_client.py`, `src/voice/file_locator.py`, `src/web/server.py` |
-| `WEBOT_DATA_DIR` | `str` | 当前应用目录下 `data/` (留空) | `src/config.py` | `src/config.py` 路径辅助函数；webot 自有 DB、日志、昵称、模板、群缓存、语音缓存、崩溃日志 |
+| `WEBOT_DATA_DIR` | `str` | 当前应用目录下 `data/` (留空) | `src/config.py` | `src/config.py` 路径辅助函数；WeChatBot 自有 DB、日志、昵称、模板、群缓存、语音缓存、崩溃日志 |
 | `BOT_DISPLAY_NAME` | `str` | `"群聊小助手"` | `src/config.py` (经 `_sanitize_display_name` 清洗) | `src/router.py:handle()` (多处), `src/bot.py:_log_banner()` |
 | `ADMIN_WXID` | `str` | `""` | `src/config.py` | `src/router.py:handle()` (管理员命令判断) |
 | `TRIGGER_KEYWORDS` | `list[str]` | 见下方默认值 | `src/config.py` | `src/trigger/detector.py:TriggerDetector.__init__()` |
@@ -196,7 +198,7 @@ grep "文件名" CODEBASE_REFERENCE.md
 | `DEFAULT_NICKNAME_PATH` | `Path` | `<WEBOT_DATA_DIR>/nicknames.json` | `src/nickname.py` | 昵称映射文件路径 |
 | `DEFAULT_WELCOME_CONFIG_PATH` | `Path` | `<WEBOT_DATA_DIR>/welcome_templates.json` | `src/welcome.py` | 欢迎模板文件路径 |
 | `HEX_KEY_LEN` | `int` | `64` | `src/wechat/mac_weflow_client.py` | WCDB 密钥长度 |
-| `_FIRST_RUN_ENV_DEFAULTS` | `dict[str, str]` | 见代码 | `src/web/server.py` | 重置为首次运行时需要从进程环境清除的 webot 配置键集合 |
+| `_FIRST_RUN_ENV_DEFAULTS` | `dict[str, str]` | 见代码 | `src/web/server.py` | 重置为首次运行时需要从进程环境清除的 WeChatBot 配置键集合 |
 | `_CACHE_MAX_ENTRIES` | `int` | `10000` | `src/voice/pipeline.py` | 语音缓存最大条目 |
 | `_CACHE_TTL_SEC` | `int` | `604800` (7天) | `src/voice/pipeline.py` | 语音缓存过期时间 |
 | `GENERATE_TIMEOUT_SEC` | `int` | `180` | `src/imagegen/generator.py` | 生图 API 请求超时 |
@@ -249,10 +251,10 @@ image_gen_keywords: list[str] = [
 | `_sanitize_display_name(name)` | ~40 | 清理机器人显示名中的危险字符 | `name: str` | `str` |
 | `_resolve_project_root()` | ~70 | 解析项目根目录(支持 EXE frozen 模式) | 无 | `Path` |
 | `_clean_path_value(raw)` | ~90 | 清理路径配置值，去掉引号并展开环境变量 | `raw: str \| Path \| None` | `str` |
-| `resolve_webot_data_dir(raw=None)` | ~97 | 解析 webot 自有数据目录；留空默认当前 `WEBOT_APP_HOME`/应用目录下 `data/` | `raw: str \| Path \| None` | `Path` |
-| `get_webot_data_dir()` | ~113 | 从当前环境读取并返回 webot 自有数据目录 | 无 | `Path` |
-| `webot_data_path(*parts)` | ~118 | 拼接 webot 自有数据目录下的文件/子目录路径 | `*parts: str \| Path` | `Path` |
-| `resolve_webot_storage_path(raw, legacy_default)` | ~123 | 解析 webot 自有文件路径；`data/messages.db`、`data/bot.log` 等 legacy 默认跟随 `WEBOT_DATA_DIR`，显式自定义路径保留覆盖 | `raw: str \| Path \| None, legacy_default: str` | `Path` |
+| `resolve_webot_data_dir(raw=None)` | ~97 | 解析 WeChatBot 自有数据目录；留空默认当前 `WEBOT_APP_HOME`/应用目录下 `data/` | `raw: str \| Path \| None` | `Path` |
+| `get_webot_data_dir()` | ~113 | 从当前环境读取并返回 WeChatBot 自有数据目录 | 无 | `Path` |
+| `webot_data_path(*parts)` | ~118 | 拼接 WeChatBot 自有数据目录下的文件/子目录路径 | `*parts: str \| Path` | `Path` |
+| `resolve_webot_storage_path(raw, legacy_default)` | ~123 | 解析 WeChatBot 自有文件路径；`data/messages.db`、`data/bot.log` 等 legacy 默认跟随 `WEBOT_DATA_DIR`，显式自定义路径保留覆盖 | `raw: str \| Path \| None, legacy_default: str` | `Path` |
 | `find_env_file()` | ~152 | 按优先级查找 .env 文件 | 无 | `Path \| None` |
 | `_validate_config(kwargs)` | ~352 | 验证数值配置范围 | `kwargs: dict` | `None` (无效时抛 RuntimeError) |
 | `load_config()` | ~471 | 从环境变量加载并验证配置，解析 `WEBOT_DATA_DIR`、`DB_PATH`、`LOG_FILE` 的有效路径 | 无 | `BotConfig` |
@@ -737,18 +739,18 @@ image_gen_keywords: list[str] = [
 | `_set_env_key(env_path, key, value)` | 原子设置 .env 键值 | `env_path: Path, key: str, value: str` | `None` |
 | `_read_env_raw(env_path)` | 从 `.env` 读取简单键值对，忽略注释和空行 | `env_path: Path \| None` | `dict[str, str]` |
 | `_write_env_updates(env_path, updates)` | 批量原子写入 `.env` 并同步 `os.environ` | `env_path: Path, updates: dict[str, str \| None]` | `list[str]` |
-| `_migrate_webot_data_dir(old_raw, new_raw)` | `WEBOT_DATA_DIR` 变更且 bot 已停止时，非覆盖复制旧目录中的 webot 自有数据文件/模型目录到新目录 | `old_raw: str, new_raw: str` | `list[str]` |
+| `_migrate_webot_data_dir(old_raw, new_raw)` | `WEBOT_DATA_DIR` 变更且 bot 已停止时，非覆盖复制旧目录中的 WeChatBot 自有数据文件/模型目录到新目录 | `old_raw: str, new_raw: str` | `list[str]` |
 | `_remove_env_keys(env_path, keys)` | 从 `.env` 和 `os.environ` 移除指定键，用于清理旧引导草稿键 | `env_path: Path, keys: set[str]` | `None` |
 | `_onboarding_db_path()` | 返回结构化应用状态使用的 SQLite 路径；legacy `DB_PATH=data/messages.db` 跟随 `WEBOT_DATA_DIR` | 无 | `Path` |
 | `_read_onboarding_state()` | 读取 SQLite `onboarding_state` 单行草稿/进度 | 无 | `dict \| None` |
 | `_save_onboarding_state(updates)` | 将引导草稿/步骤进度增量保存到 SQLite | `updates: dict` | `None` |
 | `_reset_onboarding_database(db_path)` | 删除指定 SQLite 数据库中的引导草稿/进度行 | `db_path: Path` | `None` |
 | `_reset_onboarding_state()` | 删除当前 SQLite 数据库中的引导草稿/进度行 | 无 | `None` |
-| `_runtime_data_dir()` | 返回运行缓存/日志所在的 webot 自有数据目录 | 无 | `Path` |
+| `_runtime_data_dir()` | 返回运行缓存/日志所在的 WeChatBot 自有数据目录 | 无 | `Path` |
 | `_reset_runtime_database(db_path)` | 清空 `messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos` 等运行表 | `db_path: Path` | `dict` |
 | `_reset_runtime_files(data_dir)` | 删除生成的运行日志和缓存文件，如 `bot.log`、`bot_status.json`、群元数据、昵称缓存 | `data_dir: Path` | `list[str]` |
 | `_reset_in_memory_onboarding()` | 重置内存中的引导草稿和密钥提取状态 | 无 | `None` |
-| `_reset_app_config_to_first_run()` | 删除 `.env`、清除进程内 webot 配置键，并重置引导内存状态 | 无 | `dict` |
+| `_reset_app_config_to_first_run()` | 删除 `.env`、清除进程内 WeChatBot 配置键，并重置引导内存状态 | 无 | `dict` |
 | `_reset_runtime_data()` | 停止状态下清空本地数据、删除 `.env`、清理 `onboarding_state` 并返回首次运行状态；运行中返回 `requires_stop` | 无 | `dict` |
 | `_onboarding_draft_from_row(row)` | 从 SQLite 行生成引导页可回填草稿 | `row: dict` | `dict` |
 | `_onboarding_draft_from_raw(raw)` | 从旧 `.env` 键值生成引导页可回填草稿(兼容迁移) | `raw: dict[str, str]` | `dict` |
@@ -777,7 +779,7 @@ image_gen_keywords: list[str] = [
 | `ConfigPanel.jsx` | `AiSection` | 系统配置里的 LLM模型配置；支持模型获取和选择 |
 | `ConfigPanel.jsx` | `VoiceSection` | 系统配置里的语音模型配置；本地/云端识别后端切换与模型下载 |
 | `ConfigPanel.jsx` | `ImageGenSection` | 系统配置里的生图模型配置；总开关 + 协议/密钥/地址 + 生图模型/尺寸选择；OpenAI Images 通过 `/api/ai/models` 获取模型列表，Google/DashScope 使用内置模型选项 |
-| `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 webot 数据目录与微信数据目录配置；webot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
+| `ConfigPanel.jsx` | `DataPathSection` | 系统配置里的 WeChatBot 数据目录与微信数据目录配置；WeChatBot 目录支持浏览/手输并与微信目录分离，微信目录支持浏览、检测和手输路径 |
 | `FriendChatPanel.jsx` | `FriendChatPanel` | 左侧“好友私聊”页：好友勾选列表/搜索/全选/清空，保存走 `/api/friends/selection`；好友总开关关闭时显示提示 |
 | `FeaturesPanel.jsx` | `ChatSection` | 功能开关 → AI 对话：群聊 AI 对话与好友私聊 AI 对话两个总开关 |
 | `McpPanel.jsx` | `McpPanel` | 「MCP 服务」页：展示请求地址/API Key、启停开关、一键轮换密钥（自动生成随机新密钥并复制）、一键复制全部配置、Trae/Claude Desktop/Codex/SSE/curl 客户端配置、真实连接测试、工具清单 |
@@ -947,7 +949,7 @@ _API 请求 → _UIHandler._handle_request()
   ├── /api/stop           → _stop_bot()
   ├── /api/runtime/reset  → _reset_runtime_data() → 清运行表/缓存文件、删除 .env、重置 onboarding 并刷新状态
   ├── /api/load-config    → _find_or_create_env() → 读取 .env
-  ├── /api/config         → 写入 .env；WEBOT_DATA_DIR 变更且 bot 停止时复制旧 webot 数据
+  ├── /api/config         → 写入 .env；WEBOT_DATA_DIR 变更且 bot 停止时复制旧 WeChatBot 数据
   ├── /api/ai/models      → _fetch_ai_models() → _request_json()
   ├── /api/nicknames      → NicknameService
   ├── /api/nicknames/groups → <WEBOT_DATA_DIR>/group_names.json / messages.db
@@ -1362,9 +1364,9 @@ MessageRouter.handle(msg) → [无 @mention]
 | `POST` | `/api/stop` | 停止 bot | 无 |
 | `POST` | `/api/runtime/reset` | 停止状态下清空本地运行数据、删除 `.env`、清除密钥/AI/功能配置和 `onboarding_state`，使前端回到首次启动流程 | 无 |
 | `GET` | `/api/load-config` | 加载当前配置 (保留可编辑密钥原值用于配置回填) | 无 |
-| `POST` | `/api/config` | 保存配置到 .env；持久化 `WEBOT_DATA_DIR`，停止状态下复制旧 webot 数据到新目录 | 无 |
+| `POST` | `/api/config` | 保存配置到 .env；持久化 `WEBOT_DATA_DIR`，停止状态下复制旧 WeChatBot 数据到新目录 | 无 |
 | `GET` | `/api/config/export` | 导出配置为 JSON 文件 | 无 |
-| `POST` | `/api/config/import` | 导入 JSON 配置文件；支持导入 `WEBOT_DATA_DIR` 并迁移旧 webot 数据 | 无 |
+| `POST` | `/api/config/import` | 导入 JSON 配置文件；支持导入 `WEBOT_DATA_DIR` 并迁移旧 WeChatBot 数据 | 无 |
 | `POST` | `/api/ai/models` | 根据 `ai_backend`、请求地址和 Key 动态获取模型列表 | 无 |
 | `GET` | `/api/nicknames?chat_id=xxx` | 获取群成员昵称列表 | 无 |
 | `POST` | `/api/nicknames` | 保存/删除昵称映射 | 无 |
@@ -1837,7 +1839,7 @@ MacHybridBackend
 
 | 环境变量 | 说明 |
 |---|---|
-| `WEBOT_APP_HOME` | 应用数据目录 (默认 `~/Library/Application Support/webot`) |
+| `WEBOT_APP_HOME` | 应用数据目录 (默认 `~/Library/Application Support/WeChatBot`) |
 | `MAC_WECHAT_APP_NAME` | 微信应用名 (默认 `"WeChat"`) |
 | `MAC_WECHAT_SEND_SHORTCUT` | 发送快捷键 (`"enter"` 或 `"cmd_enter"`) |
 | `MAC_CHAT_TITLE_MAP` | 聊天标题映射 (`{"username": "display_name", ...}` JSON) |
@@ -1848,7 +1850,7 @@ MacHybridBackend
 
 #### macOS 构建 (`build-macos.spec`)
 
-- 输出: `dist/webot.app`
+- 输出: `dist/WeChatBot.app`
 - 捆绑 `libWCDB.dylib` → `native/macos/`
 - hiddenimports 包含 `AppKit`, `Quartz`, `objc` 等 macOS 框架
 - excludes 排除 Windows 专用模块 (`uiautomation`, `win32api`, `comtypes` 等)
@@ -1942,7 +1944,7 @@ WECHAT_FRIENDS=                                # 好友名/wxid(逗号分隔, UR
 GROUP_CHAT_ENABLED=true                        # 群聊 AI 对话总开关；false 时不回复 @ 闲聊，主动发言也停止
 FRIEND_CHAT_ENABLED=true                       # 好友私聊 AI 对话总开关；false 时完全不轮询好友私聊
 WECHAT_DATA_DIR=                               # 微信数据目录(留空自动从微信进程参数/默认目录检测)
-WEBOT_DATA_DIR=                                # webot 自身数据目录(留空=程序目录下 data；不影响微信数据目录)
+WEBOT_DATA_DIR=                                # WeChatBot 自身数据目录(留空=程序目录下 data；不影响微信数据目录)
 
 # === 机器人身份 ===
 BOT_DISPLAY_NAME=群聊小助手                     # 机器人显示名
@@ -2038,7 +2040,7 @@ WCDB_KEY=
 
 ```python
 # 入口: desktop.py
-# 输出: dist/webot.exe
+# 输出: dist/WeChatBot.exe
 # 二进制:
 #   - WebView2Loader.dll → runtimes/win-x64/native
 #   - WebBrowserInterop.x64.dll → lib/
@@ -2055,15 +2057,15 @@ WCDB_KEY=
 
 #### Windows 安装包 (`installer.nsi`)
 
-- 输出: `dist/webot-setup.exe`
-- 页面: 欢迎 → 许可证 → 安装目录 → webot 数据目录 → 安装进度 → 完成
-- 安装目录默认: `$LOCALAPPDATA\webot`
+- 输出: `dist/WeChatBot-setup.exe`
+- 页面: 欢迎 → 许可证 → 安装目录 → WeChatBot 数据目录 → 安装进度 → 完成
+- 安装目录默认: `$LOCALAPPDATA\WeChatBot`
 - 升级安装时会从 HKCU 卸载注册表键读取 `InstallLocation`，自动复用上次安装目录；兼容旧版安装包，旧版没有该字段时从 `UninstallString` 推断安装目录
-- 覆盖 `$INSTDIR\webot.exe` 前会先尝试删除旧文件；如果被运行中的 webot 占用，安装器会提示用户并调用 `taskkill /IM webot.exe /T /F` 自动关闭后重试，避免出现 NSIS 原生的 Abort/Retry/Ignore 写入失败弹窗
-- webot 数据目录默认: `$INSTDIR\data`；用户可在安装时浏览/手输其他目录
+- 覆盖 `$INSTDIR\WeChatBot.exe` 前会先尝试删除旧文件；如果被运行中的 WeChatBot 占用，安装器会提示用户并调用 `taskkill /IM WeChatBot.exe /T /F` 自动关闭后重试，避免出现 NSIS 原生的 Abort/Retry/Ignore 写入失败弹窗
+- WeChatBot 数据目录默认: `$INSTDIR\data`；用户可在安装时浏览/手输其他目录
 - 安装阶段会创建所选数据目录，并向 `$INSTDIR\.env` 追加 `WEBOT_DATA_DIR=<所选目录>`；如果 `.env` 不存在，先从 `.env.example` 复制
 - 安装完成会向 HKCU 卸载注册表键写入 `InstallLocation`、`WebotDataDir`、`QuietUninstallString` 等字段；升级安装时优先复用 `WebotDataDir`，旧版没有该字段时从既有 `.env` 的最后一个 `WEBOT_DATA_DIR=` 读取
-- 该目录只保存 webot 自身数据，不移动、不修改微信自己的数据目录
+- 该目录只保存 WeChatBot 自身数据，不移动、不修改微信自己的数据目录
 - 静默安装未显示自定义页时，`WEBOT_DATA_DIR` 自动回退为 `$INSTDIR\data`
 
 ### 5.3 `requirements.txt` 依赖说明
@@ -2100,7 +2102,7 @@ WCDB_KEY=
 
 ### 5.5 数据文件 (运行时生成)
 
-默认情况下，webot 自身生成的数据写入 `WEBOT_DATA_DIR`（留空时为程序目录下 `data/`）。`DB_PATH` 与 `LOG_FILE` 如果保持 `data/messages.db` / `data/bot.log` legacy 默认，也会跟随 `WEBOT_DATA_DIR`；只有填写其他显式路径时才单独覆盖。`WECHAT_DATA_DIR` 仍只指向微信自己的数据目录，不参与这些文件的存储。
+默认情况下，WeChatBot 自身生成的数据写入 `WEBOT_DATA_DIR`（留空时为程序目录下 `data/`）。`DB_PATH` 与 `LOG_FILE` 如果保持 `data/messages.db` / `data/bot.log` legacy 默认，也会跟随 `WEBOT_DATA_DIR`；只有填写其他显式路径时才单独覆盖。`WECHAT_DATA_DIR` 仍只指向微信自己的数据目录，不参与这些文件的存储。
 
 | 文件路径 | 生成者 | 内容 |
 |---|---|---|
@@ -2119,4 +2121,334 @@ WCDB_KEY=
 | `<WEBOT_DATA_DIR>/crash.log` | `desktop.py` / `desktop_mac.py` | 崩溃日志 |
 | `<WEBOT_DATA_DIR>/models/` | `src/voice/asr.py` | 本地 Whisper 模型缓存 |
 
-`POST /api/runtime/reset` 会清空配置后的 `messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)，删除当前及重置后默认 webot 数据目录中的运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)，删除 `.env`，清理 `onboarding_state` 和进程内 webot 配置键，使前端重新进入首次启动流程；不删除欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。
+`POST /api/runtime/reset` 会清空配置后的 `messages.db` 中的运行表(`messages`、`user_last_message`、`trigger_log`、`group_memory`、`todos`)，删除当前及重置后默认 WeChatBot 数据目录中的运行缓存/日志文件(`bot.log`、`bot_status.json`、`send_failures.log`、`group_members.json`、`group_names.json`、`nicknames.json`)，删除 `.env`，清理 `onboarding_state` 和进程内 WeChatBot 配置键，使前端重新进入首次启动流程；不删除欢迎模板、抽签配置、飞书资源记录、语音模型或语音缓存。
+
+---
+
+## 附录：WeChatBot 二次开发新增模块
+
+> 本附录记录项目从上游 `webot` 二次开发为 **WeChatBot** 后，本次会话新增/修改的模块。正文 §1–§5 描述的是二开前的既有架构，本附录与正文并存、互不覆盖：新增内容统一放在这里，正文仅保留少量交叉引用（见文首指引与目录第 6 项）。所有函数签名、常量、参数均逐字取自源码。
+>
+> 本次变更一览：
+> - 新增「系统群发分组」配置层 `src/broadcast.py`（独立于微信原生通讯录标签）；
+> - 新增「微信通讯录标签」只读读取链 `src/wechat/labels.py` → `wxdb_reader.py` → `local_wcdb_client.py`；
+> - `src/mcp_server/data.py` 新增消息发送（单发/批量共用内核）与分组/标签只读工具，`server.py` 的 `TOOLS` 由 14 增至 18 个（新增 4 个）；
+> - `src/web/server.py` 新增 3 个 Web API 端点、1 条 `do_POST` 白名单与 1 个数据迁移项；
+> - 前端新增 2 个面板、2 处 `TABS`/分支改动；
+> - 品牌统一改名 WeChatBot，但一批内部标识符刻意保持不变（见 附录.5）。
+
+### 附录.1 新增源文件
+
+#### 附录.1.1 `src/broadcast.py` — 群发分组配置（独立于微信原生标签）
+
+用户在控制台自行维护的分组，**与微信自带的通讯录标签完全独立**：不读取、不导入、不同步微信标签，两者互不影响。同一分组里可同时放好友和群聊，用 `type` 区分。配置存数据目录的 `broadcast_groups.json`，不写进 `.env`（`.env` 是纯文本 key=value，装不下嵌套结构且并发写会互相覆盖）。所有写操作经模块级 `threading.RLock` + `.tmp` 临时文件原子替换；每次读取都重新读盘，改完无需重启机器人。
+
+**模块级常量**
+
+| 常量 | 值 | 用途 |
+|---|---|---|
+| `CONFIG_FILE` | `"broadcast_groups.json"` | 配置文件名，交给 `webot_data_path(CONFIG_FILE)` 定位 |
+| `CONFIG_VERSION` | `1` | 配置结构版本 |
+| `MAX_GROUPS` | `100` | 分组数量上限 |
+| `MAX_NAME_CHARS` | `60` | 分组名 / 目标展示名最大字符数 |
+| `MAX_TARGETS_PER_GROUP` | `500` | 单分组目标数上限 |
+| `MAX_TOTAL_TARGETS` | `5000` | 所有分组目标总数上限 |
+| `VALID_TYPES` | `("friend", "group")` | 合法目标类型 |
+| `_lock` | `threading.RLock()` | 模块级锁，保护 `save()` 的原子写 |
+
+**函数清单**（签名逐字取自源码）
+
+| 函数 | 签名 | 说明 |
+|---|---|---|
+| `config_path` | `def config_path() -> Path:` | 返回当前数据目录下的分组配置文件路径（每次现算，支持运行时改数据目录），值 = `webot_data_path(CONFIG_FILE)` |
+| `_default_config` | `def _default_config() -> dict:` | 返回 `{"version": CONFIG_VERSION, "groups": []}` |
+| `load` | `def load() -> dict:` | 读取配置；文件不存在/损坏/非 dict/`groups` 非 list 时回退到空配置，绝不抛出影响主流程；成功返回 `{"version": CONFIG_VERSION, "groups": groups}` |
+| `groups` | `def groups() -> list[dict]:` | 返回分组列表（只读视图，`load().get("groups", [])`） |
+| `validate` | `def validate(data: Any) -> dict:` | 校验并规范化整个配置，任何不合法结构抛 `ValueError`；规则：分组名非空且互不重复、目标 `type` 只能是 friend/group、目标 id 非空、同组内 `(type, id)` 去重、数量不超过上限、群 id 带 `@` 时须以 `@chatroom` 结尾 |
+| `save` | `def save(data: Any) -> dict:` | 先 `validate(data)`，再在 `_lock` 内写 `.tmp` 并 `tmp.replace(path)` 原子替换，返回规范化后的配置；日志记录分组数/目标数 |
+| `find_group` | `def find_group(name: str) -> dict \| None:` | 按名称精确查找分组，大小写不敏感（`casefold`）；找不到返回 `None` |
+| `target_ids` | `def target_ids(group: dict) -> list[str]:` | 取出分组内所有非空目标 id（好友 wxid / 群 chat_id），用于发送 |
+
+**存储结构**
+
+```json
+{
+  "version": 1,
+  "groups": [
+    {"name": "客户通知", "targets": [
+      {"type": "friend", "id": "wxid_abc", "name": "张三"},
+      {"type": "group",  "id": "12345@chatroom", "name": "客户群"}
+    ]}
+  ]
+}
+```
+
+`id` 用稳定标识（好友存 wxid，群存 `xxx@chatroom`）；`name` 只是展示用快照，昵称改了不影响发送。路径由 `webot_data_path(CONFIG_FILE)` 决定，读失败回退空配置（`_default_config()`）。
+
+#### 附录.1.2 `src/wechat/labels.py` — 微信通讯录标签只读入口
+
+**与系统群发分组完全独立**：这里读的是微信自带的通讯录标签，不会被导入、同步或合并到 `src.broadcast` 维护的群发分组里。供 Web API 与 MCP 工具共用，避免两处各自解密数据库。
+
+| 函数 | 签名 | 说明 |
+|---|---|---|
+| `_running_client` | `def _running_client():` | 优先复用运行中机器人已解密的 WCDB 客户端：从 `src.web.server._bot_control.get_backend()` 取 `_client`（要求 `_client._db` 不为 None），避免重复取密钥/解密；异常时返回 `None` |
+| `_friend_names` | `def _friend_names() -> dict[str, str]:` | 读 `<WEBOT_DATA_DIR>/friend_names.json`，产出 wxid → 展示名，用于给标签成员补昵称；文件不存在/损坏返回 `{}` |
+| `read_contact_labels` | `def read_contact_labels() -> dict:` | 返回微信原生通讯录标签报告；优先 `_running_client()`，无则 `LocalWcdbClient()` + `.init()`；再调 `client.get_contact_labels()`，用 `_friend_names()` 把每个标签的 `members` 从 wxid 列表补成 `[{"wxid", "name"}]` |
+
+**返回结构**
+
+```python
+{
+  "available": bool,        # 是否读到 contact_label 表
+  "labels": [
+    {
+      "label_id": str, "name": str, "sort_order": ...,
+      "member_count": int,
+      "members": [{"wxid": str, "name": str}],   # labels.py 补昵称后的结构
+    },
+  ],
+  "source": str,            # 命中的关联表，如 "contact_label_contact.label_id/contact"
+  "tables": [str],          # contact.db 中含 label 的表名，仅用于诊断
+  "note": str,              # 失败/降级说明，调用方应展示给用户
+}
+```
+
+失败时返回 `available=False` + `note`，不抛异常（如 `"微信本地数据库不可用：{exc}"`）。
+
+#### 附录.1.3 `src/wechat/wxdb_reader.py` — `WeChatDB` 新增两个方法
+
+| 方法 | 签名 | 说明 |
+|---|---|---|
+| `_label_contact_columns` | `def _label_contact_columns(self, conn: sqlite3.Connection, table: str):` | 在候选关联表里 `PRAGMA table_info` 探列，找出 `(标签列, 联系人列)`；标签列优先 `label_id*`、避开 `label_name*`、短列名优先，联系人列按 `contact/username/user_name/wxid/member/uid` 提示匹配再退回 `*id`/`usrname`；无法确认返回 `(None, None)` |
+| `contact_label_report` | `def contact_label_report(self) -> dict:` | 纯只读、尽力而为、绝不抛影响主流程；动态枚举 `contact.db` 中含 label 的表并探列，依次尝试两种来源，任何一步失败都静默降级（`available=False` 或 `members` 为空） |
+
+**`contact_label_report()` 读取策略（ASCII 调用链）**
+
+```
+contact_label_report()
+  │
+  ├─ list_labels() → 读 contact_label 表拿标签定义；为空则 note 提示并返回 available=False
+  ├─ _contact_conn() → 打开 contact.db；不可读则 note="contact.db 不可读"
+  ├─ 枚举 sqlite_master 中含 label 的表 → report["tables"]
+  ├─ PRAGMA table_info(contact) → 若含 id/username，建 contact.id → username 映射
+  │
+  ├─ 来源① 独立关联表（如 contact_label_contact，跳过 contact_label 本身）
+  │     ├─ _label_contact_columns(conn, table) → (label_col, contact_col)
+  │     ├─ SELECT label_col, contact_col → 逐行还原
+  │     │     └─ 关联值是数字 id 时用 id_to_username 还原 wxid，否则原样当 wxid
+  │     └─ 命中即写 report["source"]=f"{table}.{label_col}/{contact_col}" 并 break
+  │
+  ├─ 来源② 回退：contact 表内直接存逗号分隔 label id 的字段（如 label_list_）
+  │     ├─ PRAGMA table_info(contact) → 找含 label 且不含 name 的字段
+  │     ├─ SELECT field, username FROM contact → re.split(r"[,;|\s]+", raw)
+  │     └─ 命中即写 report["source"]=f"contact.{field}"
+  │
+  └─ 组装 out：[{label_id, name, sort_order, member_count, members:[wxid,...]}] → report["labels"]
+        └─ 无 source 时 note="未找到标签与联系人的关联表（该微信版本可能用了不同的表结构）"
+```
+
+注意：`contact_label_report()` 返回的 `members` 仍是 **wxid 字符串列表**；补昵称成 `[{"wxid","name"}]` 是 `src/wechat/labels.py:read_contact_labels()` 完成的。
+
+#### 附录.1.4 `src/wechat/local_wcdb_client.py` — 新增透传方法
+
+| 方法 | 签名 | 说明 |
+|---|---|---|
+| `get_contact_labels` | `def get_contact_labels(self) -> dict:` | 只读返回微信通讯录标签及成员；`return self._require_db().contact_label_report()`；异常时 `logger.warning` 并返回 `{"available": False, "labels": [], "source": "", "tables": [], "note": str(exc)}` |
+
+#### 附录.1.5 `src/mcp_server/data.py` — 消息发送与分组/标签工具
+
+**新增模块级常量**
+
+| 常量 | 值 | 用途 |
+|---|---|---|
+| `MAX_SEND_CONTENT_CHARS` | `2000` | 消息正文最大字符数 |
+| `MAX_SEND_TARGETS` | `50` | 单批发送目标数上限 |
+| `DEFAULT_SEND_INTERVAL_MS` | `800` | 批量发送每条之间的默认间隔（毫秒） |
+| `MAX_SEND_INTERVAL_MS` | `5000` | `interval_ms` 上限 |
+
+**新增函数清单**（签名逐字取自源码）
+
+| 函数 | 签名 | 说明 |
+|---|---|---|
+| `_running_backend` | `def _running_backend():` | 延迟导入 `src.web.server._bot_control`，取 `get_backend()`；backend 为 None 或无 `send_text` 时抛 `ValueError`（提示先启动机器人） |
+| `_send_content` | `def _send_content(args: dict) -> str:` | 取并校验 `content`：空抛 `ValueError`，超过 `MAX_SEND_CONTENT_CHARS` 抛 `ValueError`，返回正文 |
+| `_send_one` | `def _send_one(raw, content: str, backend, dry_run: bool) -> dict:` | **单发/批量共用的发送内核**；返回 `{chat, chat_id, ok, error, dry_run}`，返回值与日志都不含正文 |
+| `_scoped_targets` | `def _scoped_targets(targets: list) -> tuple[list, int]:` | 按 MCP 数据范围过滤分组目标，返回 `(可见目标, 被隐藏数量)`；跳过非 dict / 无 id / 不在范围内的目标 |
+| `list_broadcast_groups` | `def list_broadcast_groups(args: dict) -> dict:` | 只读列出系统群发分组；`name` 模糊筛选；每个分组经 `_scoped_targets` 过滤后返回 `name / target_count / hidden_count / targets`；顶层 `total / groups / note` |
+| `send_message` | `def send_message(args: dict) -> dict:` | 单发：取正文 → `dry_run = _arg_bool(args, "dry_run", False)` → `backend = None if dry_run else _running_backend()` → `_send_one(...)`；日志只记 `ok/dry_run` |
+| `batch_send_messages` | `def batch_send_messages(args: dict) -> dict:` | 批量：`chats` 数组 + `group` 分组名合并去重 → 校验 `MAX_SEND_TARGETS` → 串行逐个 `_send_one`，每条之间 `time.sleep(interval_ms / 1000.0)`（仅非 dry_run 且 index>0）→ 返回 `total/succeeded/failed/dry_run/group/interval_ms/results` |
+| `list_wechat_labels` | `def list_wechat_labels(args: dict) -> dict:` | 只读；调 `read_contact_labels()`，追加 `scope="wechat_native_labels"` 并拼接 `note`，返回报告 |
+
+`TOOL_FUNCTIONS` 映射（`src/mcp_server/data.py` 末尾）同步登记了上述 4 个新函数，键即工具名。
+
+**`_send_one` 内核调用链（单发与批量共用）**
+
+```
+send_message() ───────┐
+                      ├→ _send_content(args) → 校验/返回 content
+batch_send_messages() ┘   │
+                          ├→ _running_backend()   ← dry_run 时不调用，backend=None
+                          │
+                          └→ _send_one(raw, content, backend, dry_run)
+                               │
+                               ├─ _resolve_chat(str(raw)) → 群名/昵称/wxid 解析为 chat_id
+                               ├─ _require_chat_allowed(chat_id) → MCP 数据范围校验（越界抛 ValueError）
+                               ├─ dry_run=True → 直接 ok=True 返回，不发送
+                               └─ backend.send_text(chat_id, content) → 实际发送
+                                    └─ 返回 False → error="发送失败，请确认微信窗口可见且该会话存在"
+```
+
+要点：
+- `_send_one` 是单发/批量**共用内核**，调用链 `_resolve_chat` → `_require_chat_allowed` → `backend.send_text(chat_id, content)`；`ValueError` 与 `Exception` 都收敛进 `item["error"]`，不影响其他目标。
+- `dry_run=True` 时 `send_message` / `batch_send_messages` 都**不取 backend**（`backend = None if dry_run else _running_backend()`），只做解析与范围校验。
+- 批量发送**串行**执行、每条之间 `time.sleep`（剪贴板与微信前台窗口是全局资源，间隔降低丢消息概率）；`dry_run` 或 `interval_ms=0` 不 sleep。
+- **日志与返回值都不含消息正文**：日志只记录 `ok / dry_run / succeeded / total / group`，返回值只含 chat_id / 目标结果与统计元信息。
+
+### 附录.2 新增/修改的 Web API（`src/web/server.py`）
+
+| 方法 | 路径 | 请求体 | 返回 | 实现要点 |
+|---|---|---|---|---|
+| `GET` | `/api/broadcast/groups` | — | `{ok, groups, options}` | `groups` = `broadcast.groups()`；`options` = `mcp_server.data.scope_options()`（供前端选目标的群聊/好友候选）；异常返回 `{ok:False, error}` |
+| `POST` | `/api/broadcast/groups` | `{"groups":[...]}` | `{ok, groups}` | 读 body → `json.loads` → `broadcast.save(data)`（内部 `validate` 校验 + `.tmp` 原子写）→ 返回 `saved["groups"]`；`ValueError` 单独捕获回传错误信息 |
+| `GET` | `/api/wechat/labels` | — | `{ok, **read_contact_labels()}` | 纯只读；`{"ok": True, **read_contact_labels()}` 把 available/labels/source/tables/note 平铺返回；异常返回 `{ok:False, error}` |
+
+配套改动：
+- `do_POST` 白名单（约 `server.py:1924`）新增 `"/api/broadcast/groups"`，命中后委托 `do_GET()` 处理（与 `/api/config` 等一致）。
+- `_WEBOT_DATA_MIGRATION_ITEMS`（约 `server.py:585`，供 `_migrate_webot_data_dir()` 在 `WEBOT_DATA_DIR` 变更时搬迁 WeChatBot 自有数据）新增 `"broadcast_groups.json"`。
+
+**Web API → 配置层 调用链**
+
+```
+GET  /api/broadcast/groups
+  ├→ broadcast.groups() → broadcast.load() → config_path() → webot_data_path(CONFIG_FILE)
+  └→ mcp_server.data.scope_options() → {groups:[...], friends:[...]}
+
+POST /api/broadcast/groups
+  └→ broadcast.save(data)
+       ├→ broadcast.validate(data)  → 结构/数量/去重校验，非法抛 ValueError
+       └→ _lock → .tmp 写入 → tmp.replace(path) 原子替换
+
+GET  /api/wechat/labels
+  └→ src.wechat.labels.read_contact_labels()
+       ├→ _running_client() 或 LocalWcdbClient().init()
+       ├→ client.get_contact_labels() → WeChatDB.contact_label_report()
+       └→ _friend_names() → members 补 [{"wxid","name"}]
+```
+
+### 附录.3 MCP 工具（`src/mcp_server/server.py`）
+
+`TOOLS` 本次新增 **4 个**工具，总数由 14 增至 **18 个**（与 `TOOL_FUNCTIONS` 映射一致）。模块顶部 `for _tool in TOOLS: _tool.setdefault("annotations", dict(READ_ONLY_ANNOTATIONS))` 给所有工具补默认注解；`READ_ONLY_ANNOTATIONS = {readOnlyHint: True, destructiveHint: False, idempotentHint: True, openWorldHint: False}`。
+
+**新增 4 个工具**
+
+| 工具名 | 用途 | 参数（inputSchema） | annotations | 前置条件 |
+|---|---|---|---|---|
+| `list_broadcast_groups` | 只读列出系统群发分组（与微信原生标签无关），供发送前确认分组名与目标 | `name`（string，可选，名称模糊筛选） | 默认 `READ_ONLY_ANNOTATIONS` | 无；受 MCP 数据范围限制，不在范围内的目标被隐藏为 `hidden_count` |
+| `send_message` | 向单个好友/群聊发送一条文本消息（写操作） | `chat`（string，**必填**：群 ID/群名/好友 wxid/昵称/备注）、`content`（string，**必填**，最长 2000 字）、`dry_run`（boolean，默认 `False`） | **显式覆盖**：`readOnlyHint:False, destructiveHint:True, idempotentHint:False, openWorldHint:True` | 机器人已启动、微信已登录且窗口可见、目标在 MCP 数据范围内；建议先 `dry_run=true` |
+| `batch_send_messages` | 批量向多个好友/群聊发送同一条文本（写操作，串行） | `content`（string，**必填**）、`chats`（array of string，目标数组）、`group`（string，群发分组名）、`interval_ms`（integer，0–5000，默认 800）、`dry_run`（boolean，默认 `False`） | **显式覆盖**：同 `send_message` | 同 `send_message`；`chats` 与 `group` 至少给一个；单次最多 50 个目标；强烈建议先 `dry_run=true` |
+| `list_wechat_labels` | 只读列出微信自带通讯录标签及各标签下好友（wxid + 昵称） | 无（`_object()`） | 默认 `READ_ONLY_ANNOTATIONS` | 无；底层动态探测 `contact.db`，读不到时 `available=false` + `note`，标签成员为空 |
+
+> `send_message` 与 `batch_send_messages` 是仅有的两个**显式写了非只读 annotations** 的工具，用于覆盖默认的 `READ_ONLY_ANNOTATIONS`；其余 16 个工具（含新增的 `list_broadcast_groups`、`list_wechat_labels`）沿用默认只读注解。
+
+`initialize` 响应的 `instructions`（约 `server.py:945`）也补充了消息工具调用指引：先 `search_contacts` 确认目标再 `send_message` 单发；批量先 `list_broadcast_groups` 再用 `batch_send_messages` 传 `group` 或 `chats`；发送属写操作，要求机器人已启动且微信窗口可见，务必先 `dry_run=true` 预览、向用户确认后再真正发送，不要擅自群发；`list_wechat_labels` 为只读视图，与系统群发分组无关。
+
+### 附录.4 前端新增/修改
+
+| 文件 | 改动 |
+|---|---|
+| `ui/src/components/BroadcastGroupsPanel.jsx`（新增） | `export default function BroadcastGroupsPanel()`；「系统配置 → 群发分组」子标签面板；`load()` 用 `GET /api/broadcast/groups` 拿 `groups` + `options`，保存用 `POST /api/broadcast/groups`（`body: JSON.stringify({ groups })`）；候选目标由 `options.groups` / `options.friends` 映射出 `type/id/name` |
+| `ui/src/components/WeChatLabelsPanel.jsx`（新增） | `export default function WeChatLabelsPanel()`；顶层「通讯录标签」标签面板；`load()` 用 `GET /api/wechat/labels`；页面明确标注「微信通讯录标签（只读）」，与 WeChatBot 群发分组完全独立 |
+| `ui/src/App.jsx`（修改） | `TABS`：`config.subs` 新增 `{ id: 'broadcast', label: '群发分组' }`；顶层新增 `{ id: 'wechat-labels', label: '通讯录标签', icon: Tag }`；新增 `WeChatLabelsPanel` 的 `lazy` import；渲染处新增 `activeTab === 'wechat-labels' && <WeChatLabelsPanel />`；`activeTab === 'config'` 仍交给 `ConfigPanel activeSection={configSection}` |
+| `ui/src/components/ConfigPanel.jsx`（修改） | `import BroadcastGroupsPanel`；`sectionTitles`/`sectionAccents` 增加 `broadcast` 项；渲染处新增 `activeSection === 'broadcast' && <BroadcastGroupsPanel />`；主「保存配置」按钮条件改为 `activeSection !== 'sandbox' && activeSection !== 'broadcast'`，**在群发分组子标签隐藏**（该面板有独立保存逻辑，避免误把分组写进 `.env`） |
+
+**前端 → API 调用链**
+
+```
+App.jsx TABS
+  ├─ config / broadcast ─→ ConfigPanel(activeSection='broadcast')
+  │      └─ BroadcastGroupsPanel
+  │           ├─ GET  /api/broadcast/groups → groups + options
+  │           └─ POST /api/broadcast/groups → JSON.stringify({ groups })
+  │                └─ broadcast.save() → validate() → 原子写
+  └─ wechat-labels ─→ WeChatLabelsPanel
+         └─ GET /api/wechat/labels → read_contact_labels()
+              └─ get_contact_labels() → contact_label_report()
+```
+
+### 附录.5 改名：品牌统一为 WeChatBot 与保持不变的内部标识符
+
+项目已从上游 `webot` 二开为 **WeChatBot**，对外可见名称全部统一：
+
+| 位置 | 改名后 |
+|---|---|
+| 窗口标题 | `desktop.py`：`"WeChatBot — 初始设置"` / `"WeChatBot — Dashboard"`；`desktop_mac.py`：`"WeChatBot — Dashboard"` |
+| 页面 `<title>` | `ui/index.html`：`WeChatBot — Dashboard` |
+| EXE 名 | `WeChatBot.exe`（`build.spec` `name='WeChatBot'`，输出 `dist/WeChatBot.exe`） |
+| 安装包名 | `dist/WeChatBot-setup.exe`（`installer.nsi` `OutFile`） |
+| 安装目录 | `$LOCALAPPDATA\WeChatBot`（`installer.nsi` `InstallDir`） |
+| 注册表卸载键 | `Software\Microsoft\Windows\CurrentVersion\Uninstall\WeChatBot`（`REG_UNINSTALL_KEY`） |
+| CI 产物名 | `dist/WeChatBot.exe` / `dist/WeChatBot-setup.exe` / `dist/WeChatBot-windows-x64.zip`（`.github/workflows/build-windows-release.yml`，仓库 `Otikes/WeChatBot`） |
+
+**升级兼容**（`installer.nsi`）：
+- 新增 `LEGACY_REG_UNINSTALL_KEY = "Software\Microsoft\Windows\CurrentVersion\Uninstall\webot"`（旧键 `\Uninstall\webot`）：`RestorePreviousInstallDir` / `RestorePreviousWebotDataDir` 在新键查不到时回读旧键，复用原安装目录与数据目录；卸载时 `DeleteRegKey` 一并清理新旧键，并删除旧 `webot.exe` 与旧快捷方式。
+- `PrepareWebotExeForUpdate` 中 `taskkill /IM WeChatBot.exe /T /F` 之后**仍兼容旧 `webot.exe` 进程名**（再执行一次 `taskkill /IM webot.exe /T /F`），否则旧 EXE 会占用文件。
+
+**以下内部标识符保持不变（刻意不随品牌改名，改名时切勿误改）**：
+
+| 类别 | 保持不变的标识符 |
+|---|---|
+| 环境变量 | `WEBOT_DATA_DIR`、`WEBOT_ENV_FILE`（`src/config.py:find_env_file()`）、`WEBOT_UI_DIST`（`build.spec`） |
+| 函数名 | `webot_data_path()`、`resolve_webot_data_dir()`、`get_webot_data_dir()`、`resolve_webot_storage_path()`、`_migrate_webot_data_dir()` 等 `webot_*` 名称 |
+| MCP 服务器名 | `MCP_SERVER_NAME = "webot-mcp"`（`src/mcp_server/server.py`） |
+| API Key 前缀 | `"webot_"`（`ensure_api_key()` / `update_settings(regenerate=True)` 生成 `webot_<token>`） |
+| 飞书默认名 | `FEISHU_KNOWLEDGE_BASE_NAME` 默认值 `"webot 群聊沉淀"` |
+| 数据目录 | `data/`（`BotConfig.webot_data_dir: str = "data"`，`WEBOT_DATA_DIR` 留空时为程序目录下 `data/`） |
+| 图标路径 | `image/logo_assets/logo.ico`（`build.spec` `icon=`、`installer.nsi` `MUI_ICON`/`MUI_UNICON`） |
+
+即：**对外展示名 → WeChatBot；内部代码/配置/协议标识 → 仍为 `webot`**。写进 `.env` 的键名 `WEBOT_DATA_DIR`、注册表值名 `WebotDataDir`、迁移列表 `_WEBOT_DATA_MIGRATION_ITEMS` 等也都保持原样，升级安装靠旧键兼容。
+
+### 附录.6 智能体典型调用链示例
+
+以下为外部 MCP 智能体使用新工具的推荐顺序（写操作务必先预览、向用户确认）：
+
+**① 单发：`search_contacts → send_message`**
+
+```
+search_contacts({query: "张三"}) → 拿到 friends[].wxid / groups[].chat_id
+  ├─ send_message({chat: <wxid>, content: "...", dry_run: true})  → 预览解析结果（ok/chat_id）
+  └─ 用户确认后 send_message({chat: <wxid>, content: "..."})      → 真正发送
+```
+
+**② 按群发分组批量：`list_broadcast_groups → batch_send_messages(group)`**
+
+```
+list_broadcast_groups() → 分组名 + target_count / hidden_count / targets
+  ├─ batch_send_messages({content: "...", group: "客户通知", dry_run: true})
+  │     → 预览目标清单（results 逐条 chat_id、不真正发送、无间隔 sleep）
+  └─ 用户确认后 batch_send_messages({content: "...", group: "客户通知"})
+        → 串行发送，默认每条间隔 800ms
+```
+
+**③ `chats` 数组临时批量（不依赖预置分组）**
+
+```
+batch_send_messages({
+  content: "会议提醒",
+  chats: ["12345@chatroom", "wxid_abc", "产品群"],   // 群 ID / 好友 wxid / 群名混合
+  interval_ms: 1000,
+  dry_run: true
+})
+→ chats 逐项经 _resolve_chat 解析；与 group 同时传时合并去重；超过 50 个目标报错
+```
+
+**④ `dry_run` 预览语义**
+
+```
+dry_run=true
+  ├─ 不调用 _running_backend()（backend=None），无需机器人启动 / 微信窗口
+  ├─ 仅走 _resolve_chat → _require_chat_allowed → 记录 ok/chat_id
+  ├─ 批量时不 sleep（不受 interval_ms 影响）
+  └─ 返回值/日志均不含正文，只含目标清单与统计
+```
+
+`list_wechat_labels` 是独立的只读工具（`labels` 内 `members` 为 `[{"wxid","name"}]`），结果**不会**自动变成群发分组；如需按微信标签发送，智能体应把返回的 wxid 自行整理成 `chats` 数组或写入群发分组。

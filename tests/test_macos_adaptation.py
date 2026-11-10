@@ -414,14 +414,14 @@ class MacOSAdaptationTests(unittest.TestCase):
         ):
             self.assertEqual(
                 desktop_mac._resolve_app_home(),
-                Path("/Users/tester/Library/Application Support/webot"),
+                Path("/Users/tester/Library/Application Support/WeChatBot"),
             )
 
     def test_desktop_mac_env_file_creates_application_support_dir(self):
         import desktop_mac
 
         with tempfile.TemporaryDirectory() as tmp:
-            app_home = Path(tmp) / "Library" / "Application Support" / "webot"
+            app_home = Path(tmp) / "Library" / "Application Support" / "WeChatBot"
             env_path = app_home / ".env.macos"
             with (
                 patch.object(desktop_mac, "APP_HOME", app_home),
@@ -448,7 +448,7 @@ class MacOSAdaptationTests(unittest.TestCase):
             sleep_func=lambda seconds: None,
         )
 
-        self.assertEqual(webview.created[0]["title"], "webot — Dashboard")
+        self.assertEqual(webview.created[0]["title"], "WeChatBot — Dashboard")
         self.assertEqual(webview.created[0]["url"], "http://127.0.0.1:7327")
         self.assertEqual(webview.created[0]["min_size"], (900, 600))
         self.assertEqual(webview.started[0]["gui"], "cocoa")

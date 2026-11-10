@@ -125,7 +125,7 @@ def strip_feishu_sync_command(content: str, bot_display_name: str = "") -> str:
 
 
 class FeishuResourceStore:
-    """Persist generated Feishu Bitable resource ids under webot data."""
+    """Persist generated Feishu Bitable resource ids under WeChatBot data."""
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path is not None else webot_data_path("feishu_resources.json")

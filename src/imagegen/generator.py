@@ -509,7 +509,7 @@ class ImageGenerator:
 
     @staticmethod
     def _save_image(image_bytes: bytes) -> Path:
-        """将图片写入 webot 数据目录下的 images/ 子目录。"""
+        """将图片写入 WeChatBot 数据目录下的 images/ 子目录。"""
         out_dir = webot_data_path("images")
         out_dir.mkdir(parents=True, exist_ok=True)
 

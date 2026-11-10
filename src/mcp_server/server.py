@@ -479,6 +479,110 @@ TOOLS: list[dict] = [
             },
         }, ["contact"]),
     },
+
+    # ── 系统群发分组 + 消息发送（写操作） ────────────────────────────
+    {
+        "name": "list_broadcast_groups",
+        "description": (
+            "列出控制台「系统配置 → 群发分组」里用户自定义的所有分组。"
+            "每个分组可同时包含好友和群聊。发送前先调用它确认分组名和目标，"
+            "再配合 batch_send_messages 的 group 参数按分组发送。"
+            "注意：这是系统自己的分组，与微信自带的通讯录标签无关。"
+            "受 MCP 数据范围限制，不在范围内的目标会被隐藏（hidden_count）。"
+        ),
+        "inputSchema": _object({
+            "name": {
+                "type": "string",
+                "description": "可选：按名称模糊筛选分组",
+            },
+        }),
+    },
+    {
+        "name": "send_message",
+        "description": (
+            "向单个好友或群聊发送一条文本消息（写操作）。"
+            "chat 可填群 ID（xxx@chatroom）、群名、好友 wxid、昵称或备注；"
+            "不确定目标时先用 search_contacts 查询。"
+            "前置条件：机器人已启动、微信已登录且窗口可见；受 MCP 数据范围约束。"
+            "建议先用 dry_run=true 预览解析结果，确认无误后再真正发送。"
+        ),
+        "inputSchema": _object({
+            "chat": {
+                "type": "string",
+                "description": "群 ID / 群名 / 好友 wxid / 昵称 / 备注",
+            },
+            "content": {
+                "type": "string",
+                "description": f"消息正文，最长 {2000} 个字符",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "default": False,
+                "description": "true=只解析和校验、不实际发送，用于预览",
+            },
+        }, ["chat", "content"]),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
+    },
+    {
+        "name": "batch_send_messages",
+        "description": (
+            "批量向多个好友/群聊发送同一条文本消息（写操作，串行发送）。"
+            "三种用法：① chats 传入目标数组；② group 传群发分组名"
+            "（先调 list_broadcast_groups 获取）；③ 两者同时传，自动合并去重。"
+            "返回每个目标的逐条结果。前置条件：机器人已启动、微信窗口可见；"
+            "受 MCP 数据范围约束；单次最多 50 个目标，默认每条间隔 800ms。"
+            "强烈建议先 dry_run=true 预览，确认目标清单后再真正发送。"
+        ),
+        "inputSchema": _object({
+            "content": {
+                "type": "string",
+                "description": f"消息正文，最长 {2000} 个字符",
+            },
+            "chats": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "目标数组：群 ID / 群名 / 好友 wxid / 昵称",
+            },
+            "group": {
+                "type": "string",
+                "description": "系统内群发分组名（与 chats 可同时使用，会合并去重）",
+            },
+            "interval_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 5000,
+                "default": 800,
+                "description": "每条之间的间隔毫秒数，默认 800",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "default": False,
+                "description": "true=只解析和校验、不实际发送，用于预览目标清单",
+            },
+        }, ["content"]),
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": True,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
+    },
+    {
+        "name": "list_wechat_labels",
+        "description": (
+            "只读列出微信自带的通讯录标签及各标签下的好友（wxid 与昵称）。"
+            "底层动态探测微信本地 contact.db 的关联表，不同微信版本结构可能不同；"
+            "读不到时 available=false 并给出 note，此时标签成员为空。"
+            "注意：这是微信原生标签的只读视图，与系统群发分组完全独立，"
+            "不会导入、不会影响群发分组。"
+        ),
+        "inputSchema": _object(),
+    },
 ]
 
 for _tool in TOOLS:
@@ -839,8 +943,8 @@ def _handle_single(request) -> dict | None:
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION},
             "instructions": (
-                "webot MCP：提供微信群聊、群成员、好友与消息数据。"
-                "只要 webot 控制台进程在运行，无需启动微信机器人即可查询数据。"
+                "WeChatBot MCP：提供微信群聊、群成员、好友与消息数据，以及消息发送能力。"
+                "只要 WeChatBot 控制台进程在运行，无需启动机器人即可查询数据。"
                 "get_messages / search_messages（指定 chat 时）/ get_member_activity "
                 "默认读取微信本地数据库的完整历史（要求微信已登录；不可用时自动"
                 "回退到机器人采集的 messages.db，并在返回的 source/note 中说明）。"
@@ -852,6 +956,12 @@ def _handle_single(request) -> dict | None:
                 "表情/转发/引用附加媒体摘要；list_chat_media 按类型批量列出，"
                 "get_message_media 用 local_id 取单个媒体（图片解密缓存到 data/media_cache，"
                 "inline=true 可直接返回图片内容）。"
+                "发送消息：先用 search_contacts 确认目标，再用 send_message 单发；"
+                "批量发送先用 list_broadcast_groups 查看系统群发分组，再用 "
+                "batch_send_messages 传 group 分组名或 chats 目标数组。"
+                "发送属于写操作，要求机器人已启动且微信窗口可见，务必先 dry_run=true "
+                "预览目标清单、向用户确认后再真正发送，不要擅自群发。"
+                "list_wechat_labels 只读查看微信自带通讯录标签，与系统群发分组无关。"
             ),
         })
 
@@ -1155,7 +1265,7 @@ def _handle_sse_message(handler, parsed) -> None:
 
 
 def handle_http(handler) -> bool:
-    """在 webot 的 HTTP 服务中处理 MCP 请求；命中时返回 True。"""
+    """在 WeChatBot 的 HTTP 服务中处理 MCP 请求；命中时返回 True。"""
     parsed = urlparse(handler.path)
     path = parsed.path.rstrip("/") or "/"
     if path == "/mcp":

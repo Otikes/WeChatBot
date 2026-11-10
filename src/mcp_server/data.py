@@ -1975,6 +1975,208 @@ def get_data_overview(args: dict) -> dict:
     return overview
 
 
+# ── 消息发送工具（写操作，单发与批量共用同一内核） ────────────────────
+
+MAX_SEND_CONTENT_CHARS = 2000
+MAX_SEND_TARGETS = 50
+DEFAULT_SEND_INTERVAL_MS = 800
+MAX_SEND_INTERVAL_MS = 5000
+
+
+def _running_backend():
+    """拿到运行中机器人的 backend（延迟导入，避免与 web.server 循环依赖）。"""
+    try:
+        from src.web.server import _bot_control
+    except Exception as exc:  # pragma: no cover - 仅在异常打包环境下发生
+        raise ValueError(f"无法访问机器人控制模块: {exc}") from exc
+    backend = _bot_control.get_backend()
+    if backend is None or not callable(getattr(backend, "send_text", None)):
+        raise ValueError(
+            "机器人未启动或当前后端不支持发消息，请先在控制台点击「启动机器人」"
+        )
+    return backend
+
+
+def _send_content(args: dict) -> str:
+    content = _arg_str(args, "content")
+    if not content:
+        raise ValueError("缺少 content 参数（消息正文不能为空）")
+    if len(content) > MAX_SEND_CONTENT_CHARS:
+        raise ValueError(f"消息正文不能超过 {MAX_SEND_CONTENT_CHARS} 个字符")
+    return content
+
+
+def _send_one(raw, content: str, backend, dry_run: bool) -> dict:
+    """单个目标的发送内核：解析 → 范围校验 → 发送。
+
+    ``send_message`` 与 ``batch_send_messages`` 都走这里，保证行为一致。
+    返回值与日志都不包含消息正文。
+    """
+    item = {
+        "chat": str(raw),
+        "chat_id": "",
+        "ok": False,
+        "error": "",
+        "dry_run": bool(dry_run),
+    }
+    try:
+        chat_id = _resolve_chat(str(raw))
+        _require_chat_allowed(chat_id)
+        item["chat_id"] = chat_id
+        if dry_run:
+            item["ok"] = True
+            return item
+        ok = bool(backend.send_text(chat_id, content))
+        item["ok"] = ok
+        if not ok:
+            item["error"] = "发送失败，请确认微信窗口可见且该会话存在"
+    except ValueError as exc:
+        item["error"] = str(exc)
+    except Exception as exc:
+        logger.exception("MCP send failed for one target")
+        item["error"] = f"{type(exc).__name__}: {exc}"
+    return item
+
+
+def _scoped_targets(targets: list) -> tuple[list, int]:
+    """按 MCP 数据范围过滤分组目标，返回 (可见目标, 被隐藏数量)。"""
+    visible: list[dict] = []
+    hidden = 0
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        target_id = str(target.get("id") or "").strip()
+        if not target_id:
+            continue
+        if not is_chat_allowed(target_id):
+            hidden += 1
+            continue
+        visible.append({
+            "type": str(target.get("type") or ""),
+            "id": target_id,
+            "name": str(target.get("name") or ""),
+        })
+    return visible, hidden
+
+
+def list_broadcast_groups(args: dict) -> dict:
+    """列出系统内自定义的群发分组（只读，与微信自带通讯录标签无关）。"""
+    from src import broadcast
+
+    name_filter = _arg_str(args, "name").casefold()
+    result = []
+    for group in broadcast.groups():
+        name = str(group.get("name") or "").strip()
+        if name_filter and name_filter not in name.casefold():
+            continue
+        targets, hidden = _scoped_targets(group.get("targets", []))
+        result.append({
+            "name": name,
+            "target_count": len(targets),
+            "hidden_count": hidden,
+            "targets": targets,
+        })
+    return {
+        "total": len(result),
+        "groups": result,
+        "note": "系统内自定义分组，可同时包含好友和群聊；与微信自带通讯录标签互不联动。",
+    }
+
+
+def send_message(args: dict) -> dict:
+    """向单个群聊/好友发送一条文本消息。"""
+    content = _send_content(args)
+    raw = _arg_str(args, "chat")
+    if not raw:
+        raise ValueError("缺少 chat 参数（群 ID、群名或好友 wxid/昵称）")
+    dry_run = _arg_bool(args, "dry_run", False)
+    backend = None if dry_run else _running_backend()
+    item = _send_one(raw, content, backend, dry_run)
+    logger.info("MCP send_message: ok=%s dry_run=%s", item["ok"], dry_run)
+    return item
+
+
+def batch_send_messages(args: dict) -> dict:
+    """批量发送：可用 chats 数组、group 分组名，或两者一起用。"""
+    from src import broadcast
+
+    content = _send_content(args)
+    dry_run = _arg_bool(args, "dry_run", False)
+    interval_ms = _arg_int(
+        args, "interval_ms", DEFAULT_SEND_INTERVAL_MS, 0, MAX_SEND_INTERVAL_MS
+    )
+
+    raw_chats = args.get("chats", [])
+    if raw_chats is None:
+        raw_chats = []
+    if not isinstance(raw_chats, list):
+        raise ValueError("chats 必须是数组")
+    group_name = _arg_str(args, "group")
+
+    if not raw_chats and not group_name:
+        raise ValueError("请提供 chats（目标数组）或 group（群发分组名）")
+
+    group_targets: list[str] = []
+    if group_name:
+        group = broadcast.find_group(group_name)
+        if group is None:
+            available = ", ".join(
+                str(g.get("name") or "") for g in broadcast.groups()
+            ) or "（尚无分组）"
+            raise ValueError(f"找不到群发分组「{group_name}」，可用分组：{available}")
+        group_targets = broadcast.target_ids(group)
+
+    targets: list[str] = []
+    seen: set[str] = set()
+    for raw in [*(str(c).strip() for c in raw_chats), *group_targets]:
+        text = str(raw).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        targets.append(text)
+
+    if len(targets) > MAX_SEND_TARGETS:
+        raise ValueError(
+            f"单次最多发送 {MAX_SEND_TARGETS} 个目标，当前 {len(targets)} 个，请拆分或缩小分组"
+        )
+
+    backend = None if dry_run else _running_backend()
+    results: list[dict] = []
+    for index, target in enumerate(targets):
+        if index and interval_ms and not dry_run:
+            # 串行发送；剪贴板与微信前台窗口是全局资源，间隔可降低丢消息概率
+            time.sleep(interval_ms / 1000.0)
+        results.append(_send_one(target, content, backend, dry_run))
+
+    succeeded = sum(1 for item in results if item["ok"])
+    logger.info(
+        "MCP batch_send_messages: %d/%d succeeded (group=%s, dry_run=%s)",
+        succeeded, len(results), group_name or "-", dry_run,
+    )
+    return {
+        "total": len(results),
+        "succeeded": succeeded,
+        "failed": len(results) - succeeded,
+        "dry_run": dry_run,
+        "group": group_name,
+        "interval_ms": interval_ms,
+        "results": results,
+    }
+
+
+def list_wechat_labels(args: dict) -> dict:
+    """只读列出微信自带的通讯录标签及成员（与系统群发分组无关）。"""
+    from src.wechat.labels import read_contact_labels
+
+    report = read_contact_labels()
+    report["scope"] = "wechat_native_labels"
+    report["note"] = (
+        (report.get("note") or "")
+        + " 微信通讯录标签为只读视图，不会导入系统群发分组；群聊通常没有原生标签。"
+    ).strip()
+    return report
+
+
 TOOL_FUNCTIONS = {
     "list_groups": list_groups,
     "get_group": get_group,
@@ -1990,4 +2192,8 @@ TOOL_FUNCTIONS = {
     "find_new_senders": find_new_senders,
     "get_contact_profile": get_contact_profile,
     "get_data_overview": get_data_overview,
+    "list_broadcast_groups": list_broadcast_groups,
+    "send_message": send_message,
+    "batch_send_messages": batch_send_messages,
+    "list_wechat_labels": list_wechat_labels,
 }

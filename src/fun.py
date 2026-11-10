@@ -266,7 +266,7 @@ def _get_lots() -> tuple[list, list]:
 def draw_lots(requester_name: str) -> str:
     """抽签 — 返回带解读的运势结果。
 
-    优先使用 webot 数据目录中的 lots.json 自定义配置，文件不存在时使用默认签文。
+    优先使用 WeChatBot 数据目录中的 lots.json 自定义配置，文件不存在时使用默认签文。
     """
     levels_data, weights = _get_lots()
 

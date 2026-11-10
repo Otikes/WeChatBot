@@ -42,7 +42,7 @@ def _print_config_summary(config: BotConfig) -> None:
     print(f"  Bot Display Name:        {config.bot_display_name}")
     print(f"  Admin wxid:              {config.admin_wxid or '(not set)'}")
     print(f"  Trigger Keywords:        {config.trigger_keywords}")
-    print(f"  webot Data Dir:          {config.webot_data_dir}")
+    print(f"  WeChatBot Data Dir:          {config.webot_data_dir}")
     print(f"  DB Path:                 {config.db_path}")
     print(f"  Poll Interval (sec):     {config.poll_interval_sec}")
     print(f"  Dedup Window (sec):      {config.dedup_window_sec}")

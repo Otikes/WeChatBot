@@ -1,5 +1,5 @@
 """
-Tests for webot: config loading, trigger detection, and web API endpoints.
+Tests for WeChatBot: config loading, trigger detection, and web API endpoints.
 
 Uses Python's built-in unittest framework with unittest.mock for mocking.
 No real DB or network -- all tests are fast and deterministic.
@@ -1319,7 +1319,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
             self.assertFalse(config["fun_enabled"])
 
     def test_load_config_reads_webot_data_dir(self):
-        """GET /api/load-config returns raw and resolved webot data dir."""
+        """GET /api/load-config returns raw and resolved WeChatBot data dir."""
         data_dir = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: data_dir.rmdir() if data_dir.exists() else None)
         with patch("src.web.server._find_or_create_env") as mock_find:
@@ -1373,7 +1373,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
                 "FEISHU_AUTO_SYNC_ENABLED=true\n"
                 "FEISHU_AUTO_SYNC_MIN_MESSAGES=7\n"
                 "FEISHU_AUTO_SYNC_COOLDOWN_SEC=900\n"
-                "FEISHU_KNOWLEDGE_BASE_NAME=webot 自动知识库\n"
+                "FEISHU_KNOWLEDGE_BASE_NAME=WeChatBot 自动知识库\n"
                 "FEISHU_KNOWLEDGE_FOLDER_TOKEN=fld_knowledge\n"
                 "FEISHU_EXPORT_TRIGGER_KEYWORDS=同步到飞书,导出到飞书\n"
                 "FEISHU_SPREADSHEET_TOKEN=sht_test\n"
@@ -1397,7 +1397,7 @@ class ApiConfigEndpointTests(unittest.TestCase):
         self.assertTrue(config["feishu_auto_sync_enabled"])
         self.assertEqual(config["feishu_auto_sync_min_messages"], 7)
         self.assertEqual(config["feishu_auto_sync_cooldown_sec"], 900)
-        self.assertEqual(config["feishu_knowledge_base_name"], "webot 自动知识库")
+        self.assertEqual(config["feishu_knowledge_base_name"], "WeChatBot 自动知识库")
         self.assertEqual(config["feishu_knowledge_folder_token"], "fld_knowledge")
         self.assertEqual(config["feishu_export_trigger_keywords"], ["同步到飞书", "导出到飞书"])
         self.assertEqual(config["feishu_spreadsheet_token"], "sht_test")

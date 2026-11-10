@@ -1,13 +1,13 @@
 """Reconcile WeChat wxids with exported chat display names.
 
 Reads:
-  - configured webot messages database
-  - configured webot nicknames.json
+  - configured WeChatBot messages database
+  - configured WeChatBot nicknames.json
   - wechatdata/*.xlsx
 
 Writes:
-  - configured webot nicknames.json
-  - configured webot nickname_reconcile_report.json
+  - configured WeChatBot nicknames.json
+  - configured WeChatBot nickname_reconcile_report.json
 """
 
 from __future__ import annotations

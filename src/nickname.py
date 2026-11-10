@@ -1,6 +1,6 @@
 """Nickname service — resolve wxid_xxx to display names and manage mappings.
 
-Persists wxid → nickname mappings in the configured webot data directory for use by
+Persists wxid → nickname mappings in the configured WeChatBot data directory for use by
 AI summarization (which should output names, not internal IDs).
 """
 

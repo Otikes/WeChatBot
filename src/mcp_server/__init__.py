@@ -1,6 +1,6 @@
 """MCP（Model Context Protocol）服务端。
 
-把 webot 已采集的微信群聊、群成员、好友与消息数据通过标准 MCP
+把 WeChatBot 已采集的微信群聊、群成员、好友与消息数据通过标准 MCP
 协议暴露给 Codex、Trae 等外部智能体，用于群聊与联系人数据分析（周报、运营复盘、客户跟进等）。
 """
 

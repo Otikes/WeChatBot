@@ -53,7 +53,7 @@ class AbstractASR(ABC):
 class LocalWhisperASR(AbstractASR):
     """Local Whisper model via faster-whisper.
 
-    The model is downloaded on first use to webot's ``models/`` data dir and kept in
+    The model is downloaded on first use to WeChatBot's ``models/`` data dir and kept in
     memory thereafter, so subsequent calls are fast and offline.
     """
 

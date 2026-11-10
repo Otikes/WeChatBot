@@ -749,7 +749,7 @@ export default function TokenStats() {
 
       <p className="text-[10px] text-text-muted/70 font-mono flex items-center gap-1.5">
         <Coins size={12} />
-        统计数据持久化保存在 SQLite（webot 数据目录 / token_usage.db），不随运行数据重置清除
+        统计数据持久化保存在 SQLite（WeChatBot 数据目录 / token_usage.db），不随运行数据重置清除
       </p>
 
       <ConfirmDialog

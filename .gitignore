@@ -114,6 +114,9 @@ image/logo_assets/*
 !image/logo_assets/logo.ico
 data/models/
 
+# Local workspace notes (never publish to a public repo)
+.workbuddy/memory/
+
 # Local runtime artifacts (never publish to a public repo)
 @AutomationLog.txt
 data/token_usage.db

@@ -15,8 +15,12 @@ import threading
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
+from urllib import error as urlerror
 
 import pytest
+
+from src.version import APP_VERSION
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -588,6 +592,151 @@ class TestWeChatLabelsPanel:
         assert "空标签" in body
         assert "该标签下没有好友" in body
         assert "contact.extra_buffer#30" in body
+
+
+def _github_release_payload(tag=None, has_update=False, ok=True, error=""):
+    """给 /api/update/check 与前端路由用的假 Release 数据。
+
+    默认标签跟随 ``APP_VERSION``，发版时无需逐个改版本字面量。
+    """
+    tag = tag or f"v{APP_VERSION}"
+    repo = "https://github.com/Otikes/WeChatBot"
+    releases = f"{repo}/releases"
+    return {
+        "ok": ok,
+        "error": error,
+        "current_version": APP_VERSION,
+        "latest_version": tag.lstrip("v") if ok else "",
+        "has_update": has_update,
+        "published_at": "2026-11-11T00:37:10Z" if ok else "",
+        "notes": "release notes" if ok else "",
+        "release_url": f"{releases}/tag/{tag}" if ok else releases,
+        "download_url": (
+            f"{releases}/download/{tag}/WeChatBot-setup.exe" if ok else ""
+        ),
+        "repo_url": repo,
+        "releases_url": releases,
+    }
+
+
+class _FakeGithubResponse:
+    def __init__(self, payload):
+        self._raw = json.dumps(payload).encode("utf-8")
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestUpdateCheckerApi:
+    """/api/update/check 路由：mock 掉外网，验证结构与离线降级。"""
+
+    def test_route_parses_github_release(self, server):
+        from src import update_check
+
+        update_check.clear_cache()
+        payload = {
+            "tag_name": f"v{APP_VERSION}",
+            "published_at": "2026-11-11T00:37:10Z",
+            "body": "notes",
+            "assets": [{
+                "name": "WeChatBot-setup.exe",
+                "browser_download_url": (
+                    "https://github.com/Otikes/WeChatBot/releases/download/"
+                    f"v{APP_VERSION}/WeChatBot-setup.exe"
+                ),
+            }],
+        }
+        with patch("src.update_check.urlrequest.urlopen",
+                   return_value=_FakeGithubResponse(payload)):
+            status, data = _api_get("/api/update/check?refresh=1")
+        assert status == 200
+        assert data["ok"] is True
+        assert data["current_version"] == APP_VERSION
+        assert data["latest_version"] == APP_VERSION
+        assert data["has_update"] is False
+        assert data["repo_url"] == "https://github.com/Otikes/WeChatBot"
+
+    def test_route_is_offline_safe(self, server):
+        from src import update_check
+
+        update_check.clear_cache()
+        with patch("src.update_check.urlrequest.urlopen",
+                   side_effect=urlerror.URLError("offline")):
+            status, data = _api_get("/api/update/check?refresh=1")
+        assert status == 200
+        assert data["ok"] is False
+        assert "无法连接 GitHub" in data["error"]
+        assert data["releases_url"] == "https://github.com/Otikes/WeChatBot/releases"
+
+
+class TestUpdateCheckerUi:
+    """顶部 GitHub 图标 + 版本徽标浮层的浏览器验证。"""
+
+    def _open(self, page, payload):
+        page.route(
+            "**/api/update/check*",
+            lambda route: route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(payload, ensure_ascii=False),
+            ),
+        )
+        page.goto(BASE_URL, timeout=10000)
+        page.get_by_test_id("update-checker").wait_for(timeout=5000)
+        page.wait_for_timeout(400)
+
+    def test_github_link_and_up_to_date_popover(self, page):
+        payload = _github_release_payload()
+        self._open(page, payload)
+        link = page.get_by_test_id("github-link")
+        assert link.get_attribute("href") == "https://github.com/Otikes/WeChatBot"
+        assert link.get_attribute("target") == "_blank"
+        assert page.get_by_test_id("current-version").inner_text() == f"v{APP_VERSION}"
+        assert page.get_by_test_id("update-dot").count() == 0
+
+        page.get_by_test_id("version-chip").click()
+        popover = page.get_by_test_id("update-popover")
+        popover.wait_for(timeout=3000)
+        text = popover.inner_text()
+        assert "版本与更新" in text
+        assert "已是最新版本" in text
+        assert f"v{APP_VERSION}" in text
+        assert popover.get_by_test_id("release-link").get_attribute("href") == (
+            f"https://github.com/Otikes/WeChatBot/releases/tag/v{APP_VERSION}"
+        )
+        assert popover.get_by_test_id("all-releases-link").get_attribute("href") == (
+            "https://github.com/Otikes/WeChatBot/releases"
+        )
+
+    def test_new_version_shows_dot_and_download_link(self, page):
+        from src.version import parse_version
+
+        newer = f"v{parse_version(APP_VERSION)[0] + 1}.0.0"
+        payload = _github_release_payload(newer, has_update=True)
+        self._open(page, payload)
+        assert page.get_by_test_id("update-dot").count() == 1
+        page.get_by_test_id("version-chip").click()
+        popover = page.get_by_test_id("update-popover")
+        popover.wait_for(timeout=3000)
+        assert "发现新版本" in popover.inner_text()
+        download = popover.get_by_test_id("download-latest")
+        assert f"{newer}/WeChatBot-setup.exe" in download.get_attribute("href")
+
+    def test_offline_keeps_release_link(self, page):
+        payload = _github_release_payload(ok=False, error="无法连接 GitHub：offline")
+        self._open(page, payload)
+        page.get_by_test_id("version-chip").click()
+        popover = page.get_by_test_id("update-popover")
+        popover.wait_for(timeout=3000)
+        assert "无法连接 GitHub" in popover.inner_text()
+        assert popover.get_by_test_id("release-link").get_attribute("href") == (
+            "https://github.com/Otikes/WeChatBot/releases"
+        )
 
 
 BROADCAST_GROUPS = {

@@ -89,6 +89,13 @@ def open_dashboard(
         if webview_module is None:
             import webview as webview_module
 
+        # 顶部 GitHub / Release 链接交给系统默认浏览器，不在 WebView 内跳转
+        try:
+            settings = getattr(webview_module, "settings", None)
+            if settings is not None:
+                settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+        except Exception:
+            pass  # 老版本 pywebview 默认即为 True
         webview_module.create_window(
             title="WeChatBot — Dashboard",
             url=url,

@@ -85,6 +85,10 @@ a = Analysis(
         'src.web', 'src.web.server',
         'src.mcp_server', 'src.mcp_server.server', 'src.mcp_server.data',
         'src.mcp_server.history',
+        # Runtime-imported from request handlers; declare explicitly so a
+        # frozen EXE never misses these modules after PyInstaller prunes them.
+        'src.version', 'src.update_check', 'src.broadcast',
+        'src.wechat.labels',
         'src.router', 'src.welcome',
         'src.todo', 'src.todo.store', 'src.todo.handler',
         'src.nickname', 'src.admin', 'src.fun',

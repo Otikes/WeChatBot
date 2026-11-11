@@ -3,7 +3,7 @@
 > 微信消息总结机器人 — 完整代码架构与 API 参考文档
 > 生成日期: 2026-06-11
 > 最后更新: 2026-06-11
-> 二开新增模块（系统群发分组、微信通讯录标签只读、消息发送 MCP 工具、品牌改名）统一收录于文末 [附录：WeChatBot 二次开发新增模块](#附录wechatbot-二次开发新增模块)；正文 §1–§5 仍描述二开前的既有架构，二者并存、互不覆盖。
+> 二开新增模块（系统群发分组、微信通讯录标签只读、消息发送 MCP 工具、GitHub Release 更新检查、品牌改名）统一收录于文末 [附录：WeChatBot 二次开发新增模块](#附录wechatbot-二次开发新增模块)；正文 §1–§5 仍描述二开前的既有架构，二者并存、互不覆盖。
 
 ---
 
@@ -2058,7 +2058,7 @@ WCDB_KEY=
 #### Windows 安装包 (`installer.nsi`)
 
 - 输出: `dist/WeChatBot-setup.exe`
-- 版本: `!ifndef PRODUCT_VERSION` / `!define PRODUCT_VERSION "1.3.0"`；同时写入 `DisplayVersion` 注册表值、`VIProductVersion "${PRODUCT_VERSION}.0"` 及 `ProductVersion` / `FileVersion` 版本资源。本地编译可用 `makensis.exe /DPRODUCT_VERSION=x.y.z installer.nsi` 覆盖；`.github/workflows/build-windows-release.yml` 在 CI 中从 `inputs.tag` 去掉 `v` 前缀后传入该宏（当前默认值 `v1.3.0`）。`ui/package.json` 的 `version` 与产品版本保持一致（1.3.0）。
+- 版本: `!ifndef PRODUCT_VERSION` / `!define PRODUCT_VERSION "1.3.1"`；同时写入 `DisplayVersion` 注册表值、`VIProductVersion "${PRODUCT_VERSION}.0"` 及 `ProductVersion` / `FileVersion` 版本资源。本地编译可用 `makensis.exe /DPRODUCT_VERSION=x.y.z installer.nsi` 覆盖；`.github/workflows/build-windows-release.yml` 在 CI 中从 `inputs.tag` 去掉 `v` 前缀后传入该宏（当前默认值 `v1.3.1`）。`ui/package.json` 的 `version` 与产品版本保持一致（1.3.1）。
 - 页面: 欢迎 → 许可证 → 安装目录 → WeChatBot 数据目录 → 安装进度 → 完成
 - 安装目录默认: `$LOCALAPPDATA\WeChatBot`
 - 升级安装时会从 HKCU 卸载注册表键读取 `InstallLocation`，自动复用上次安装目录；兼容旧版安装包，旧版没有该字段时从 `UninstallString` 推断安装目录
@@ -2342,6 +2342,49 @@ batch_send_messages() ┘   │
 - 批量发送**串行**执行、每条之间 `time.sleep`（剪贴板与微信前台窗口是全局资源，间隔降低丢消息概率）；`dry_run` 或 `interval_ms=0` 不 sleep。
 - **日志与返回值都不含消息正文**：日志只记录 `ok / dry_run / succeeded / total / group`，返回值只含 chat_id / 目标结果与统计元信息。
 
+#### 附录.1.6 `src/version.py` — 版本号与 GitHub 地址（唯一来源）
+
+| 名称 | 值 / 签名 | 说明 |
+|---|---|---|
+| `APP_VERSION` | `"1.3.1"` | 当前产品版本；前端徽标、更新比较、安装包版本资源都以此为准 |
+| `GITHUB_OWNER` / `GITHUB_REPO` | `"Otikes"` / `"WeChatBot"` | 仓库坐标 |
+| `GITHUB_URL` | `https://github.com/Otikes/WeChatBot` | 顶部 GitHub 图标链接 |
+| `RELEASES_URL` | `https://github.com/Otikes/WeChatBot/releases` | 「所有版本」链接与失败回退 |
+| `LATEST_RELEASE_API` | `https://api.github.com/repos/Otikes/WeChatBot/releases/latest` | **硬编码**最新 Release 接口，不接受外部传入 URL |
+| `INSTALLER_ASSET_NAME` | `"WeChatBot-setup.exe"` | 在 Release assets 中匹配下载链接 |
+| `parse_version` | `def parse_version(text: str) -> tuple[int, int, int]:` | 正则 `^[vV]?(\d+)(?:\.(\d+))?(?:\.(\d+))?`；忽略 `v` 前缀与预发布后缀；无法解析抛 `ValueError` |
+| `is_newer` | `def is_newer(latest: str, current: str = APP_VERSION) -> bool:` | 三段数字比较；任一解析失败保守返回 `False` |
+| `release_url` | `def release_url(tag: str) -> str:` | `tag` → `/releases/tag/<tag>`；空 tag 回退 `RELEASES_URL` |
+
+发布新版本必须同步 4 处（由 `tests/test_version.py` 断言）：`src/version.py:APP_VERSION`、`installer.nsi:PRODUCT_VERSION`、`ui/package.json:version`、`.github/workflows/build-windows-release.yml` 的 `tag` / `source_windows_release` 默认值。CI 可用 `makensis.exe /DPRODUCT_VERSION=x.y.z installer.nsi` 覆盖，无需改源码。
+
+#### 附录.1.7 `src/update_check.py` — GitHub Release 只读检查
+
+| 名称 | 值 / 签名 | 说明 |
+|---|---|---|
+| `REQUEST_TIMEOUT` | `5.0` | `urlopen` 超时（秒） |
+| `CACHE_TTL` | `600.0` | 成功结果缓存 10 分钟；**失败结果不缓存** |
+| `_NOTES_LIMIT` | `600` | Release `body` 截断长度 |
+| `_cache` / `_cache_lock` | `{"at": 0.0, "data": None}` / `threading.Lock()` | 进程内缓存，返回时 `dict(cached)` 拷贝避免外部改写 |
+| `_empty` | `def _empty(ok: bool, error: str = "") -> dict:` | 统一 11 键返回结构；失败时也带 `current_version` / `repo_url` / `releases_url`，保证前端永远能打开 GitHub |
+| `_normalize_tag` | `def _normalize_tag(tag: str) -> str:` | 去掉 `v` / `V` 前缀 |
+| `_fetch_latest` | `def _fetch_latest() -> dict:` | 固定 GET `LATEST_RELEASE_API`，`Accept: application/vnd.github+json`、`User-Agent: WeChatBot/<版本>`；解析 `tag_name` / `published_at` / `body` / `assets` |
+| `clear_cache` | `def clear_cache() -> None:` | 清空缓存（测试用） |
+| `check_latest_release` | `def check_latest_release(force: bool = False) -> dict:` | 唯一对外入口；`force=True` 跳过缓存；`_fetch_latest` 抛任何异常都收敛为 `ok=False`，`logger.warning` 后不向外抛 |
+
+返回结构（11 键）：`ok / error / current_version / latest_version / has_update / published_at / notes / release_url / download_url / repo_url / releases_url`。
+
+**异常降级表**
+
+| 情况 | 返回 |
+|---|---|
+| HTTP 404 | `ok=False`，`"该仓库还没有发布过 Release"` |
+| HTTP 403 | `ok=False`，`"GitHub API 请求次数超限，请稍后再试"` |
+| 其他 HTTP / `URLError` / `TimeoutError` / `OSError` | `ok=False`，`"GitHub API 返回 HTTP N"` / `"无法连接 GitHub：…"` |
+| JSON 解析失败 / payload 非 dict | `ok=False`，中文解析错误提示 |
+| 未预期异常 | `check_latest_release` 外层兜底 `logger.warning` + `"检查更新失败：…"` |
+| assets 中无 `WeChatBot-setup.exe` | `download_url` 回退到该 Release 页面 |
+
 ### 附录.2 新增/修改的 Web API（`src/web/server.py`）
 
 | 方法 | 路径 | 请求体 | 返回 | 实现要点 |
@@ -2349,6 +2392,7 @@ batch_send_messages() ┘   │
 | `GET` | `/api/broadcast/groups` | — | `{ok, groups, options}` | `groups` = `broadcast.groups()`；`options` = `mcp_server.data.scope_options()`（供前端选目标的群聊/好友候选）；异常返回 `{ok:False, error}` |
 | `POST` | `/api/broadcast/groups` | `{"groups":[...]}` | `{ok, groups}` | 读 body → `json.loads` → `broadcast.save(data)`（内部 `validate` 校验 + `.tmp` 原子写）→ 返回 `saved["groups"]`；`ValueError` 单独捕获回传错误信息 |
 | `GET` | `/api/wechat/labels` | — | `{ok, **read_contact_labels()}` | 纯只读；`{"ok": True, **read_contact_labels()}` 把 available/labels/source/tables/note 平铺返回；异常返回 `{ok:False, error}` |
+| `GET` | `/api/update/check` | — | `check_latest_release()` 的 11 键结构 | **纯只读、离线安全**；`self.path.split("?", 1)[0]` 匹配路径以忽略查询串；`force="refresh=1" in self.path`；异常时手工构造同样 11 键的 `ok=False` 降级结构，仍带 `repo_url` / `releases_url` |
 
 配套改动：
 - `do_POST` 白名单（约 `server.py:1924`）新增 `"/api/broadcast/groups"`，命中后委托 `do_GET()` 处理（与 `/api/config` 等一致）。
@@ -2371,7 +2415,17 @@ GET  /api/wechat/labels
        ├→ _running_client() 或 LocalWcdbClient().init()
        ├→ client.get_contact_labels() → WeChatDB.contact_label_report()
        └→ _friend_names() → members 补 [{"wxid","name"}]
+
+GET  /api/update/check[?refresh=1]
+  └→ src.update_check.check_latest_release(force)
+       ├→ 命中 10 分钟缓存 → 直接返回缓存拷贝
+       └→ _fetch_latest() → urlopen(LATEST_RELEASE_API, timeout=5)
+            ├→ payload → _normalize_tag(tag_name) → is_newer() → has_update
+            ├→ assets 匹配 INSTALLER_ASSET_NAME → download_url
+            └→ 任何异常 → _empty(False, 中文提示)，不缓存、不抛出
 ```
+
+> `/api/update/check` 不在 `do_POST` 白名单里，是纯 GET 接口；`/api/broadcast/groups` 是唯一新增的 POST 路径。
 
 ### 附录.3 MCP 工具（`src/mcp_server/server.py`）
 
@@ -2396,7 +2450,8 @@ GET  /api/wechat/labels
 |---|---|
 | `ui/src/components/BroadcastGroupsPanel.jsx`（新增，后改为三栏穿梭布局） | `export default function BroadcastGroupsPanel()`；「系统配置 → 群发分组」子标签面板；`load()` 用 `GET /api/broadcast/groups` 拿 `groups` + `options`，保存用 `POST /api/broadcast/groups`（`body: JSON.stringify({ groups })`）；候选由 `options.groups` / `options.friends` 映射成 `{type,id,name,sub,active}`，`targetKey()` = `type:id`；组件内 `CheckBox` / `TargetRow`（单击勾选、双击移动、hover 快捷按钮）复用「好友私聊」的交互范式。状态：`tab`（`friend`/`group`，默认 `friend`）、`query`、`leftChecked`/`rightChecked`（`Set`）、`activeName`、`dirty`。`moveRight()`/`moveLeft()` 按 key 增删 `activeGroup.targets`，`clearCurrentTab()` 只清当前类型的目标，`switchGroup()` 重置勾选与搜索。详见下方「三栏布局」小节 |
 | `ui/src/components/WeChatLabelsPanel.jsx`（新增） | `export default function WeChatLabelsPanel()`；顶层「通讯录标签」标签面板；`load()` 用 `GET /api/wechat/labels`；状态条显示标签数 + 去重好友数（`totalFriends`），每个标签卡片列出成员（名称优先、无名称回退 wxid）；页面明确标注「微信通讯录标签（只读）」及 `contact.extra_buffer` 来源，与 WeChatBot 群发分组完全独立 |
-| `ui/src/App.jsx`（修改） | `TABS`：`config.subs` 新增 `{ id: 'broadcast', label: '群发分组' }`；顶层新增 `{ id: 'wechat-labels', label: '通讯录标签', icon: Tag }`；新增 `WeChatLabelsPanel` 的 `lazy` import；渲染处新增 `activeTab === 'wechat-labels' && <WeChatLabelsPanel />`；`activeTab === 'config'` 仍交给 `ConfigPanel activeSection={configSection}` |
+| `ui/src/App.jsx`（修改） | `TABS`：`config.subs` 新增 `{ id: 'broadcast', label: '群发分组' }`；顶层新增 `{ id: 'wechat-labels', label: '通讯录标签', icon: Tag }`；新增 `WeChatLabelsPanel` 的 `lazy` import；渲染处新增 `activeTab === 'wechat-labels' && <WeChatLabelsPanel />`；`activeTab === 'config'` 仍交给 `ConfigPanel activeSection={configSection}`；header 右侧 `flex items-center gap-3` 内**最前面**插入 `<UpdateChecker />`（直接 import，不做懒加载，保证首屏就能显示版本徽标） |
+| `ui/src/components/UpdateChecker.jsx`（新增） | `export default function UpdateChecker()`；顶部 GitHub 图标 + 版本徽标 + 「版本与更新」浮层，详见下方小节 |
 | `ui/src/components/ConfigPanel.jsx`（修改） | `import BroadcastGroupsPanel`；`sectionTitles`/`sectionAccents` 增加 `broadcast` 项；根容器由固定 `max-w-2xl` 改为 `activeSection === 'broadcast' ? 'w-full' : 'max-w-2xl'`，且 broadcast 分支**直接渲染** `BroadcastGroupsPanel`（其余子页仍包在 `bg-bg-card rounded-2xl p-7` 卡片里），避免三栏被 672px 宽度挤在半屏；主「保存配置」按钮条件改为 `activeSection !== 'sandbox' && activeSection !== 'broadcast'`，**在群发分组子标签隐藏**（该面板有独立保存逻辑，避免误把分组写进 `.env`） |
 
 **`BroadcastGroupsPanel` 三栏布局（ASCII 结构）**
@@ -2450,7 +2505,38 @@ App.jsx TABS
   └─ wechat-labels ─→ WeChatLabelsPanel
          └─ GET /api/wechat/labels → read_contact_labels()
               └─ get_contact_labels() → contact_label_report()
+
+App.jsx header 右侧
+  └─ UpdateChecker
+       ├─ useEffect(check(false)) → GET /api/update/check → 点亮「有更新」小圆点
+       ├─ <a data-testid=github-link> → repo_url（target=_blank）
+       └─ 版本徽标 → 浮层
+            ├─ 「检查更新」→ check(true) → GET /api/update/check?refresh=1
+            ├─ 「下载最新安装包」→ download_url（仅 has_update 时显示）
+            ├─ 「Release」→ release_url，「所有版本」→ releases_url
+            └─ ok=false 时仍用 fallback 常量打开 GitHub / Releases
 ```
+
+**`UpdateChecker` 组件约定**
+
+| 项 | 说明 |
+|---|---|
+| `apiUrl()` | 与 `Dashboard` / `McpPanel` 等一致：`window.location.port === '5173'` 时指向 `http://127.0.0.1:7327`，Vite dev 与打包后同源两种场景都能取到后端 |
+| `FALLBACK_REPO` / `FALLBACK_RELEASES` | 前端硬编码的 GitHub / Releases 地址；后端不可达时 `catch` 里构造完整降级 `data`，**保证链接永远可点** |
+| 状态 | `data`（接口结果或降级结构）、`loading`、`open`、`wrapRef`（点击外部 / Esc 关闭浮层） |
+| `data-testid` | `update-checker` / `github-link` / `version-chip` / `current-version` / `update-dot` / `update-popover` / `popover-current` / `popover-latest` / `update-available` / `download-latest` / `refresh-update` / `release-link` / `all-releases-link`；`tests/test_functional.py::TestUpdateCheckerUi` 依赖这些标识 |
+| 静默检查 | 挂载时只发一次请求，用于点亮徽标小圆点；不弹窗、不阻塞首屏；失败只记在 `data.error`，浮层里才提示 |
+| 外链行为 | `target="_blank" rel="noopener noreferrer"`；`desktop.py` / `desktop_mac.py` 显式设置 `webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True`（`try/except` 兼容老版本 / 测试 stub），确保交给系统默认浏览器而非在 WebView2 内跳转 |
+
+**测试与打包清单（新增模块）**
+
+| 文件 | 作用 |
+|---|---|
+| `tests/test_version.py` | `parse_version` / `is_newer` / `release_url` / 固定 URL，以及 `installer.nsi`、`ui/package.json`、CI workflow 与 `APP_VERSION` 的一致性断言 |
+| `tests/test_update_check.py` | 同版本 / 新版本 / 缺 asset / notes 截断；离线 `URLError`、HTTP 404/403、非法 JSON；成功缓存、`force` 绕过缓存、失败不缓存、未预期异常不外抛 |
+| `tests/test_functional.py::TestUpdateCheckerApi` | `GET /api/update/check?refresh=1` 成功解析与离线降级 |
+| `tests/test_functional.py::TestUpdateCheckerUi` | GitHub 图标 `href` / `target`、版本徽标、已是最新浮层、新版本小圆点与下载链接、离线仍可打开 Release |
+| `build.spec` / `build-macos.spec` | `hiddenimports` 显式登记 `src.version` / `src.update_check` / `src.broadcast` / `src.wechat.labels`——这四个模块都在请求处理函数内动态 import，冻结后必须保证被打进包 |
 
 ### 附录.5 改名：品牌统一为 WeChatBot 与保持不变的内部标识符
 

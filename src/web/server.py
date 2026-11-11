@@ -2805,6 +2805,27 @@ class _UIHandler(SimpleHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)})
             return
 
+        # ── API: GitHub release / update check (read-only, offline-safe) ──
+        # 前端顶部「版本与更新」用；查询串 ?refresh=1 可跳过 10 分钟缓存。
+        if self.path.split("?", 1)[0] == "/api/update/check":
+            try:
+                from src.update_check import check_latest_release
+
+                self.send_json(check_latest_release(force="refresh=1" in self.path))
+            except Exception as e:
+                logger.exception("Failed to check GitHub release")
+                from src.version import APP_VERSION, GITHUB_URL, RELEASES_URL
+
+                self.send_json({
+                    "ok": False, "error": str(e),
+                    "current_version": APP_VERSION,
+                    "latest_version": "", "has_update": False,
+                    "published_at": "", "notes": "",
+                    "release_url": RELEASES_URL, "download_url": "",
+                    "repo_url": GITHUB_URL, "releases_url": RELEASES_URL,
+                })
+            return
+
         # ── API: Get / Save welcome templates ─────────────────────────
         if self.path == "/api/welcome/templates":
             if self.command == "GET":

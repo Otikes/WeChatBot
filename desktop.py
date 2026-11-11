@@ -140,6 +140,11 @@ def main():
     # Try native WebView2, fall back to browser
     try:
         import webview
+        # 顶部 GitHub / Release 链接交给系统默认浏览器，不在 WebView2 内跳转
+        try:
+            webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+        except Exception:
+            pass  # 老版本 pywebview 默认即为 True
         window = webview.create_window(
             title=title,
             url="http://127.0.0.1:7327",

@@ -6,11 +6,11 @@ on:
       tag:
         description: "Release tag to build and upload assets to"
         required: true
-        default: "v1.3.0"
+        default: "v1.3.1"
       source_windows_release:
         description: "Previous release that contains bundled Windows DLLs"
         required: true
-        default: "v1.3.0"
+        default: "v1.3.1"
 
 permissions:
   contents: write

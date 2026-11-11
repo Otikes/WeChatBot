@@ -38,8 +38,7 @@
 
 ## 与上游项目的差异
 
-> 对比基准：[GuMu599/webot](https://github.com/GuMu599/webot.git) `main` 分支 `19b82a2`
-> —— 这也是本仓库 git 历史中 `origin/main` 指向的上游最后一次提交。以下内容来自两棵源码树的**实际文件对比**，而非功能描述上的推测。
+> 对比基准：本仓库 git 历史中的 `origin/main`（`da4df4f`），即二次开发分叉时保留的上游快照；上游 [GuMu599/webot](https://github.com/GuMu599/webot.git) 远程仓库当前 `HEAD` 为 `19b82a2`。下方统计以 `origin/main..HEAD` 的实际文件差异为准，而非功能描述上的推测。
 
 **一句话结论**：上游是**只处理群聊**的微信群机器人。本项目的群聊核心（消息读取、总结、待办、问答、抽签、主动发言、欢迎、飞书沉淀、群友昵称）来自上游；**其余绝大部分模块是二次开发中重新设计并实现的**，包括好友私聊、群聊配置、整套 MCP 服务、微信数据库读取层、媒体消息、Token 统计、生图，以及本次加入的群发分组与消息发送能力。
 
@@ -71,6 +70,7 @@
 | AI 后端 | DeepSeek / Claude 固定后端 | 增加 Chat Completions / Messages 通用协议 | 扩展 |
 | 群发分组 + MCP 消息发送工具 | **无** | 系统分组 + `send_message` / `batch_send_messages` / `list_broadcast_groups` | **全新** |
 | 微信通讯录标签（只读） | **无** | `contact.extra_buffer` protobuf 解析标签归属 + 成员昵称 + 只读视图 | **全新**，与群发分组互不联动 |
+| GitHub Release 更新检查 | **无** | `src/version.py` + `src/update_check.py` + 顶部「版本与更新」浮层 | **全新**，只读、离线静默降级 |
 | 品牌 / 图标 / 安装包 / CI 产物名 | webot | WeChatBot | 全链路改名，保留旧版升级兼容 |
 
 ### 控制台菜单对照
@@ -101,6 +101,7 @@
 - [群发分组](#群发分组)：系统自定义、好友与群聊可混编的发送分组。
 - [MCP 消息发送](#mcp-消息发送)：三个受控写工具，让智能体单发 / 批量发消息。
 - [微信通讯录标签（只读）](#微信通讯录标签只读)：只读查看微信自带通讯录标签及成员。
+- [版本与更新](#版本与更新)：控制台顶部直达 GitHub 仓库与 Releases，自动检查是否有新版本。
 
 ---
 
@@ -257,6 +258,38 @@ WeChatBot 把已采集的群聊、群成员、好友与消息，通过标准 [MC
 
 所有配置改完点「保存配置」，重启机器人生效。
 
+控制台**右上角**还有两个不占菜单的入口：GitHub 图标（打开项目仓库）和版本徽标（展开「版本与更新」浮层），详见下节。
+
+---
+
+## 版本与更新
+
+控制台右上角固定提供 GitHub 仓库入口与版本徽标：
+
+- **GitHub 图标**：点击后用系统默认浏览器打开 https://github.com/Otikes/WeChatBot 。PyWebView 已显式设置 `OPEN_EXTERNAL_LINKS_IN_BROWSER`，链接不会在应用内置窗口里跳转。
+- **版本徽标**：显示当前版本（如 `v1.3.1`），点击展开浮层，可查看当前版本 / 最新版本 / 发布时间、手动「检查更新」、直达当前 Release 与「所有版本」页面。检测到新版本时徽标上会出现小圆点，浮层提供「下载最新安装包」按钮。
+
+后端为只读接口 `GET /api/update/check`（加 `?refresh=1` 可跳过缓存）：
+
+| 行为 | 说明 |
+| --- | --- |
+| 数据来源 | 固定访问 `https://api.github.com/repos/Otikes/WeChatBot/releases/latest`，**不接受用户传入 URL** |
+| 超时与缓存 | 5 秒超时；成功结果缓存 10 分钟，失败结果不缓存以便随时重试 |
+| 离线降级 | 断网、HTTP 404（暂无 Release）、403（限流）、JSON 异常一律返回 `ok=false` + 中文提示，并仍给出固定的仓库 / Releases 链接；**不影响机器人任何主流程** |
+| 版本比较 | 按三段数字比较（忽略 `v` 前缀和预发布后缀），无法解析时保守判定为「无更新」 |
+| 下载链接 | 优先取 Release assets 里的 `WeChatBot-setup.exe`，缺失时回退到 Release 页面 |
+
+版本号与 GitHub 地址的**唯一来源**是 `src/version.py`。发布新版本时需同步 4 处，`tests/test_version.py` 会自动校验：
+
+| 文件 | 字段 |
+| --- | --- |
+| `src/version.py` | `APP_VERSION` |
+| `installer.nsi` | `PRODUCT_VERSION` |
+| `ui/package.json` | `version` |
+| `.github/workflows/build-windows-release.yml` | `tag` 默认值（以及 `source_windows_release`） |
+
+> CI 临时构建可用 `makensis.exe /DPRODUCT_VERSION=x.y.z installer.nsi` 覆盖安装包版本，无需改源码；注意在 Git Bash 下需加 `MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'`，否则 `/D...` 会被误转成 Windows 路径。
+
 ---
 
 ## 安装
@@ -329,6 +362,9 @@ python desktop.py
 
 **支持多群吗？**
 支持，默认监控所有群，也可指定。
+
+**「检查更新」会上传我的聊天数据吗？**
+不会。该接口只向 GitHub 发起一次公开的 Release 查询（GET），请求里不含任何聊天记录、联系人、密钥或本地路径；断网时也只会显示一条中文提示，不影响机器人运行。
 
 ---
 

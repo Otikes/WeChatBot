@@ -2,6 +2,7 @@ import { useState, useEffect, lazy, Suspense, memo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Gear, ChartLine, Scroll, Users, Spinner, Sun, Moon, Sliders, CheckSquare, ChatCircleDots, Coins, PlugsConnected, Tag } from '@phosphor-icons/react'
 import Dashboard from './components/Dashboard'
+import UpdateChecker from './components/UpdateChecker'
 
 // 非首屏面板按需加载，避免启动时解析全部面板代码
 // 这些面板不依赖实时状态，memo 后不会被状态推送触发重渲染
@@ -299,6 +300,9 @@ export default function App() {
             )}
           </h2>
           <div className="flex items-center gap-3">
+            {/* GitHub 仓库入口 + 版本 / 检查更新 */}
+            <UpdateChecker />
+
             {/* Theme switcher toggle button */}
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}

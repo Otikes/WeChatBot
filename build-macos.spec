@@ -61,7 +61,13 @@ a = Analysis(
         "src.utils.logging_config",
         "src.web",
         "src.web.server",
+        # Runtime-imported from request handlers (frozen app safety)
+        "src.version",
+        "src.update_check",
+        "src.broadcast",
+        "src.wechat.labels",
         "src.wechat",
+
         "src.wechat.base",
         "src.wechat.mac_hybrid_backend",
         "src.wechat.mac_ui_backend",

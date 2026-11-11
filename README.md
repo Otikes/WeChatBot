@@ -6,6 +6,7 @@
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20%7C%20macOS%20%28experimental%29-blue?style=flat-square&logo=windows" alt="Platform" />
   <img src="https://img.shields.io/badge/python-3.13%2B-green?style=flat-square&logo=python" alt="Python" />
   <img src="https://img.shields.io/badge/AI-Chat%20Completions%20%7C%20Messages-purple?style=flat-square" alt="AI Protocols" />
+  <img src="https://img.shields.io/github/v/release/Otikes/WeChatBot?style=flat-square&logo=github" alt="Latest Release" />
   <img src="https://img.shields.io/badge/license-MIT-yellow?style=flat-square" alt="License" />
 </p>
 

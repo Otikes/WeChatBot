@@ -2058,6 +2058,7 @@ WCDB_KEY=
 #### Windows 安装包 (`installer.nsi`)
 
 - 输出: `dist/WeChatBot-setup.exe`
+- 版本: `!ifndef PRODUCT_VERSION` / `!define PRODUCT_VERSION "1.3.0"`；同时写入 `DisplayVersion` 注册表值、`VIProductVersion "${PRODUCT_VERSION}.0"` 及 `ProductVersion` / `FileVersion` 版本资源。本地编译可用 `makensis.exe /DPRODUCT_VERSION=x.y.z installer.nsi` 覆盖；`.github/workflows/build-windows-release.yml` 在 CI 中从 `inputs.tag` 去掉 `v` 前缀后传入该宏（当前默认值 `v1.3.0`）。`ui/package.json` 的 `version` 与产品版本保持一致（1.3.0）。
 - 页面: 欢迎 → 许可证 → 安装目录 → WeChatBot 数据目录 → 安装进度 → 完成
 - 安装目录默认: `$LOCALAPPDATA\WeChatBot`
 - 升级安装时会从 HKCU 卸载注册表键读取 `InstallLocation`，自动复用上次安装目录；兼容旧版安装包，旧版没有该字段时从 `UninstallString` 推断安装目录

@@ -12,7 +12,7 @@ Unicode true
 !define PRODUCT_NAME "WeChatBot"
 !define PRODUCT_DESC "WeChatBot - 微信 AI 群聊助手"
 !ifndef PRODUCT_VERSION
-!define PRODUCT_VERSION "1.2.2"
+!define PRODUCT_VERSION "1.3.0"
 !endif
 !define PRODUCT_PUBLISHER "Otikes"
 !define PRODUCT_URL "https://github.com/Otikes/WeChatBot"

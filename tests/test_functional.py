@@ -590,6 +590,135 @@ class TestWeChatLabelsPanel:
         assert "contact.extra_buffer#30" in body
 
 
+BROADCAST_GROUPS = {
+    "ok": True,
+    "groups": [
+        {
+            "name": "客户通知",
+            "targets": [
+                {"type": "friend", "id": "wxid_a", "name": "张三"},
+                {"type": "group", "id": "g1@chatroom", "name": "客户群"},
+            ],
+        },
+        {
+            "name": "内部",
+            "targets": [{"type": "friend", "id": "wxid_b", "name": "李四"}],
+        },
+    ],
+    "options": {
+        "groups": [
+            {"chat_id": "g1@chatroom", "name": "客户群", "member_count": 12, "active": True},
+            {"chat_id": "g2@chatroom", "name": "研发群", "member_count": 5, "active": True},
+        ],
+        "friends": [
+            {"wxid": "wxid_a", "name": "张三", "alias": "zs", "active": True},
+            {"wxid": "wxid_b", "name": "李四", "alias": "ls", "active": True},
+            {"wxid": "wxid_c", "name": "王五", "alias": "ww", "active": True},
+        ],
+    },
+}
+
+
+class TestBroadcastGroupsLayout:
+    """「系统配置 → 群发分组」三栏穿梭布局的浏览器验证。"""
+
+    def _open(self, page, handler=None):
+        def default(route):
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps(BROADCAST_GROUPS, ensure_ascii=False),
+            )
+
+        page.route("**/api/broadcast/groups", handler or default)
+        page.goto(BASE_URL, timeout=10000)
+        page.wait_for_timeout(800)
+        page.locator("button:has-text('系统配置')").first.click()
+        page.wait_for_timeout(400)
+        page.locator("button:has-text('群发分组')").first.click()
+        page.get_by_test_id("broadcast-groups-panel").wait_for(timeout=5000)
+
+    def test_full_width_three_pane_layout(self, page):
+        self._open(page)
+        panel = page.get_by_test_id("broadcast-groups-panel")
+        # 旧的 max-w-2xl 只有 672px，改造后应占满主内容区
+        assert panel.bounding_box()["width"] > 700
+        assert page.get_by_test_id("broadcast-group-row").count() == 2
+        assert page.get_by_test_id("broadcast-candidate-row").count() == 2
+        assert page.get_by_test_id("broadcast-selected-row").count() == 1
+        assert page.get_by_test_id("broadcast-selected-count").inner_text() == "1"
+        body = page.inner_text("body")
+        assert "全部好友" in body
+        assert "Tab 只切换编辑视图" in body
+
+    def test_tab_switches_between_friends_and_groups(self, page):
+        self._open(page)
+        assert "全部好友" in page.inner_text("body")
+        assert "客户群" not in page.inner_text("body")
+
+        page.get_by_test_id("broadcast-tab-group").click()
+        page.wait_for_timeout(300)
+        body = page.inner_text("body")
+        assert "全部群聊" in body
+        assert "客户群" in body
+        assert "研发群" in body
+        assert "张三" not in body
+        assert page.get_by_test_id("broadcast-selected-count").inner_text() == "1"
+
+    def test_switching_group_shows_its_members(self, page):
+        self._open(page)
+        first = page.get_by_test_id("broadcast-selected-row").first
+        assert first.get_attribute("data-target-key") == "friend:wxid_a"
+
+        page.locator(
+            '[data-testid="broadcast-group-row"][data-group-name="内部"] button'
+        ).first.click()
+        page.wait_for_timeout(300)
+        keys = [
+            el.get_attribute("data-target-key")
+            for el in page.get_by_test_id("broadcast-selected-row").all()
+        ]
+        assert keys == ["friend:wxid_b"]
+
+    def test_move_and_save_preserves_mixed_targets(self, page):
+        posted = {}
+
+        def handler(route):
+            if route.request.method == "POST":
+                posted["body"] = json.loads(route.request.post_data)
+                route.fulfill(
+                    status=200, content_type="application/json",
+                    body=json.dumps(
+                        {"ok": True, "groups": posted["body"]["groups"]},
+                        ensure_ascii=False,
+                    ),
+                )
+            else:
+                route.fulfill(
+                    status=200, content_type="application/json",
+                    body=json.dumps(BROADCAST_GROUPS, ensure_ascii=False),
+                )
+
+        self._open(page, handler)
+        page.get_by_test_id("broadcast-tab-group").click()
+        page.wait_for_timeout(250)
+        page.locator(
+            '[data-testid="broadcast-candidate-row"][data-target-key="group:g2@chatroom"]'
+        ).click()
+        page.locator('button[title="将勾选目标移入当前分组"]').click()
+        page.wait_for_timeout(250)
+        assert page.get_by_test_id("broadcast-selected-count").inner_text() == "2"
+
+        page.locator("button:has-text('保存分组')").first.click()
+        page.wait_for_timeout(500)
+        saved = posted["body"]["groups"]
+        assert saved[1]["name"] == "内部"          # 其他分组不受影响
+        keys = {f"{t['type']}:{t['id']}" for t in saved[0]["targets"]}
+        # Tab 停留在「群聊」时保存，好友目标仍必须保留
+        assert keys == {
+            "friend:wxid_a", "group:g1@chatroom", "group:g2@chatroom",
+        }
+
+
 class TestLogViewer:
     def test_clear_button_clears_persisted_logs(self, page):
         project_root = Path(__file__).resolve().parent.parent

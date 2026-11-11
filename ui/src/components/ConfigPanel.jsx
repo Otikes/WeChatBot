@@ -2230,7 +2230,7 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
   }
 
   return (
-    <div className="max-w-2xl">
+    <div className={activeSection === 'broadcast' ? 'w-full' : 'max-w-2xl'}>
       {/* Save status banner */}
       <AnimatePresence>
         {saved && (
@@ -2275,17 +2275,21 @@ export default function ConfigPanel({ activeSection, onNavigate }) {
               <div className="w-1.5 h-4.5 rounded-full shadow-sm" style={{ backgroundColor: sectionAccents[activeSection] }} />
               <h3 className="text-sm font-semibold tracking-tight text-text-main">{sectionTitles[activeSection]}</h3>
             </div>
-            <div className="bg-bg-card border border-border-main rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
-              <div className="p-7">
-                {activeSection === 'ai' && <AiSection form={form} update={update} />}
-                {activeSection === 'voice' && <VoiceSection form={form} update={update} />}
-                {activeSection === 'imagegen' && <ImageGenSection form={form} update={update} />}
-                {activeSection === 'identity' && <IdentitySection form={form} update={update} />}
-                {activeSection === 'data' && <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />}
-                {activeSection === 'broadcast' && <BroadcastGroupsPanel />}
-                {activeSection === 'sandbox' && <SandboxSection form={form} />}
+            {/* 群发分组是三栏穿梭布局，需要占满宽度；其余配置页保持窄表单 */}
+            {activeSection === 'broadcast' ? (
+              <BroadcastGroupsPanel />
+            ) : (
+              <div className="bg-bg-card border border-border-main rounded-2xl shadow-[rgba(0,0,0,0.03)_0px_2px_4px] dark:shadow-none">
+                <div className="p-7">
+                  {activeSection === 'ai' && <AiSection form={form} update={update} />}
+                  {activeSection === 'voice' && <VoiceSection form={form} update={update} />}
+                  {activeSection === 'imagegen' && <ImageGenSection form={form} update={update} />}
+                  {activeSection === 'identity' && <IdentitySection form={form} update={update} />}
+                  {activeSection === 'data' && <DataPathSection form={form} update={update} detectedDataDir={detectedDataDir} />}
+                  {activeSection === 'sandbox' && <SandboxSection form={form} />}
+                </div>
               </div>
-            </div>
+            )}
           </motion.div>
         </AnimatePresence>
       </div>

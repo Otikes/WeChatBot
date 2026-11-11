@@ -2393,10 +2393,49 @@ GET  /api/wechat/labels
 
 | 文件 | 改动 |
 |---|---|
-| `ui/src/components/BroadcastGroupsPanel.jsx`（新增） | `export default function BroadcastGroupsPanel()`；「系统配置 → 群发分组」子标签面板；`load()` 用 `GET /api/broadcast/groups` 拿 `groups` + `options`，保存用 `POST /api/broadcast/groups`（`body: JSON.stringify({ groups })`）；候选目标由 `options.groups` / `options.friends` 映射出 `type/id/name` |
+| `ui/src/components/BroadcastGroupsPanel.jsx`（新增，后改为三栏穿梭布局） | `export default function BroadcastGroupsPanel()`；「系统配置 → 群发分组」子标签面板；`load()` 用 `GET /api/broadcast/groups` 拿 `groups` + `options`，保存用 `POST /api/broadcast/groups`（`body: JSON.stringify({ groups })`）；候选由 `options.groups` / `options.friends` 映射成 `{type,id,name,sub,active}`，`targetKey()` = `type:id`；组件内 `CheckBox` / `TargetRow`（单击勾选、双击移动、hover 快捷按钮）复用「好友私聊」的交互范式。状态：`tab`（`friend`/`group`，默认 `friend`）、`query`、`leftChecked`/`rightChecked`（`Set`）、`activeName`、`dirty`。`moveRight()`/`moveLeft()` 按 key 增删 `activeGroup.targets`，`clearCurrentTab()` 只清当前类型的目标，`switchGroup()` 重置勾选与搜索。详见下方「三栏布局」小节 |
 | `ui/src/components/WeChatLabelsPanel.jsx`（新增） | `export default function WeChatLabelsPanel()`；顶层「通讯录标签」标签面板；`load()` 用 `GET /api/wechat/labels`；状态条显示标签数 + 去重好友数（`totalFriends`），每个标签卡片列出成员（名称优先、无名称回退 wxid）；页面明确标注「微信通讯录标签（只读）」及 `contact.extra_buffer` 来源，与 WeChatBot 群发分组完全独立 |
 | `ui/src/App.jsx`（修改） | `TABS`：`config.subs` 新增 `{ id: 'broadcast', label: '群发分组' }`；顶层新增 `{ id: 'wechat-labels', label: '通讯录标签', icon: Tag }`；新增 `WeChatLabelsPanel` 的 `lazy` import；渲染处新增 `activeTab === 'wechat-labels' && <WeChatLabelsPanel />`；`activeTab === 'config'` 仍交给 `ConfigPanel activeSection={configSection}` |
-| `ui/src/components/ConfigPanel.jsx`（修改） | `import BroadcastGroupsPanel`；`sectionTitles`/`sectionAccents` 增加 `broadcast` 项；渲染处新增 `activeSection === 'broadcast' && <BroadcastGroupsPanel />`；主「保存配置」按钮条件改为 `activeSection !== 'sandbox' && activeSection !== 'broadcast'`，**在群发分组子标签隐藏**（该面板有独立保存逻辑，避免误把分组写进 `.env`） |
+| `ui/src/components/ConfigPanel.jsx`（修改） | `import BroadcastGroupsPanel`；`sectionTitles`/`sectionAccents` 增加 `broadcast` 项；根容器由固定 `max-w-2xl` 改为 `activeSection === 'broadcast' ? 'w-full' : 'max-w-2xl'`，且 broadcast 分支**直接渲染** `BroadcastGroupsPanel`（其余子页仍包在 `bg-bg-card rounded-2xl p-7` 卡片里），避免三栏被 672px 宽度挤在半屏；主「保存配置」按钮条件改为 `activeSection !== 'sandbox' && activeSection !== 'broadcast'`，**在群发分组子标签隐藏**（该面板有独立保存逻辑，避免误把分组写进 `.env`） |
+
+**`BroadcastGroupsPanel` 三栏布局（ASCII 结构）**
+
+```
+根 div[data-testid=broadcast-groups-panel]  ← 满宽（1440 视口下 1152px）
+  │
+  ├─ 说明条：系统群发分组 / MCP 调用 / 与微信通讯录标签完全独立
+  ├─ 错误 / 成功提示
+  ├─ 主卡片 bg-bg-card rounded-2xl p-5
+  │    ├─ 标题「选择目标」+ 当前分组统计（好友 N / 群聊 M）
+  │    └─ grid lg:grid-cols-[220px_minmax(0,1fr)]，lg:h-[470px]
+  │         │
+  │         ├─ 最左 aside：分组列表
+  │         │     ├─ 表头「分组」+ 数量徽标 + 「选中后编辑」
+  │         │     ├─ 新建输入 + Plus 按钮（Enter 提交）
+  │         │     └─ 分组行 [data-testid=broadcast-group-row]
+  │         │           └─ 选中 / 重命名（PencilSimple）/ 删除（Trash）
+  │         │
+  │         └─ 右侧 section
+  │              ├─ 顶部 Tab 条 [data-testid=broadcast-tab-{friend|group}]
+  │              │     └─ 好友(N) / 群聊(M) 徽标 + 「Tab 只切换编辑视图」提示
+  │              └─ 穿梭 grid sm:grid-cols-[1fr_44px_1fr]
+  │                   ├─ 候选池：全部好友/全部群聊 + 数量 + 同步通讯录
+  │                   │     ├─ 搜索框
+  │                   │     ├─ 全选 / 清空勾选 / 已勾选计数
+  │                   │     └─ 行 [data-testid=broadcast-candidate-row]
+  │                   │           └─ 排除已在本分组的 key
+  │                   ├─ 中间 → ← 箭头（title「将勾选目标移入/移出当前分组」）
+  │                   └─ 当前分组成员：「『分组名』」+ 数量徽标
+  │                         │     [data-testid=broadcast-selected-count]
+  │                         ├─ 「清空好友/清空群聊」（仅清当前类型）
+  │                         └─ 行 [data-testid=broadcast-selected-row]
+  │                               └─ 仅显示当前 tab 类型；不在通讯录的目标
+  │                                  仍保留并标「不在通讯录」
+  │              └─ 底部说明：候选来自最近一次机器人同步
+  └─ 底部：保存分组按钮（dirty 才可点）/ 未保存提示 / MCP 调用示例
+```
+
+关键约定：`tab` **只是编辑视图过滤器**，不是数据结构分组。`activeGroup.targets` 始终同时保存 `type=friend` 与 `type=group` 的目标；切到「群聊」Tab 保存时好友目标不会被丢弃（`tests/test_functional.py::TestBroadcastGroupsLayout::test_move_and_save_preserves_mixed_targets` 断言这一点）。
 
 **前端 → API 调用链**
 
